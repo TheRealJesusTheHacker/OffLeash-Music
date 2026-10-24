@@ -88,7 +88,7 @@ class OkHttpChunkFetcher(
     companion object {
         const val HTTP_PARTIAL_CONTENT: Int = 206
 
-        /** `bytes 0-0/12345` → 12345; anything else (incl. `bytes 0-0/*`) → null. */
+        /** `bytes 0-0/12345` → 12345; a star total or anything else → null. */
         fun parseContentRangeTotal(header: String?): Long? {
             if (header.isNullOrBlank()) return null
             val total = header.substringAfter('/', "").trim()
