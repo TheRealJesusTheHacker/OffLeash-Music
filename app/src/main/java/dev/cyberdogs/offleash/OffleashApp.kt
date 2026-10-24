@@ -198,6 +198,46 @@ class AppContainer(app: OffleashApp) {
         qualityProvider = { appPreferences.effectiveDownloadQuality() },
     )
 
+
+    /**
+     * Lane G: like state for every track surface. Signed-in toggles
+     * write to the account via the core client; signed-out toggles are
+     * device-only. Built after both the session manager and the plain
+     * preferences it persists local likes into.
+     */
+    val likeController: dev.cyberdogs.offleash.data.LikeController =
+        dev.cyberdogs.offleash.data.LikeController(
+            client = client,
+            preferences = appPreferences,
+            sessionProvider = { sessionManager.currentAuthSession() },
+            scope = sessionScope,
+        )
+
+    init {
+        // Keep the like controller's account-backed flag in step with
+        // sign-in state, so menu labels never claim an account write
+        // while signed out (or hide one while signed in).
+        sessionScope.launch {
+            sessionManager.uiState.collect { state ->
+                likeController.setAccountBacked(state.signedIn)
+            }
+        }
+    }
+
+    /**
+     * Lane G: "show the player" requests from track menus (the sleep
+     * timer and speed items deep-link to the player controls). The
+     * root observes the counter and expands the player.
+     */
+    private val _showPlayerRequests =
+        kotlinx.coroutines.flow.MutableStateFlow(0)
+    val showPlayerRequests: kotlinx.coroutines.flow.StateFlow<Int> =
+        _showPlayerRequests
+
+    fun requestShowPlayer() {
+        _showPlayerRequests.value += 1
+    }
+
     val localPlaylistStore: LocalPlaylistStore =
         LocalPlaylistStore(File(app.filesDir, "playlists.json"))
 
@@ -234,6 +274,9 @@ class AppContainer(app: OffleashApp) {
         // default (null) behaviour is unchanged when no download
         // exists — the provider simply returns null.
         localFileProvider = { track -> downloadManager.downloadedPlayback(track.videoId) },
+        // Lane G: the audio-version-in-radio preference, read at
+        // radio-start time (default false = pre-preference behavior).
+        audioVersionInRadioProvider = { appPreferences.audioVersionInRadio },
     )
 
     /**

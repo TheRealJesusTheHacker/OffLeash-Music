@@ -46,6 +46,7 @@ import dev.cyberdogs.offleash.ui.components.SectionRow
 import dev.cyberdogs.offleash.ui.components.TrackRow
 import dev.cyberdogs.offleash.ui.components.UiState
 import dev.cyberdogs.offleash.ui.components.rememberFeedActions
+import dev.cyberdogs.offleash.ui.components.rememberTrackActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,6 +114,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.trackItems(
     container: AppContainer,
     playlists: List<dev.cyberdogs.offleash.core.model.LocalPlaylist>,
     scope: kotlinx.coroutines.CoroutineScope,
+    trackActions: dev.cyberdogs.offleash.ui.components.TrackActions,
 ) {
     itemsIndexed(tracks) { index, track ->
         TrackRow(
@@ -124,7 +126,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.trackItems(
             onAddToPlaylist = { playlist, picked ->
                 scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
             },
-            onDownload = { container.downloadManager.enqueue(it) },
+            trackActions = trackActions,
         )
     }
 }
@@ -168,7 +170,12 @@ class AlbumViewModel(
 }
 
 @Composable
-fun AlbumScreen(container: AppContainer, browseId: String) {
+fun AlbumScreen(
+    container: AppContainer,
+    browseId: String,
+    onAlbumClick: (String) -> Unit = {},
+    onArtistClick: (String) -> Unit = {},
+) {
     val viewModel: AlbumViewModel =
         viewModel(key = browseId) { AlbumViewModel(container.client, browseId) }
     val state by viewModel.state.collectAsState()
@@ -185,6 +192,7 @@ fun AlbumScreen(container: AppContainer, browseId: String) {
             ).joinToString(" • ")
             val playlists by container.localPlaylistStore.playlists.collectAsState()
             val scope = rememberCoroutineScope()
+            val trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick)
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
                     DetailHeader(
@@ -201,6 +209,7 @@ fun AlbumScreen(container: AppContainer, browseId: String) {
                     container = container,
                     playlists = playlists,
                     scope = scope,
+                    trackActions = trackActions,
                 )
             }
         }
@@ -252,6 +261,7 @@ fun ArtistScreen(
         onAlbumClick = onAlbumClick,
         onArtistClick = onArtistClick,
         onPlaylistClick = onPlaylistClick,
+        trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick),
     )
 
     when (val current = state) {
@@ -328,7 +338,13 @@ class PlaylistViewModel(
 }
 
 @Composable
-fun PlaylistScreen(container: AppContainer, browseId: String, params: String?) {
+fun PlaylistScreen(
+    container: AppContainer,
+    browseId: String,
+    params: String?,
+    onAlbumClick: (String) -> Unit = {},
+    onArtistClick: (String) -> Unit = {},
+) {
     val viewModel: PlaylistViewModel = viewModel(key = browseId + (params ?: "")) {
         PlaylistViewModel(container.client, browseId, params) {
             container.sessionManager.currentAuthSession()
@@ -360,6 +376,7 @@ fun PlaylistScreen(container: AppContainer, browseId: String, params: String?) {
             ).joinToString(" • ")
             val playlists by container.localPlaylistStore.playlists.collectAsState()
             val scope = rememberCoroutineScope()
+            val trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick)
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
                     DetailHeader(
@@ -376,6 +393,7 @@ fun PlaylistScreen(container: AppContainer, browseId: String, params: String?) {
                     container = container,
                     playlists = playlists,
                     scope = scope,
+                    trackActions = trackActions,
                 )
             }
         }

@@ -41,6 +41,7 @@ import dev.cyberdogs.offleash.ui.components.ErrorPanel
 import dev.cyberdogs.offleash.ui.components.LoadingPanel
 import dev.cyberdogs.offleash.ui.components.SectionRow
 import dev.cyberdogs.offleash.ui.components.rememberFeedActions
+import dev.cyberdogs.offleash.ui.components.rememberTrackActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -113,6 +114,7 @@ fun SearchScreen(
         onAlbumClick = onAlbumClick,
         onArtistClick = onArtistClick,
         onPlaylistClick = onPlaylistClick,
+        trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick),
     )
 
     Column(Modifier.fillMaxSize()) {
@@ -207,6 +209,7 @@ fun SearchScreen(
                             onAddToQueue = baseActions.onAddToQueue,
                             playlists = baseActions.playlists,
                             onAddToPlaylist = baseActions.onAddToPlaylist,
+                            trackActions = baseActions.trackActions,
                         )
                     }
                     LazyColumn(Modifier.fillMaxSize()) {

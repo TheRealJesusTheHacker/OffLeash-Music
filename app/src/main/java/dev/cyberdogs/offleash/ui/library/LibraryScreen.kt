@@ -68,7 +68,12 @@ fun LibraryScreen(
     onPlaylistClick: (String) -> Unit,
     onSignInClick: () -> Unit = {},
     onRemotePlaylistClick: (String, String?) -> Unit = { _, _ -> },
+    onAlbumClick: (String) -> Unit = {},
+    onArtistClick: (String) -> Unit = {},
 ) {
+    val trackActions = dev.cyberdogs.offleash.ui.components.rememberTrackActions(
+        container, onAlbumClick, onArtistClick,
+    )
     val playlists by container.localPlaylistStore.playlists.collectAsState()
     val recents by container.recentsStore.recents().collectAsState()
     val downloadRecords by container.downloadManager.records.collectAsState()
@@ -476,7 +481,7 @@ fun LibraryScreen(
                 onAddToPlaylist = { playlist, picked ->
                     scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
                 },
-                onDownload = { container.downloadManager.enqueue(it) },
+                trackActions = trackActions,
             )
         }
         item { Spacer(Modifier.height(16.dp)) }
@@ -586,9 +591,14 @@ private fun PlaylistNameDialog(
 fun LocalPlaylistScreen(
     container: AppContainer,
     playlistId: String,
+    onAlbumClick: (String) -> Unit = {},
+    onArtistClick: (String) -> Unit = {},
 ) {
     val playlists by container.localPlaylistStore.playlists.collectAsState()
     val scope = rememberCoroutineScope()
+    val trackActions = dev.cyberdogs.offleash.ui.components.rememberTrackActions(
+        container, onAlbumClick, onArtistClick,
+    )
     val playlist = playlists.firstOrNull { it.id == playlistId }
 
     if (playlist == null) {
@@ -656,7 +666,7 @@ fun LocalPlaylistScreen(
                 onAddToPlaylist = { target, picked ->
                     scope.launch { container.localPlaylistStore.addTrack(target.id, picked) }
                 },
-                onDownload = { container.downloadManager.enqueue(it) },
+                trackActions = trackActions,
                 trailing = {
                     Row {
                         IconButton(

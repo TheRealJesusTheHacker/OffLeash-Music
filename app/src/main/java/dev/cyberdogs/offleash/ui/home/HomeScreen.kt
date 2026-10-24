@@ -31,6 +31,7 @@ import dev.cyberdogs.offleash.ui.components.LoadingPanel
 import dev.cyberdogs.offleash.ui.components.SectionRow
 import dev.cyberdogs.offleash.ui.components.UiState
 import dev.cyberdogs.offleash.ui.components.rememberFeedActions
+import dev.cyberdogs.offleash.ui.components.rememberTrackActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -91,6 +92,7 @@ fun HomeScreen(
         onAlbumClick = onAlbumClick,
         onArtistClick = onArtistClick,
         onPlaylistClick = onPlaylistClick,
+        trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick),
     )
 
     Column(Modifier.fillMaxSize()) {

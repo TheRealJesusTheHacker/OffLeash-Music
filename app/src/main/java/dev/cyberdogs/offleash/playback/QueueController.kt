@@ -7,6 +7,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -210,6 +211,14 @@ class QueueController(
      * over ANY network resolution — the resolve is never attempted.
      */
     private val localFileProvider: (Track) -> DownloadedPlayback? = { null },
+    /**
+     * Supplies the `audio_version_in_radio` preference ("play the
+     * audio version instead of the music video in radio"). Read fresh
+     * at every radio start, Lane-E-style. The default (false) is the
+     * pre-preference behavior. See `buildRadioQueue` for what the flag
+     * can and cannot do today — it is threaded honestly, not faked.
+     */
+    private val audioVersionInRadioProvider: () -> Boolean = { false },
 ) {
 
     private val queue = PlayQueue(Random)
@@ -240,6 +249,22 @@ class QueueController(
     private val _namedError = MutableStateFlow<String?>(null)
     /** SPEC §6 user copy for the current failure, or null. */
     val namedError: StateFlow<String?> = _namedError.asStateFlow()
+
+    // -- Lane G: sleep timer, speed & pitch ------------------------------
+
+    private val _sleepTimerState = MutableStateFlow(SleepTimerState())
+    /** The armed sleep timer, if any. Owned here so it survives screen-off. */
+    val sleepTimerState: StateFlow<SleepTimerState> = _sleepTimerState.asStateFlow()
+
+    private val _sleepTimerRemainingMs = MutableStateFlow<Long?>(null)
+    /** Remaining time on a timed sleep timer, refreshed on the position poll. */
+    val sleepTimerCountdownMs: StateFlow<Long?> = _sleepTimerRemainingMs.asStateFlow()
+
+    private var sleepTimerJob: Job? = null
+
+    private val _speedState = MutableStateFlow(SpeedUiState())
+    /** The current playback speed + pitch-preservation choice. */
+    val speedState: StateFlow<SpeedUiState> = _speedState.asStateFlow()
 
     init {
         player.addListener(object : Player.Listener {
@@ -292,6 +317,15 @@ class QueueController(
                 if (player.currentMediaItem != null) {
                     syncPlaybackState()
                 }
+                // The sleep-timer countdown rides the same poll so the
+                // player UI's remaining time stays honest.
+                val timer = _sleepTimerState.value
+                _sleepTimerRemainingMs.value =
+                    if (timer.isArmed) {
+                        sleepTimerRemainingMs(timer, System.currentTimeMillis())
+                    } else {
+                        null
+                    }
                 delay(POSITION_POLL_MS)
             }
         }
@@ -405,9 +439,116 @@ class QueueController(
         _namedError.value = null
     }
 
+    // -- Lane G public API -------------------------------------------------
+
+    /**
+     * Arms the sleep timer for [minutes]. The countdown is a deadline
+     * plus a scheduled pause in this controller's scope — the same
+     * process lifetime as the player and its service — so it fires
+     * with the screen off. The pure decision lives in [SleepTimer.kt].
+     */
+    fun setSleepTimerMinutes(minutes: Int) {
+        val now = System.currentTimeMillis()
+        val state = sleepTimerTimed(minutes, now)
+        _sleepTimerState.value = state
+        _sleepTimerRemainingMs.value = sleepTimerRemainingMs(state, now)
+        sleepTimerJob?.cancel()
+        sleepTimerJob = scope.launch {
+            delay(state.requestedMinutes * 60_000L)
+            if (sleepTimerShouldPause(_sleepTimerState.value, System.currentTimeMillis())) {
+                expireSleepTimer()
+            }
+        }
+    }
+
+    /** Arms the sleep timer to stop at the end of the current track. */
+    fun setSleepTimerEndOfTrack() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _sleepTimerState.value = sleepTimerEndOfTrack()
+        _sleepTimerRemainingMs.value = null
+    }
+
+    /** Disarms the sleep timer without touching playback. */
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _sleepTimerState.value = SleepTimerState()
+        _sleepTimerRemainingMs.value = null
+    }
+
+    private fun expireSleepTimer() {
+        cancelSleepTimer()
+        player.pause()
+        syncPlaybackState()
+        diagnostics.log("sleep-timer", "sleep timer expired — playback paused")
+    }
+
+    /** Applies a new playback speed to the live player, keeping the pitch choice. */
+    fun setPlaybackSpeed(speed: Float) {
+        val updated = _speedState.value.copy(
+            speed = playbackParametersFor(speed, _speedState.value.preservePitch).speed,
+        )
+        _speedState.value = updated
+        applyPlaybackParameters(updated)
+    }
+
+    /** Toggles pitch preservation and re-applies the current speed with it. */
+    fun setPreservePitch(preservePitch: Boolean) {
+        val updated = _speedState.value.copy(preservePitch = preservePitch)
+        _speedState.value = updated
+        applyPlaybackParameters(updated)
+    }
+
+    private fun applyPlaybackParameters(state: SpeedUiState) {
+        val params = playbackParametersFor(state.speed, state.preservePitch)
+        player.playbackParameters = PlaybackParameters(params.speed, params.pitch)
+    }
+
+    /**
+     * Starts radio for [track]: the core client's `related()` radio
+     * mix (`next` on `RDAMVM<videoId>`) becomes the new queue — radio
+     * REPLACES the current queue, seed first (see [buildRadioQueue]).
+     * A refusal surfaces as a named error; an empty mix says so
+     * plainly instead of silently clearing the queue.
+     */
+    fun startRadio(track: Track) {
+        _namedError.value = null
+        scope.launch {
+            val related = try {
+                withContext(Dispatchers.IO) { client.related(track.videoId) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _namedError.value = ErrorMessages.userMessage(e)
+                return@launch
+            }
+            if (related.isEmpty()) {
+                _namedError.value = "YouTube returned no radio tracks for this song."
+                return@launch
+            }
+            val radioQueue = buildRadioQueue(
+                seed = track,
+                related = related,
+                preferAudioVersion = audioVersionInRadioProvider(),
+            )
+            playTracks(radioQueue, 0)
+        }
+    }
+
     // -- Internals ----------------------------------------------------------
 
     private fun onTrackEnded() {
+        // Sleep timer, end-of-track mode: stop here instead of
+        // advancing. (A manual next() tap is not a track end and
+        // never triggers this.)
+        if (sleepTimerShouldStopAtTrackEnd(_sleepTimerState.value)) {
+            cancelSleepTimer()
+            player.pause()
+            syncPlaybackState()
+            diagnostics.log("sleep-timer", "end of track reached — playback stopped")
+            return
+        }
         // With RepeatMode.ONE the player loops internally and STATE_ENDED
         // is not delivered; reaching here means advance (repeat ALL wraps
         // inside PlayQueue.next()).

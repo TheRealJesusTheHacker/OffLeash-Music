@@ -104,6 +104,58 @@ class AppPreferences(private val store: KeyValueStore) {
         _streamQualityFlow.value = quality
     }
 
+    // -- Lane G: radio audio-version preference + local likes -----------
+
+    private val _audioVersionInRadioFlow = MutableStateFlow(readAudioVersionInRadio())
+
+    /**
+     * "Play the audio version instead of the music video in radio."
+     * DEFAULT is false — Phase 1/2 behavior — and the queue controller
+     * reads the current value at radio-start time through its
+     * defaulted provider, exactly like the stream-quality read.
+     */
+    val audioVersionInRadioFlow: StateFlow<Boolean> = _audioVersionInRadioFlow.asStateFlow()
+
+    val audioVersionInRadio: Boolean
+        get() = _audioVersionInRadioFlow.value
+
+    fun setAudioVersionInRadio(enabled: Boolean) {
+        store.putString(KEY_AUDIO_VERSION_IN_RADIO, enabled.toString())
+        _audioVersionInRadioFlow.value = enabled
+    }
+
+    private fun readAudioVersionInRadio(): Boolean {
+        val raw = try {
+            store.getString(KEY_AUDIO_VERSION_IN_RADIO)
+        } catch (e: Exception) {
+            null
+        }
+        return raw == "true"
+    }
+
+    /**
+     * The on-device record of liked track videoIds. Signed in, this is
+     * a cache of the account likes this app has set or read back;
+     * signed out, it IS the like state (device-only, and labeled as
+     * such in the UI). Stored newline-joined; blank ids are dropped.
+     */
+    fun localLikedVideoIds(): Set<String> {
+        val raw = try {
+            store.getString(KEY_LOCAL_LIKED_IDS)
+        } catch (e: Exception) {
+            null
+        }
+        if (raw.isNullOrBlank()) return emptySet()
+        return raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    fun setLocalLikedVideoIds(ids: Set<String>) {
+        store.putString(
+            KEY_LOCAL_LIKED_IDS,
+            ids.filter { it.isNotBlank() }.sorted().joinToString("\n"),
+        )
+    }
+
     private fun readStreamQuality(): QualityPreference {
         val raw = try {
             store.getString(KEY_STREAM_QUALITY)
@@ -221,6 +273,8 @@ class AppPreferences(private val store: KeyValueStore) {
         const val KEY_AUTO_DOWNLOAD_LIKED: String = "auto_download_liked"
 
         const val KEY_AUDIO_VERSION_IN_RADIO: String = "audio_version_in_radio"
+
+        const val KEY_LOCAL_LIKED_IDS: String = "local_liked_video_ids"
 
         /** Fresh-install default: the owner's metered carrier makes Low the honest default. */
         val DEFAULT_STREAM_QUALITY: QualityPreference = QualityPreference.LOW

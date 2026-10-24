@@ -82,6 +82,27 @@ fun OffleashRoot(container: AppContainer) {
     var playerExpanded by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // Lane G: track-menu items that live on the player (sleep timer,
+    // playback speed & pitch) deep-link here — a menu tap anywhere in
+    // the app expands the full player.
+    val showPlayerRequests by container.showPlayerRequests.collectAsState()
+    LaunchedEffect(showPlayerRequests) {
+        if (showPlayerRequests > 0) {
+            playerExpanded = true
+        }
+    }
+
+    // Lane G: a failed account-like write surfaces the same way a
+    // playback error does — a snackbar from the root, never silent.
+    val likeError by container.likeController.error.collectAsState()
+    LaunchedEffect(likeError) {
+        val message = likeError
+        if (message != null) {
+            snackbarHostState.showSnackbar(message)
+            container.likeController.clearError()
+        }
+    }
+
     // Surface playback errors as a snackbar when the full player is closed;
     // the player itself shows the same message in its error banner.
     LaunchedEffect(namedError, playerExpanded) {
@@ -245,6 +266,8 @@ fun OffleashRoot(container: AppContainer) {
                         },
                         onSignInClick = { navController.navigate("signin") },
                         onRemotePlaylistClick = openPlaylist,
+                        onAlbumClick = openAlbum,
+                        onArtistClick = openArtist,
                     )
                 }
                 composable("about") {
@@ -278,6 +301,8 @@ fun OffleashRoot(container: AppContainer) {
                     AlbumScreen(
                         container = container,
                         browseId = entry.arguments?.getString("id") ?: "",
+                        onAlbumClick = openAlbum,
+                        onArtistClick = openArtist,
                     )
                 }
                 composable(
@@ -307,6 +332,8 @@ fun OffleashRoot(container: AppContainer) {
                         container = container,
                         browseId = entry.arguments?.getString("id") ?: "",
                         params = entry.arguments?.getString("params"),
+                        onAlbumClick = openAlbum,
+                        onArtistClick = openArtist,
                     )
                 }
                 composable(
@@ -316,6 +343,8 @@ fun OffleashRoot(container: AppContainer) {
                     LocalPlaylistScreen(
                         container = container,
                         playlistId = entry.arguments?.getString("id") ?: "",
+                        onAlbumClick = openAlbum,
+                        onArtistClick = openArtist,
                     )
                 }
             }
@@ -325,6 +354,14 @@ fun OffleashRoot(container: AppContainer) {
             PlayerScreen(
                 container = container,
                 onClose = { playerExpanded = false },
+                onAlbumClick = { id ->
+                    playerExpanded = false
+                    openAlbum(id)
+                },
+                onArtistClick = { id ->
+                    playerExpanded = false
+                    openArtist(id)
+                },
             )
         }
     }

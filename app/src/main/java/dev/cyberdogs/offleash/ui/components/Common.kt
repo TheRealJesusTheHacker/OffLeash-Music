@@ -17,25 +17,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +59,8 @@ class FeedActions(
     val onAddToQueue: (Track) -> Unit,
     val playlists: List<LocalPlaylist>,
     val onAddToPlaylist: (playlist: LocalPlaylist, track: Track) -> Unit,
+    /** Lane G: the full track-menu vocabulary (like / radio / share / …). */
+    val trackActions: TrackActions,
 )
 
 fun formatDuration(totalSeconds: Int?): String {
@@ -107,20 +101,11 @@ fun TrackRow(
     onAddToQueue: (Track) -> Unit,
     playlists: List<LocalPlaylist>,
     onAddToPlaylist: (playlist: LocalPlaylist, track: Track) -> Unit,
+    trackActions: TrackActions,
     modifier: Modifier = Modifier,
     isCurrent: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
-    /**
-     * Optional Download action (parity step 2, Lane F). Null — the
-     * default everywhere — hides the menu item entirely, so rows that
-     * do not wire downloads are unchanged. The full track-menu
-     * vocabulary is a later lane's job; this is the one real item.
-     */
-    onDownload: ((Track) -> Unit)? = null,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
-    var pickerOpen by remember { mutableStateOf(false) }
-
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -166,56 +151,13 @@ fun TrackRow(
         if (trailing != null) {
             trailing()
         }
-        Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = "More options for ${track.title}",
-                )
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(
-                    text = { Text("Play next") },
-                    onClick = {
-                        menuOpen = false
-                        onPlayNext(track)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Add to queue") },
-                    onClick = {
-                        menuOpen = false
-                        onAddToQueue(track)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Add to playlist…") },
-                    onClick = {
-                        menuOpen = false
-                        pickerOpen = true
-                    },
-                )
-                if (onDownload != null) {
-                    DropdownMenuItem(
-                        text = { Text("Download") },
-                        onClick = {
-                            menuOpen = false
-                            onDownload(track)
-                        },
-                    )
-                }
-            }
-        }
-    }
-
-    if (pickerOpen) {
-        PlaylistPickerDialog(
+        TrackOverflowMenu(
+            track = track,
+            actions = trackActions,
+            onPlayNext = onPlayNext,
+            onAddToQueue = onAddToQueue,
             playlists = playlists,
-            onPick = { playlist ->
-                pickerOpen = false
-                onAddToPlaylist(playlist, track)
-            },
-            onDismiss = { pickerOpen = false },
+            onAddToPlaylist = onAddToPlaylist,
         )
     }
 }
@@ -360,6 +302,7 @@ fun SectionRow(
                 onAddToQueue = actions.onAddToQueue,
                 playlists = actions.playlists,
                 onAddToPlaylist = actions.onAddToPlaylist,
+                trackActions = actions.trackActions,
             )
         }
     }
@@ -395,11 +338,12 @@ fun rememberFeedActions(
     onAlbumClick: (String) -> Unit,
     onArtistClick: (String) -> Unit,
     onPlaylistClick: (String, String?) -> Unit,
+    trackActions: TrackActions,
 ): FeedActions {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val playlists by playlistStore.playlists
         .collectAsStateWithLifecycle()
-    return remember(playlists, queueController, playlistStore) {
+    return remember(playlists, queueController, playlistStore, trackActions) {
         FeedActions(
             onTrackClick = { tracks, index -> queueController.playTracks(tracks, index) },
             onAlbumClick = onAlbumClick,
@@ -411,6 +355,7 @@ fun rememberFeedActions(
             onAddToPlaylist = { playlist, track ->
                 scope.launch { playlistStore.addTrack(playlist.id, track) }
             },
+            trackActions = trackActions,
         )
     }
 }
