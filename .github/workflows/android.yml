@@ -12,7 +12,7 @@ name: OffLeash — Android
 
 on:
   push:
-    branches: [main]
+    branches: [main, hunt-playback]
   workflow_dispatch:
 
 permissions:
@@ -34,16 +34,22 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Run the unit tests (core + app)
-        run: ./gradlew :core:test :app:testDebugUnitTest --console=plain
+      - name: Run the unit tests (core + app, both flavors)
+        run: ./gradlew :core:test :app:testStandardDebugUnitTest :app:testHuntDebugUnitTest --console=plain
 
-      - name: Build the debug APK (personal-use artifact, not a release)
+      - name: Build the debug APKs (both flavors, personal-use artifacts, not a release)
         run: ./gradlew assembleDebug --console=plain
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: offleash-phase1-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: offleash-standard-debug-apk
+          path: app/build/outputs/apk/standard/debug/*.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offleash-hunt-debug-apk
+          path: app/build/outputs/apk/hunt/debug/*.apk
           if-no-files-found: error
 
   live-smoke:

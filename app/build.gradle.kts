@@ -17,6 +17,22 @@ android {
         versionName = "0.1.0-phase1"
     }
 
+    flavorDimensions += "edition"
+
+    productFlavors {
+        create("standard") {
+            dimension = "edition"
+            applicationId = "dev.cyberdogs.offleash"
+            buildConfigField("String", "EDITION_LABEL", "\"\"")
+        }
+        create("hunt") {
+            dimension = "edition"
+            applicationId = "dev.cyberdogs.offleash.hunt"
+            versionNameSuffix = "-hunt1"
+            buildConfigField("String", "EDITION_LABEL", "\"HUNT BUILD\"")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -24,6 +40,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -55,6 +72,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.media3:media3-datasource:1.5.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

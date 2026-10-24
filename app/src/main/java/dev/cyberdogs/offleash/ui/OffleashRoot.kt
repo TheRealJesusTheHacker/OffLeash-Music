@@ -49,6 +49,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.ui.about.AboutScreen
+import dev.cyberdogs.offleash.ui.about.PlaybackDiagnosticsScreen
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.detail.AlbumScreen
 import dev.cyberdogs.offleash.ui.detail.ArtistScreen
@@ -241,7 +242,12 @@ fun OffleashRoot(container: AppContainer) {
                     )
                 }
                 composable("about") {
-                    AboutScreen()
+                    AboutScreen(
+                        onOpenDiagnostics = { navController.navigate("diagnostics") },
+                    )
+                }
+                composable("diagnostics") {
+                    PlaybackDiagnosticsScreen(container = container)
                 }
                 composable(
                     route = "album/{id}",

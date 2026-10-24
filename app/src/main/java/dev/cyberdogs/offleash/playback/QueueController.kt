@@ -8,8 +8,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
+import dev.cyberdogs.offleash.core.api.YoutubeiContexts
 import dev.cyberdogs.offleash.core.error.OffleashException
 import dev.cyberdogs.offleash.core.model.Track
 import dev.cyberdogs.offleash.core.playback.PlayQueue
@@ -63,11 +65,26 @@ data class PlaybackUiState(
  * published on [namedError] and the queue position is kept — no silent
  * skipping (SPEC §4).
  */
+/** Pure retry decision for a player error: exactly one re-resolve on 403. */
+fun shouldRetryAfterPlayerError(httpStatus: Int?, alreadyRetriedForTrack: Boolean): Boolean =
+    httpStatus == 403 && !alreadyRetriedForTrack
+
+/** HTTP status carried by a player error's cause chain, if any. */
+fun httpStatusFromCauseChain(error: Throwable): Int? {
+    var t: Throwable? = error
+    while (t != null) {
+        if (t is HttpDataSource.InvalidResponseCodeException) return t.responseCode
+        t = t.cause
+    }
+    return null
+}
+
 class QueueController(
     private val context: Context,
     private val client: YoutubeiClient,
     private val player: ExoPlayer,
     private val recentsStore: RecentsStore,
+    val diagnostics: PlaybackDiagnostics = PlaybackDiagnostics(),
 ) {
 
     private val queue = PlayQueue(Random)
@@ -75,6 +92,19 @@ class QueueController(
 
     private var resolveJob: Job? = null
     private var serviceStarted = false
+    private var retriedCurrentTrack: Boolean = false
+    private var lastQueueIndex: Int = -1
+    private var keepDiagnosticsAttempt: Boolean = false
+
+    /**
+     * Play [track] as part of an already-started diagnostics attempt
+     * (the Test playback flow), so its resolve/fetch stages stay in the
+     * same recorded attempt instead of starting a new one.
+     */
+    fun playTestTrack(track: Track) {
+        keepDiagnosticsAttempt = true
+        play(track)
+    }
 
     private val _queueState = MutableStateFlow(QueueUiState())
     val queueState: StateFlow<QueueUiState> = _queueState.asStateFlow()
@@ -90,6 +120,10 @@ class QueueController(
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 syncPlaybackState()
+                if (playbackState == Player.STATE_READY && player.playWhenReady) {
+                    retriedCurrentTrack = false
+                    diagnostics.recordReady()
+                }
                 if (playbackState == Player.STATE_ENDED) {
                     onTrackEnded()
                 }
@@ -100,7 +134,26 @@ class QueueController(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                _namedError.value = "Something went wrong playing this track. Try again."
+                val httpStatus = httpStatusFromCauseChain(error)
+                val causes = mutableListOf<String>()
+                var t: Throwable? = error
+                while (t != null) {
+                    causes.add(t.javaClass.simpleName)
+                    t = t.cause
+                }
+                diagnostics.recordPlayerError(
+                    errorCode = error.errorCode,
+                    exceptionClass = error.javaClass.simpleName,
+                    rootCauseClasses = causes,
+                )
+                if (shouldRetryAfterPlayerError(httpStatus, retriedCurrentTrack)) {
+                    retriedCurrentTrack = true
+                    diagnostics.log("retry", "HTTP 403 — re-resolving the same track once")
+                    queue.current()?.let { resolveAndPlay(it, isRetry = true) }
+                    syncPlaybackState()
+                    return
+                }
+                _namedError.value = ErrorMessages.playerMessage(error.errorCode, httpStatus)
                 syncPlaybackState()
             }
         })
@@ -239,14 +292,39 @@ class QueueController(
         }
     }
 
-    private fun resolveAndPlay(track: Track) {
+    private fun resolveAndPlay(track: Track, isRetry: Boolean = false) {
+        if (!isRetry) {
+            retriedCurrentTrack = false
+        }
+        val preserveDiagnostics = keepDiagnosticsAttempt
+        keepDiagnosticsAttempt = false
         ensureServiceStarted()
         _namedError.value = null
         resolveJob?.cancel()
         resolveJob = scope.launch {
+            if (isRetry) {
+                diagnostics.log("resolve", "retry for track ${track.videoId}")
+            } else if (preserveDiagnostics) {
+                diagnostics.log("resolve", "player resolve for track ${track.videoId}")
+            } else {
+                diagnostics.startAttempt("track ${track.videoId} — ${track.title}")
+            }
+            diagnostics.recordNetworkFrom(context)
             val stream = try {
-                withContext(Dispatchers.IO) { client.streamInfo(track.videoId) }
+                val resolved = withContext(Dispatchers.IO) { client.streamInfo(track.videoId) }
+                diagnostics.recordResolverOutcome(
+                    contextClientName = YoutubeiContexts.IOS.clientName,
+                    contextClientVersion = YoutubeiContexts.IOS.clientVersion,
+                    exceptionClass = null,
+                )
+                diagnostics.recordChosenFormat(resolved.mimeType, resolved.bitrate, resolved.url)
+                resolved
             } catch (e: OffleashException) {
+                diagnostics.recordResolverOutcome(
+                    contextClientName = YoutubeiContexts.IOS.clientName,
+                    contextClientVersion = YoutubeiContexts.IOS.clientVersion,
+                    exceptionClass = e.javaClass.simpleName,
+                )
                 // Named failure: stop the queue, keep the position, tell the
                 // user (SPEC §4/§6). No silent skip.
                 _namedError.value = ErrorMessages.userMessage(e)
@@ -254,6 +332,11 @@ class QueueController(
                 syncPlaybackState()
                 return@launch
             } catch (e: Exception) {
+                diagnostics.recordResolverOutcome(
+                    contextClientName = YoutubeiContexts.IOS.clientName,
+                    contextClientVersion = YoutubeiContexts.IOS.clientVersion,
+                    exceptionClass = e.javaClass.simpleName,
+                )
                 _namedError.value = ErrorMessages.userMessage(e)
                 player.pause()
                 syncPlaybackState()
@@ -298,6 +381,11 @@ class QueueController(
     }
 
     private fun syncQueueState() {
+        if (queue.currentIndex != lastQueueIndex) {
+            // A queue-position change starts a fresh retry budget.
+            retriedCurrentTrack = false
+            lastQueueIndex = queue.currentIndex
+        }
         _queueState.value = QueueUiState(
             tracks = queue.tracks,
             currentIndex = queue.currentIndex,

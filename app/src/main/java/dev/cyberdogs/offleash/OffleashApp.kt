@@ -5,8 +5,8 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
@@ -14,8 +14,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
 import dev.cyberdogs.offleash.data.OkHttpTransport
+import dev.cyberdogs.offleash.data.RangeInterceptor
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.playback.APP_UA
+import dev.cyberdogs.offleash.playback.PlaybackDiagnostics
 import dev.cyberdogs.offleash.playback.QueueController
 import okhttp3.OkHttpClient
 import java.io.File
@@ -49,10 +51,26 @@ class OffleashApp : Application() {
  */
 class AppContainer(app: OffleashApp) {
 
+    /** Shared playback-diagnostics recorder (last attempt only). */
+    val playbackDiagnostics: PlaybackDiagnostics = PlaybackDiagnostics()
+
+    /**
+     * The ONE OkHttp client for the whole app: youtubei API calls and
+     * stream fetches go through the same stack (same connection pool,
+     * same address-family choices), because googlevideo stream URLs are
+     * bound to the network identity that resolved them. The scoped
+     * [RangeInterceptor] guarantees a Range header on googlevideo GETs
+     * and records their first-fetch status into diagnostics.
+     */
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        .addInterceptor(
+            RangeInterceptor { status, host ->
+                playbackDiagnostics.recordFirstFetch(status, host)
+            },
+        )
         .build()
 
     val client: YoutubeiClient = YoutubeiClient(OkHttpTransport(okHttpClient))
@@ -71,6 +89,7 @@ class AppContainer(app: OffleashApp) {
         client = client,
         player = player,
         recentsStore = recentsStore,
+        diagnostics = playbackDiagnostics,
     )
 
     private fun buildPlayer(app: OffleashApp): ExoPlayer {
@@ -82,11 +101,17 @@ class AppContainer(app: OffleashApp) {
             LeastRecentlyUsedCacheEvictor(REPLAY_CACHE_BYTES),
             StandaloneDatabaseProvider(app),
         )
-        val httpFactory = DefaultHttpDataSource.Factory()
-            // Stream URLs were resolved with the iOS context; keep the UA
-            // paired with them (see APP_UA in QueueController).
+        // Stream fetches go through the shared OkHttp stack (SPEC §4):
+        // the same client that resolved the URLs fetches them, so the
+        // network identity matches. OkHttpDataSource replaces
+        // DefaultHttpDataSource (HttpURLConnection) for http(s); local /
+        // file sources still go through DefaultDataSource below.
+        // Stream URLs were resolved with the iOS context; keep the UA
+        // paired with them (see APP_UA in QueueController).
+        val httpFactory = OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(APP_UA)
-            .setAllowCrossProtocolRedirects(true)
+        // DefaultDataSource routes http(s) to the OkHttp factory above
+        // and keeps local/content schemes on their own sources.
         val upstreamFactory = DefaultDataSource.Factory(app, httpFactory)
         val cacheFactory = CacheDataSource.Factory()
             .setCache(cache)

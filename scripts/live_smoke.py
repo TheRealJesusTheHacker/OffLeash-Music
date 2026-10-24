@@ -95,6 +95,20 @@ if video_id:
                 check("stream range GET", r.status == 206 and len(data) > 0,
                       f"status={r.status} bytes={len(data)} "
                       f"type={r.headers.get('Content-Type')}")
+            # NON-GATING informational probe: the same URL WITHOUT a
+            # Range header. Some formats (gir=yes) refuse this with 403
+            # — that is the shape the app's fetch contract defends
+            # against (SPEC §4). Printed as INFO only, never a failure.
+            try:
+                plain = urllib.request.Request(best["url"], method="GET")
+                plain.add_header("User-Agent", IOS_UA)
+                with urllib.request.urlopen(plain, timeout=45) as r:
+                    r.read(256)
+                    print(f"INFO  stream no-range GET  status={r.status}")
+            except urllib.error.HTTPError as e:
+                print(f"INFO  stream no-range GET  status={e.code}")
+            except Exception as e:  # noqa: BLE001 - informational only
+                print(f"INFO  stream no-range GET  error={e!r}")
     except urllib.error.HTTPError as e:
         check("player iOS", False,
               f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:120]}")

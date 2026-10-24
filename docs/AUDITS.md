@@ -1,5 +1,27 @@
 # OffLeash Music — Audit Log
 
+## 2026-10-23 — Playback hunt (on-device failure)
+
+**Trigger:** on the owner's phone, Phase 1 browses and queues, then playback fails with a toast reading only "Something went wrong playing this track. Try again." Resolution had succeeded; Media3 failed after the hand-off.
+
+**The defect:** `QueueController.onPlayerError` was a generic catch-all that discarded the `PlaybackException` entirely — no error code, no HTTP status, no cause. That is a SPEC §6 taxonomy hole: the player stage had no named errors at all, so a diagnosable server refusal surfaced as a content-free toast and left nothing to act on. Fixed on branch `hunt-playback`: `ErrorMessages.playerMessage(errorCode, httpStatus)` now names every player-stage shape (see SPEC §6 player rows), the fallback still names the numeric error code, an HTTP 403 triggers exactly one re-resolve-and-retry for the same track, and a Playback diagnostics recorder + screen (About → Playback diagnostics, with a Test playback probe track) records the last attempt stage by stage.
+
+**Probe evidence (agent-side, before the fix):**
+- For the owner's track (videoId `lY5V4hSLWY8`), the resolver's pick (itag 251, `audio/webm` opus, URL param `gir=yes`) answers a GET with **no Range header → HTTP 403, deterministically, twice**; any Range form → **206**. itag 140 (no `gir` param) tolerates a plain GET.
+- Media3's default HTTP data source omits the Range header when position is 0 and length is unset (`HttpUtil.buildRangeRequestHeader` returns null) — so the player's first fetch was exactly the refused shape.
+- Every prior smoke always sent Range explicitly; the range-less seam was never exercised. The live smoke now also probes a range-less GET informationally (non-gating; see SPEC §8).
+- Both stream URLs embed an `ip=` param: googlevideo binds streams to the resolver's egress identity, so resolver/player stack divergence is a real risk, not a theory.
+- UA is **not** the gate: no-UA and foreign-UA fetches return 206 when ranged.
+
+**Hypotheses verdicts:**
+- **H1 — resolver/player stack divergence (OkHttp vs HttpURLConnection, address-family choices on an IPv6-first carrier): plausible-contributor.** Fixed by alignment: stream fetches now go through the shared OkHttp stack (`media3-datasource-okhttp`, `CacheDataSource → OkHttpDataSource` on the shared client) — the same stack that resolved the URLs fetches them.
+- **H2 — User-Agent mismatch is the gate: refuted.** No-UA and foreign-UA ranged fetches return 206 (see probe evidence above).
+- **H3 — replay-cache interference: not indicated.** The upstream failure is cold-cache-shaped, and the cache factory sets `FLAG_IGNORE_CACHE_ON_ERROR` — the cache falls back to the network source on its own errors and is never a gate.
+- **H4 — resolver/browse failure misreported as a player failure: refuted.** The toast string existed only in `QueueController.onPlayerError`; its provenance proves resolution succeeded and the failure was post-hand-off, in the player.
+- **H5 — the range-less first fetch is refused (403) on `gir=yes` formats: PROVEN agent-side.** Deterministic no-Range → 403 / ranged → 206 on the owner's exact track and format pick (above). Fixed by a scoped OkHttp application interceptor (`RangeInterceptor`): `Range: bytes=0-` is added only on GET requests to `*.googlevideo.com` hosts that carry no Range header yet — never on youtubei POSTs, never on other hosts. Its scoping is unit-tested exactly.
+
+**Remaining proof:** the on-device verdict is still the owner's — the hunt build (`hunt` flavor, applicationId `dev.cyberdogs.offleash.hunt`, label "OffLeash Hunt") plus the diagnostics screenshot from a failed or successful attempt on his phone and network. No agent-side result substitutes for that.
+
 ## 2026-10-23 — License landing (pre-code)
 
 - **License: GPL-3.0 — DECIDED BY OWNER (2026-10-23)** via the owner's decision widget ("GPL-3.0 — copyleft shield"). Root `LICENSE` added: canonical GPL-3.0 text, copyright line in the fleet's established holder form — "Copyright (c) 2026 Sentinel Safeguard LLC" (Cyberdogs authorship is carried by the branding/README, not by a new legal holder string). The README's interim "license undecided" line was replaced with a GPL-3.0 section in the same commit.

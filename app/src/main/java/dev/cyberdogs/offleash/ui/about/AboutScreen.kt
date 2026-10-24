@@ -39,7 +39,7 @@ private fun rememberVersionName(context: android.content.Context): String {
 private val THIRD_PARTY_CREDITS: List<Pair<String, String>> = listOf(
     "Kotlin standard library" to "Apache License 2.0",
     "Jetpack Compose (UI, Material 3, Navigation, Lifecycle)" to "Apache License 2.0",
-    "AndroidX Media3 (ExoPlayer, session, datasource)" to "Apache License 2.0",
+    "AndroidX Media3 (ExoPlayer, session, datasource, datasource-okhttp)" to "Apache License 2.0",
     "OkHttp" to "Apache License 2.0",
     "kotlinx-serialization" to "Apache License 2.0",
     "kotlinx-coroutines" to "Apache License 2.0",
@@ -47,7 +47,7 @@ private val THIRD_PARTY_CREDITS: List<Pair<String, String>> = listOf(
 )
 
 @Composable
-fun AboutScreen() {
+fun AboutScreen(onOpenDiagnostics: () -> Unit = {}) {
     val context = LocalContext.current
     val versionName = rememberVersionName(context)
     var showLicense by remember { mutableStateOf(false) }
@@ -87,6 +87,18 @@ fun AboutScreen() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        if (dev.cyberdogs.offleash.BuildConfig.EDITION_LABEL.isNotEmpty()) {
+            Text(
+                text = dev.cyberdogs.offleash.BuildConfig.EDITION_LABEL,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        TextButton(onClick = onOpenDiagnostics) {
+            Text("Playback diagnostics")
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Breed don't fall.",

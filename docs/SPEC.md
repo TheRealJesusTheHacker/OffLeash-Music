@@ -118,6 +118,17 @@ UI tap → QueueController.setQueue(tracks, index)
   feature: no user-facing "downloaded library" exists in Phase 1.
 - Stream URLs expire (hours). The resolver is consulted at play time, never
   persisted; recents/queues store videoIds, not URLs.
+- **Player fetch contract (2026-10-23, playback hunt):** stream fetches go
+  through the shared OkHttp stack — the same client that resolved the URLs
+  fetches them (`CacheDataSource` → `OkHttpDataSource` on the shared
+  `OkHttpClient`), because googlevideo binds stream URLs to the resolving
+  network identity (`ip=` param). A Range header is always present on
+  stream GETs: a scoped OkHttp application interceptor adds
+  `Range: bytes=0-` to any GET on a `*.googlevideo.com` host that carries
+  no Range header yet (some formats refuse a range-less GET with HTTP
+  403; see `docs/AUDITS.md`, 2026-10-23 playback hunt). On an HTTP 403
+  player error the track is re-resolved and retried exactly once; a
+  second 403 surfaces the named §6 player error — no retry loop.
 
 ## 5. On-device data
 
@@ -142,6 +153,19 @@ copy. Spinners always have a timeout and an error state behind them.
 | `NoPlayableStream` | OK status but no direct (unciphered) audio URL | "No playable stream for this track — YouTube served only locked formats." |
 | `NetworkFailure` | transport throws / HTTP 5xx | "Couldn't reach YouTube Music — check your connection." |
 | `ParseFailure` | response shape unrecognizable | "YouTube Music answered in a shape this app doesn't understand yet — the API has likely changed." |
+
+Player-stage failures (Media3 `PlaybackException`, mapped by
+`ErrorMessages.playerMessage(errorCode, httpStatus)`) have their own rows —
+the player stage is part of this taxonomy, not a catch-all:
+
+| Player error | Trigger | User copy (shape) |
+|---|---|---|
+| HTTP 403 | `ERROR_CODE_IO_BAD_HTTP_STATUS` + 403 (after the one §4 re-resolve retry) | "YouTube refused this track's stream (HTTP 403) — the stream link was likely issued for a different network address or has expired. Try again; if it keeps happening, open About → Playback diagnostics and send a screenshot." |
+| HTTP 404 | `ERROR_CODE_IO_BAD_HTTP_STATUS` + 404 | "YouTube says this track's stream is gone (HTTP 404) — the link expired. Try again to fetch a fresh one." |
+| HTTP other | `ERROR_CODE_IO_BAD_HTTP_STATUS` + any other status | "YouTube's stream server answered HTTP \<status\>. Try again." |
+| Network / content-type / read-position | `ERROR_CODE_IO_NETWORK_CONNECTION_FAILED` / `_TIMEOUT` / `ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE` / `ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE` | "Couldn't load this track's audio — the connection failed. Check your connection and try again." |
+| Format / decoder | `ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED` / `ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED` / `ERROR_CODE_DECODER_INIT_FAILED` / `ERROR_CODE_DECODING_FAILED` | "This track's audio format can't be played on this device." |
+| Anything else | any other player error code | "Something went wrong playing this track (player error \<code\>). Try again." — the code is always named, so a screenshot is actionable. |
 
 Browse/search/detail failures reuse the same taxonomy and render as an
 error panel with a Retry button — never a blank screen, never an endless
@@ -170,7 +194,11 @@ territory and it gets its own security pass first (see `docs/ROADMAP.md`).
   fleet standard): `:core:test`, `:app:testDebugUnitTest`, `assembleDebug`,
   debug APK uploaded as a workflow artifact. A separate non-gating
   live-smoke job replays the §1 probes (browse/search/player/stream range
-  GET) and reports the true result.
+  GET) and reports the true result. The live smoke now also probes a
+  range-less GET of the chosen stream URL informationally (printed as
+  INFO, never a failure): a range-less refusal is the known `gir=yes`
+  shape the §4 fetch contract defends against, and watching it keeps
+  that defence honest if googlevideo behaviour changes.
 - The debug APK is a **personal-use build artifact**, never a release.
 
 ## 9. Branding

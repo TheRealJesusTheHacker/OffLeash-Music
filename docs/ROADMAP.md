@@ -16,6 +16,8 @@ Shipped as code + a green CI gate, no release made. Evidence on record:
 
 Honest remainder: no agent can exercise the on-device surface (media notification, lock-screen controls, background playback across task removal) from CI — the owner's install test on a real phone is the only runtime proof. That verdict is still open.
 
+**Playback hunt (2026-10-23, branch `hunt-playback`):** the owner's install test found the Phase 1 failure — browse and queue work, playback fails. The hunt (full record in `docs/AUDITS.md`) proved agent-side that a range-less first stream fetch is refused with HTTP 403 on the resolver's chosen format, aligned the player onto the shared OkHttp stack with a guaranteed Range header, replaced the catch-all player toast with named §6 player errors plus a one-time 403 re-resolve retry, and added a Playback diagnostics screen with a Test playback probe. It ships as a separate `hunt` flavor ("OffLeash Hunt", `dev.cyberdogs.offleash.hunt`) so it can sit beside the standard build. **The remaining on-device proof is the owner's diagnostics screenshot** — from the hunt build on his phone and network, after an attempt (failed or successful). Until that lands, on-device playback stays honestly unproven.
+
 Anonymous, no account:
 
 - Browse: home feed, charts, moods & genres (categories → playlists)
