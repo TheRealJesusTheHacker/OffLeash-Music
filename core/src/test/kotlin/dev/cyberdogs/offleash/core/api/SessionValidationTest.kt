@@ -6,7 +6,6 @@ import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.auth.SessionValidation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -28,10 +27,7 @@ class SessionValidationTest {
         val client = YoutubeiClient(
             GetTransport(body = Fixtures.load("derived_account_switcher.json"))
         )
-        val validation = client.validateSession(session)
-        if (validation !is SessionValidation.Healthy) {
-            fail("expected Healthy, was $validation")
-        }
+        val validation = client.validateSession(session) as SessionValidation.Healthy
         assertEquals(2, validation.identities.size)
     }
 
@@ -56,10 +52,7 @@ class SessionValidationTest {
         val client = YoutubeiClient(
             GetTransport(failure = RuntimeException("no route to host"))
         )
-        val validation = client.validateSession(session)
-        if (validation !is SessionValidation.Unreachable) {
-            fail("expected Unreachable, was $validation")
-        }
+        val validation = client.validateSession(session) as SessionValidation.Unreachable
         assertTrue(validation.detail!!.contains("no route to host"))
     }
 

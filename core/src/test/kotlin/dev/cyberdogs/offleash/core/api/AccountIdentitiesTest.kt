@@ -8,7 +8,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -29,8 +28,7 @@ class AccountIdentitiesTest {
         val client = YoutubeiClient(
             GetTransport(body = Fixtures.load("derived_account_switcher.json"))
         )
-        val lookup = client.accountIdentities(session)
-        if (lookup !is IdentityLookup.Found) fail("expected Found, was $lookup")
+        val lookup = client.accountIdentities(session) as IdentityLookup.Found
         assertEquals(2, lookup.identities.size)
 
         val personal = lookup.identities[0]
@@ -69,8 +67,7 @@ class AccountIdentitiesTest {
         val client = YoutubeiClient(
             GetTransport(body = Fixtures.load("derived_account_switcher_empty.json"))
         )
-        val lookup = client.accountIdentities(session)
-        if (lookup !is IdentityLookup.Found) fail("expected Found, was $lookup")
+        val lookup = client.accountIdentities(session) as IdentityLookup.Found
         assertTrue(lookup.identities.isEmpty())
     }
 
@@ -78,7 +75,7 @@ class AccountIdentitiesTest {
     fun xssiPrefixedBodyStillParses() {
         val body = ")]}'\n" + Fixtures.load("derived_account_switcher.json")
         val lookup = YoutubeiClient(GetTransport(body = body)).accountIdentities(session)
-        if (lookup !is IdentityLookup.Found) fail("expected Found, was $lookup")
+            as IdentityLookup.Found
         assertEquals(2, lookup.identities.size)
     }
 
@@ -88,7 +85,7 @@ class AccountIdentitiesTest {
             """{"accountName":"First","accountNo":0},""" +
             """{"accountName":"Second","accountNo":1}]}"""
         val lookup = YoutubeiClient(GetTransport(body = body)).accountIdentities(session)
-        if (lookup !is IdentityLookup.Found) fail("expected Found, was $lookup")
+            as IdentityLookup.Found
         assertEquals(2, lookup.identities.size)
         assertTrue(lookup.identities[0].isSelected)
         assertFalse(lookup.identities[1].isSelected)
@@ -111,8 +108,7 @@ class AccountIdentitiesTest {
     @Test
     fun serverErrorMapsToFailed() {
         val lookup = YoutubeiClient(GetTransport(status = 503, body = ""))
-            .accountIdentities(session)
-        if (lookup !is IdentityLookup.Failed) fail("expected Failed, was $lookup")
+            .accountIdentities(session) as IdentityLookup.Failed
         assertTrue(lookup.detail!!.contains("503"))
     }
 
@@ -120,7 +116,7 @@ class AccountIdentitiesTest {
     fun throwingTransportMapsToFailed() {
         val transport = GetTransport(failure = RuntimeException("socket closed"))
         val lookup = YoutubeiClient(transport).accountIdentities(session)
-        if (lookup !is IdentityLookup.Failed) fail("expected Failed, was $lookup")
+            as IdentityLookup.Failed
         assertTrue(lookup.detail!!.contains("socket closed"))
     }
 }
