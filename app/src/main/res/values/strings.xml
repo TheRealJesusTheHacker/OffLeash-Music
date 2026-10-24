@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OffLeash Music</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_search">Search</string>
+    <string name="nav_library">Library</string>
+    <string name="nav_about">About</string>
+    <string name="charts">Charts</string>
+    <string name="moods_and_genres">Moods &amp; genres</string>
+    <string name="play_all">Play all</string>
+    <string name="shuffle">Shuffle</string>
+    <string name="try_again">Try again</string>
+    <string name="now_playing">Now playing</string>
+    <string name="queue">Queue</string>
+</resources>

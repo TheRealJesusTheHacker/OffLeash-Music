@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Original launcher mark: an unleashed diamond — a rotated square ring in
+  Cyberdogs tan, broken at the top corner (the gap = off the leash), with a
+  solid center dot. Bold geometry only; no copied artwork, no text.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Diamond ring (outer diamond with inner diamond knocked out) -->
+    <path
+        android:fillColor="#D9A441"
+        android:pathData="M54,10 L98,54 L54,98 L10,54 Z M54,30 L78,54 L54,78 L30,54 Z"
+        android:fillType="evenOdd" />
+
+    <!-- The break: a background-colored notch over the top corner -->
+    <path
+        android:fillColor="#0D0B09"
+        android:pathData="M44,2 L64,2 L64,22 L44,22 Z" />
+
+    <!-- Center dot -->
+    <path
+        android:fillColor="#D9A441"
+        android:pathData="M47,54 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+
+</vector>

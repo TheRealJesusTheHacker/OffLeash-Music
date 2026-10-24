@@ -1,0 +1,17 @@
+# Gradle / Android build outputs
+.gradle/
+build/
+*/build/
+local.properties
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Keystores — never committed; release signing lives outside the repo.
+*.jks
+*.keystore
+keystore.properties
