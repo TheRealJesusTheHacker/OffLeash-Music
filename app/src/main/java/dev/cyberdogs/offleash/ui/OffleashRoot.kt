@@ -65,6 +65,7 @@ import dev.cyberdogs.offleash.ui.library.LibraryScreen
 import dev.cyberdogs.offleash.ui.library.LocalPlaylistScreen
 import dev.cyberdogs.offleash.ui.player.PlayerScreen
 import dev.cyberdogs.offleash.ui.search.SearchScreen
+import dev.cyberdogs.offleash.ui.settings.SettingsScreen
 
 private val TOP_LEVEL_ROUTES = setOf("home", "search", "library", "about")
 
@@ -250,6 +251,13 @@ fun OffleashRoot(container: AppContainer) {
                     AboutScreen(
                         container = container,
                         onOpenDiagnostics = { navController.navigate("diagnostics") },
+                        onSignInClick = { navController.navigate("signin") },
+                        onOpenSettings = { navController.navigate("settings") },
+                    )
+                }
+                composable("settings") {
+                    SettingsScreen(
+                        container = container,
                         onSignInClick = { navController.navigate("signin") },
                     )
                 }

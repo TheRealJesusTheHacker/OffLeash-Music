@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.account.SessionKeepAlive
 import dev.cyberdogs.offleash.data.AesGcmSecretBox
+import dev.cyberdogs.offleash.data.AppPreferences
 import dev.cyberdogs.offleash.data.FileSecretStorage
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
@@ -148,6 +149,14 @@ class AppContainer(app: OffleashApp) {
         }
     }
 
+    /**
+     * Plain app preferences (stream quality and friends), persisted
+     * in the `offleash_prefs` SharedPreferences. Constructed before
+     * the queue controller so playback can read the current quality
+     * at every resolve.
+     */
+    val appPreferences: AppPreferences = AppPreferences.fromContext(app)
+
     val localPlaylistStore: LocalPlaylistStore =
         LocalPlaylistStore(File(app.filesDir, "playlists.json"))
 
@@ -176,6 +185,9 @@ class AppContainer(app: OffleashApp) {
         // probe sees the same network identity as the resolve and the
         // player's own fetch.
         probeClient = okHttpClient,
+        // Stream quality (Wave 2 parity): read at resolve time, so a
+        // Settings change applies to the next resolve without restart.
+        qualityProvider = { appPreferences.streamQuality },
     )
 
     /**

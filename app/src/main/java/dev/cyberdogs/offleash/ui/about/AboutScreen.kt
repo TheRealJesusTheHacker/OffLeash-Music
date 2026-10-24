@@ -66,6 +66,7 @@ fun AboutScreen(
     container: AppContainer,
     onOpenDiagnostics: () -> Unit = {},
     onSignInClick: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val versionName = rememberVersionName(context)
@@ -120,6 +121,9 @@ fun AboutScreen(
             )
         }
         Spacer(Modifier.height(8.dp))
+        TextButton(onClick = onOpenSettings) {
+            Text("Settings")
+        }
         TextButton(onClick = onOpenDiagnostics) {
             Text("Playback diagnostics")
         }

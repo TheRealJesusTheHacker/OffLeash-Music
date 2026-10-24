@@ -21,6 +21,7 @@ import dev.cyberdogs.offleash.core.model.StreamInfo
 import dev.cyberdogs.offleash.core.model.Track
 import dev.cyberdogs.offleash.core.playback.PlayQueue
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
+import dev.cyberdogs.offleash.core.playback.QualityPreference
 import dev.cyberdogs.offleash.core.playback.RepeatMode
 import dev.cyberdogs.offleash.core.playback.ResolvedStream
 import dev.cyberdogs.offleash.data.RecentsStore
@@ -189,6 +190,15 @@ class QueueController(
      * the player, the pre-ladder behaviour).
      */
     private val probeClient: OkHttpClient? = null,
+    /**
+     * Supplies the current stream-quality preference. Read fresh at
+     * every resolve (and at every ladder re-resolve) so a Settings
+     * change applies to the next track — and to the player-stage 403
+     * re-resolve of the current one, which re-enters the same resolve
+     * path — with no restart. The default keeps callers that do not
+     * wire preferences on the core's own default.
+     */
+    private val qualityProvider: () -> QualityPreference = { QualityPreference.HIGH },
 ) {
 
     private val queue = PlayQueue(Random)
@@ -470,7 +480,9 @@ class QueueController(
         var auth = sessionProvider()
         while (true) {
             val resolved = try {
-                withContext(Dispatchers.IO) { resolver.resolve(track.videoId, auth) }
+                withContext(Dispatchers.IO) {
+                    resolver.resolve(track.videoId, auth, qualityProvider())
+                }
             } catch (e: AllRoadsRefused) {
                 diagnostics.recordRoadAttempt(
                     road = "account",
@@ -662,7 +674,7 @@ class QueueController(
             } else {
                 try {
                     val fresh = withContext(Dispatchers.IO) {
-                        client.streamInfo(track.videoId, pairContext)
+                        client.streamInfo(track.videoId, pairContext, qualityProvider())
                     }
                     diagnostics.recordResolverOutcome(
                         contextClientName = pairContext.clientName,
