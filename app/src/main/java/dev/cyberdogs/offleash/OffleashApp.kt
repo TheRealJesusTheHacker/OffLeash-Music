@@ -14,9 +14,13 @@ import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
+import dev.cyberdogs.offleash.core.playback.PlaybackResolver
+import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.account.SessionKeepAlive
 import dev.cyberdogs.offleash.data.AesGcmSecretBox
 import dev.cyberdogs.offleash.data.AppPreferences
+import dev.cyberdogs.offleash.data.DownloadManager
+import dev.cyberdogs.offleash.data.DownloadStore
 import dev.cyberdogs.offleash.data.FileSecretStorage
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
@@ -24,7 +28,10 @@ import dev.cyberdogs.offleash.data.OkHttpTransport
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.data.SessionManager
 import dev.cyberdogs.offleash.data.SessionStore
+import dev.cyberdogs.offleash.data.OkHttpChunkFetcher
 import dev.cyberdogs.offleash.data.buildSharedClient
+import dev.cyberdogs.offleash.data.downloadRecordsFileIn
+import dev.cyberdogs.offleash.data.downloadsDirIn
 import dev.cyberdogs.offleash.data.sessionFileIn
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -133,6 +140,9 @@ class AppContainer(app: OffleashApp) {
         // Periodic validation (12h, connected) for as long as the app
         // is installed; the manager decides what each result means.
         SessionKeepAlive.enqueue(app)
+        // Auto-download of Liked (parity step 2): the worker itself
+        // checks the preference and the session before doing anything.
+        AutoDownloadLiked.enqueue(app)
         // App-start validation when a stored session exists: a dead
         // session is found — and wiped, with a plain explanation in
         // the UI state — at launch, not mid-playlist.
@@ -156,6 +166,37 @@ class AppContainer(app: OffleashApp) {
      * at every resolve.
      */
     val appPreferences: AppPreferences = AppPreferences.fromContext(app)
+
+    /**
+     * Offline downloads (parity step 2, Lane F): records in
+     * `downloads.json` and audio files in `downloads/`, both under the
+     * app files dir — app-private storage, NOT the no-backup session
+     * directory (downloads are re-fetchable content, not credentials).
+     *
+     * Resolution is wired to the EXISTING road-switching resolver —
+     * the same [PlaybackResolver] playback uses, with the current
+     * session read at download time — at the effective download
+     * quality (the download-quality preference, which defaults to
+     * following the stream quality). Chunk fetches ride the shared
+     * OkHttp client, so a download's network identity matches the
+     * resolver's, exactly as stream fetches do (SPEC §4).
+     */
+    val downloadStore: DownloadStore =
+        DownloadStore(downloadRecordsFileIn(app.filesDir))
+
+    val downloadManager: DownloadManager = DownloadManager(
+        store = downloadStore,
+        downloadsDir = downloadsDirIn(app.filesDir),
+        resolveStream = { track, quality ->
+            PlaybackResolver(client).resolve(
+                track.videoId,
+                sessionManager.currentAuthSession(),
+                quality,
+            ).info
+        },
+        fetcher = OkHttpChunkFetcher(okHttpClient),
+        qualityProvider = { appPreferences.effectiveDownloadQuality() },
+    )
 
     val localPlaylistStore: LocalPlaylistStore =
         LocalPlaylistStore(File(app.filesDir, "playlists.json"))
@@ -188,6 +229,11 @@ class AppContainer(app: OffleashApp) {
         // Stream quality (Wave 2 parity): read at resolve time, so a
         // Settings change applies to the next resolve without restart.
         qualityProvider = { appPreferences.streamQuality },
+        // Offline downloads (parity step 2): a DONE download's local
+        // file takes precedence over any network resolution. The
+        // default (null) behaviour is unchanged when no download
+        // exists — the provider simply returns null.
+        localFileProvider = { track -> downloadManager.downloadedPlayback(track.videoId) },
     )
 
     /**

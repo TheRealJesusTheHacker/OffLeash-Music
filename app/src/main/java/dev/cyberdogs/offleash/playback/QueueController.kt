@@ -24,6 +24,7 @@ import dev.cyberdogs.offleash.core.playback.PlaybackResolver
 import dev.cyberdogs.offleash.core.playback.QualityPreference
 import dev.cyberdogs.offleash.core.playback.RepeatMode
 import dev.cyberdogs.offleash.core.playback.ResolvedStream
+import dev.cyberdogs.offleash.data.DownloadedPlayback
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.ui.ErrorMessages
 import kotlinx.coroutines.CancellationException
@@ -199,6 +200,16 @@ class QueueController(
      * wire preferences on the core's own default.
      */
     private val qualityProvider: () -> QualityPreference = { QualityPreference.HIGH },
+    /**
+     * Supplies the playable local download for a track, or null when
+     * the track is not DONE-downloaded (parity step 2, Lane F — see
+     * `downloadedPlaybackFor` for the decision). Read fresh at every
+     * play. The default returns null, so callers that do not wire
+     * downloads behave exactly as before: every play resolves over
+     * the network. When it returns a file, that file takes precedence
+     * over ANY network resolution — the resolve is never attempted.
+     */
+    private val localFileProvider: (Track) -> DownloadedPlayback? = { null },
 ) {
 
     private val queue = PlayQueue(Random)
@@ -430,6 +441,30 @@ class QueueController(
                 diagnostics.startAttempt("track ${track.videoId} — ${track.title}")
             }
             diagnostics.recordNetworkFrom(context)
+
+            // Offline downloads take precedence over every network
+            // road: a DONE download plays from its local file and the
+            // resolver is never consulted (parity step 2, Lane F).
+            val local = try {
+                localFileProvider(track)
+            } catch (e: Exception) {
+                // A broken download lookup must not break playback:
+                // fall through to the network roads.
+                diagnostics.log(
+                    "download",
+                    "local download lookup failed (${e.javaClass.simpleName}) — using the network",
+                )
+                null
+            }
+            if (local != null) {
+                diagnostics.log(
+                    "download",
+                    "playing the downloaded file for track ${track.videoId} — no network resolution",
+                )
+                handToPlayer(track, Uri.fromFile(local.file), local.mimeType)
+                return@launch
+            }
+
             val stream = try {
                 resolveWithRoads(track)
             } catch (e: CancellationException) {
@@ -446,26 +481,31 @@ class QueueController(
                 return@launch
             }
 
-            val metadata = MediaMetadata.Builder()
-                .setTitle(track.title)
-                .setArtist(track.artists.joinToString(", "))
-                .setAlbumTitle(track.album)
-                .setArtworkUri(track.thumbnailUrl?.let { Uri.parse(it) })
-                .build()
-            val mediaItem = MediaItem.Builder()
-                .setMediaId(track.videoId)
-                .setUri(stream.url)
-                .setMimeType(stream.mimeType)
-                .setMediaMetadata(metadata)
-                .build()
-            player.setMediaItem(mediaItem)
-            player.prepare()
-            player.play()
-            syncQueueState()
-            syncPlaybackState()
-            // Record the play once the track actually starts.
-            scope.launch(Dispatchers.IO) { recentsStore.recordPlayed(track) }
+            handToPlayer(track, Uri.parse(stream.url), stream.mimeType)
         }
+    }
+
+    /** Hands one prepared item — a stream URL or a local file — to the player. */
+    private fun handToPlayer(track: Track, uri: Uri, mimeType: String?) {
+        val metadata = MediaMetadata.Builder()
+            .setTitle(track.title)
+            .setArtist(track.artists.joinToString(", "))
+            .setAlbumTitle(track.album)
+            .setArtworkUri(track.thumbnailUrl?.let { Uri.parse(it) })
+            .build()
+        val mediaItem = MediaItem.Builder()
+            .setMediaId(track.videoId)
+            .setUri(uri)
+            .setMimeType(mimeType)
+            .setMediaMetadata(metadata)
+            .build()
+        player.setMediaItem(mediaItem)
+        player.prepare()
+        player.play()
+        syncQueueState()
+        syncPlaybackState()
+        // Record the play once the track actually starts.
+        scope.launch(Dispatchers.IO) { recentsStore.recordPlayed(track) }
     }
 
     /**

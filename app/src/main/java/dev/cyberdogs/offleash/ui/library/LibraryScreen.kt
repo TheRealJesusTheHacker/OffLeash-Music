@@ -44,9 +44,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import dev.cyberdogs.offleash.AppContainer
+import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.core.model.LocalPlaylist
 import dev.cyberdogs.offleash.core.model.PlaylistSummary
+import dev.cyberdogs.offleash.data.DownloadRecord
+import dev.cyberdogs.offleash.data.DownloadState
+import dev.cyberdogs.offleash.data.downloadProgressPercent
+import dev.cyberdogs.offleash.data.formatDownloadBytes
+import dev.cyberdogs.offleash.data.summariseDownloads
 import dev.cyberdogs.offleash.ui.ErrorMessages
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.components.TrackRow
@@ -64,8 +71,20 @@ fun LibraryScreen(
 ) {
     val playlists by container.localPlaylistStore.playlists.collectAsState()
     val recents by container.recentsStore.recents().collectAsState()
+    val downloadRecords by container.downloadManager.records.collectAsState()
+    val autoDownloadLiked by container.appPreferences.autoDownloadLikedFlow.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val sessionState by container.sessionManager.uiState.collectAsState()
+
+    // Auto-download of Liked (preference-gated, default off): when the
+    // Library is opened signed-in with the preference on, ask the
+    // WorkManager job to load the liked list and enqueue what's missing.
+    LaunchedEffect(sessionState.signedIn, autoDownloadLiked) {
+        if (sessionState.signedIn && autoDownloadLiked) {
+            AutoDownloadLiked.enqueue(context)
+        }
+    }
 
     var showCreate by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<LocalPlaylist?>(null) }
@@ -326,6 +345,108 @@ fun LibraryScreen(
             }
         }
 
+        // -- Downloads (parity step 2): downloaded + queued tracks, with
+        // honest storage accounting computed from the records and the
+        // actual files — never a stored or guessed number.
+        item {
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = "Downloads",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            val summary = summariseDownloads(downloadRecords) { record ->
+                container.downloadManager.fileLength(record)
+            }
+            val summaryText = when {
+                downloadRecords.isEmpty() -> null
+                summary.downloadedCount > 0 ->
+                    "${summary.downloadedCount} downloaded • " +
+                        "${formatDownloadBytes(summary.totalBytes)} on this device"
+                else -> "Nothing fully downloaded yet"
+            }
+            if (summaryText != null) {
+                Text(
+                    text = summaryText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+        if (downloadRecords.isEmpty()) {
+            item {
+                Text(
+                    text = "No downloads yet. Download a track from its menu " +
+                        "and it will play without a connection.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+        items(downloadRecords, key = { it.videoId }) { record ->
+            val doneTracks = downloadRecords
+                .filter { it.state == DownloadState.DONE }
+                .map { it.track }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = record.state == DownloadState.DONE) {
+                        val index = doneTracks.indexOfFirst { it.videoId == record.videoId }
+                        if (index >= 0) {
+                            container.queueController.playTracks(doneTracks, index)
+                        }
+                    }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ArtworkImage(
+                    url = record.track.thumbnailUrl,
+                    contentDescription = null,
+                    modifier = Modifier.size(52.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = record.track.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = downloadStatusText(record, container.downloadManager.fileLength(record)),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (record.state == DownloadState.FAILED) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (record.state == DownloadState.DOWNLOADING) {
+                    CircularProgressIndicator(Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                }
+                if (record.state == DownloadState.FAILED) {
+                    OutlinedButton(
+                        onClick = { container.downloadManager.enqueue(record.track) },
+                    ) { Text("Retry") }
+                    Spacer(Modifier.width(4.dp))
+                }
+                IconButton(onClick = { container.downloadManager.delete(record.videoId) }) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete download of ${record.track.title}",
+                    )
+                }
+            }
+        }
+
         item {
             Spacer(Modifier.height(24.dp))
             Text(
@@ -355,6 +476,7 @@ fun LibraryScreen(
                 onAddToPlaylist = { playlist, picked ->
                     scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
                 },
+                onDownload = { container.downloadManager.enqueue(it) },
             )
         }
         item { Spacer(Modifier.height(16.dp)) }
@@ -409,6 +531,24 @@ fun LibraryScreen(
         )
     }
 }
+
+/** Plain-language status line for one Downloads row. */
+private fun downloadStatusText(record: DownloadRecord, fileLength: Long?): String =
+    when (record.state) {
+        DownloadState.QUEUED -> "Waiting to download"
+        DownloadState.DOWNLOADING -> {
+            val percent = downloadProgressPercent(record)
+            if (percent != null) {
+                "Downloading… $percent%"
+            } else {
+                "Downloading…"
+            }
+        }
+        DownloadState.DONE ->
+            "Downloaded • ${formatDownloadBytes(fileLength ?: record.totalBytes ?: 0L)}"
+        DownloadState.FAILED ->
+            "Download failed: ${record.failureReason ?: "something went wrong"}"
+    }
 
 @Composable
 private fun PlaylistNameDialog(
@@ -516,6 +656,7 @@ fun LocalPlaylistScreen(
                 onAddToPlaylist = { target, picked ->
                     scope.launch { container.localPlaylistStore.addTrack(target.id, picked) }
                 },
+                onDownload = { container.downloadManager.enqueue(it) },
                 trailing = {
                     Row {
                         IconButton(

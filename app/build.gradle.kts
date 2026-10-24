@@ -20,8 +20,8 @@ android {
         applicationId = "dev.cyberdogs.offleash"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0-parity"
+        versionCode = 4
+        versionName = "0.4.0-downloads"
     }
 
     flavorDimensions += "edition"

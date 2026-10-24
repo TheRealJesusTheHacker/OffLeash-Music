@@ -124,6 +124,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.trackItems(
             onAddToPlaylist = { playlist, picked ->
                 scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
             },
+            onDownload = { container.downloadManager.enqueue(it) },
         )
     }
 }

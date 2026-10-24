@@ -110,6 +110,13 @@ fun TrackRow(
     modifier: Modifier = Modifier,
     isCurrent: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    /**
+     * Optional Download action (parity step 2, Lane F). Null — the
+     * default everywhere — hides the menu item entirely, so rows that
+     * do not wire downloads are unchanged. The full track-menu
+     * vocabulary is a later lane's job; this is the one real item.
+     */
+    onDownload: ((Track) -> Unit)? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var pickerOpen by remember { mutableStateOf(false) }
@@ -188,6 +195,15 @@ fun TrackRow(
                         pickerOpen = true
                     },
                 )
+                if (onDownload != null) {
+                    DropdownMenuItem(
+                        text = { Text("Download") },
+                        onClick = {
+                            menuOpen = false
+                            onDownload(track)
+                        },
+                    )
+                }
             }
         }
     }
