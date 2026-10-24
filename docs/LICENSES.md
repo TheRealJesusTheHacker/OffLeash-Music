@@ -11,7 +11,7 @@
 | Kotlin stdlib (via Kotlin 2.0.20) | Language runtime | Apache-2.0 | VERIFIED 2026-10-23 — resolved by the Kotlin Gradle plugin 2.0.20 |
 | Jetpack Compose BOM 2024.12.01 (ui 1.7.6, material3 1.3.1, material-icons-extended 1.7.6, navigation-compose 2.7.7, lifecycle 2.8.7, activity-compose 1.9.3) | UI + navigation | Apache-2.0 | VERIFIED 2026-10-23 — resolved versions read from Maven metadata by the coordinator; compose compiler plugin 2.0.20 |
 | AndroidX Media3 1.5.1 (exoplayer, session, datasource, common + transitives) | Playback + media notification | Apache-2.0 | VERIFIED 2026-10-23 — required compileSdk 35; see the toolchain note |
-| OkHttp 4.12.0 (okio transitives) | HTTP transport | Apache-2.0 | VERIFIED 2026-10-23 |
+| OkHttp 4.12.1 (okio transitives) | HTTP transport | Apache-2.0 | VERIFIED 2026-10-23 at 4.12.0; bumped to 4.12.1 on 2026-10-24 (Fleet Sweep #5) — the CVE-2026-111943 fix release (blocklists the compromised eMudhra intermediate CAs) |
 | AndroidX Media3 datasource-okhttp 1.5.1 | Media3 DataSource over the shared OkHttp client for stream fetches | Apache-2.0 | ADDED 2026-10-23 — playback hunt; same Media3 1.5.1 family as the existing Media3 entry above |
 | kotlinx-serialization-json 1.7.3 | JSON parsing (API layer) | Apache-2.0 | VERIFIED 2026-10-23 |
 | kotlinx-coroutines-android 1.8.1 | Concurrency (app layer) | Apache-2.0 | VERIFIED 2026-10-23 |
