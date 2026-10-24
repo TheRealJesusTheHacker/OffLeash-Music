@@ -1,6 +1,8 @@
-# OffLeash Music — Phase 1 Specification
+# OffLeash Music — Specification
 
-**Status:** Phase 1 build spec, 2026-10-23. This document is the contract the
+**Status:** Phase 1 build spec, 2026-10-23; Phase 2 (account access) landed
+the same night under its own security pass — see §10, which supersedes the
+§7 boundary. This document is the contract the
 code is built against. If the code and this spec disagree, one of them is
 wrong and the fix lands in the open (see `docs/AUDITS.md`).
 
@@ -154,7 +156,18 @@ UI tap → QueueController.setQueue(tracks, index)
   `Track` records (minus stream URLs, which are never stored).
 - **Recently played:** last 50 tracks, most-recent-first, deduped by
   videoId, same JSON store family (`recents.json`).
-- Nothing leaves the device. There is no account, no sync, no telemetry.
+- **Account session (Phase 2, §10):** exactly ONE store — a single file
+  (`session.bin`) in the app's no-backup files directory, sealed with
+  AES-256-GCM under a key held in the Android Keystore. No plaintext copy
+  exists anywhere (not preferences, not a database, not a second file).
+  The store is excluded from cloud backup and device-to-device transfer
+  on every API level (data-extraction + legacy backup rules, pinned by a
+  contract test). Cookie values and their derivatives are never logged
+  and never displayed; diagnostics and the account area show identity
+  display name and session health only.
+- Nothing leaves the device except the owner's own authenticated
+  requests to YouTube while signed in. There is no sync, no telemetry,
+  no third-party endpoint.
 
 ## 6. Failure honesty — the error taxonomy
 
@@ -168,6 +181,7 @@ copy. Spinners always have a timeout and an error state behind them.
 | `NoPlayableStream` | OK status but no direct (unciphered) audio URL | "No playable stream for this track — YouTube served only locked formats." |
 | `NetworkFailure` | transport throws / HTTP 5xx | "Couldn't reach YouTube Music — check your connection." |
 | `ParseFailure` | response shape unrecognizable | "YouTube Music answered in a shape this app doesn't understand yet — the API has likely changed." |
+| `AllRoadsRefused` (Phase 2) | signed in, and the account road AND every anonymous context refused the track | "YouTube refused this track on both paths. Signed-in path: <account road's named error> Anonymous path: <anonymous road's named error>" — both roads are always named; a track may surface an error only when every road has refused it (§10) |
 
 Player-stage failures (Media3 `PlaybackException`, mapped by
 `ErrorMessages.playerMessage(errorCode, httpStatus)`) have their own rows —
@@ -186,14 +200,14 @@ Browse/search/detail failures reuse the same taxonomy and render as an
 error panel with a Retry button — never a blank screen, never an endless
 spinner.
 
-## 7. Phase 2 boundary
+## 7. Phase 2 boundary (historical — superseded by §10)
 
-Phase 1 contains **no sign-in code, no Google session/cookie handling, no
+Phase 1 contained **no sign-in code, no Google session/cookie handling, no
 credential storage — anywhere, in any form.** The client contexts are
 anonymous and public (they ship in every web page load of
-music.youtube.com). If a Phase 1 task appears to need a key, a login, or a
-user token, the correct move is to stop and report: that is Phase 2
-territory and it gets its own security pass first (see `docs/ROADMAP.md`).
+music.youtube.com). Phase 2 was gated on its own security pass; that pass
+ran and the account build landed — the boundary is recorded here as the
+Phase 1 contract, and §10 is the Phase 2 contract.
 
 ## 8. Testing & CI
 
@@ -216,6 +230,86 @@ territory and it gets its own security pass first (see `docs/ROADMAP.md`).
   contract defends against, and watching them keeps that defence honest
   if googlevideo behaviour changes.
 - The debug APK is a **personal-use build artifact**, never a release.
+
+## 10. Phase 2 — account access (landed 2026-10-23)
+
+The owner's product definition: "YouTube but ad free and able to play in
+the background," with his liked videos, his playlists, and YouTube's
+recommendations for him. Signed-out behavior is Phase 1, unchanged;
+signing in only adds.
+
+- **Sign-in.** An embedded WebView runs Google's ServiceLogin music
+  flow; the app never sees the password — the WebView talks to Google
+  only. Navigation is scope-enforced in code: an allowlist of
+  Google/YouTube auth hosts (plus their subdomains); any other
+  navigation is blocked with a plain note. Success = arrival at
+  `https://music.youtube.com/`. A manual cookie-paste fallback exists
+  for the WebView-loop failure class and runs through the exact same
+  subset + validation pipeline.
+- **Capture = a named subset, never the jar.** Exactly seven cookies
+  are captured: `SAPISID`, `__Secure-3PAPISID`, `APISID`, `HSID`,
+  `SSID`, `SID`, `LOGIN_INFO`. The WebView's own cookie store is wiped
+  immediately after every capture attempt, success or failure.
+- **Validation with rollback.** A captured (or pasted) session is
+  accepted only after the account-switcher identity call answers with
+  at least one identity; the selected identity's real `authUser` /
+  `pageId` are adopted (never a hard-coded index — brand-channel
+  accounts live at other indices). If identity does not answer, nothing
+  is persisted and any prior session state stands untouched — rollback
+  by construction — and the user is told plainly.
+- **Authorization.** `Authorization: SAPISIDHASH <epochSeconds>_<sha1>`
+  in the classic form: SHA-1 of `"<epochSeconds> <hashSource>
+  https://music.youtube.com"`, raw epoch seconds, the scheme word in
+  the header value. Hash source = `SAPISID`, else `__Secure-3PAPISID`.
+  The presence rule is deliberate and unit-tested: a session is
+  plausible iff a hash source is present AND (`SID` or `LOGIN_INFO`)
+  is present. Absence = a signed-out state — never a silently
+  header-less "signed-in."
+- **Storage.** §5's one encrypted store. Sign-out = verified wipe
+  (the sealed bytes are zero-overwritten, then deleted; the WebView
+  data is cleared) and an automated test asserts no auth material
+  remains anywhere the app writes.
+- **Keep-alive.** Validation runs at app start and periodically
+  (~12 h, WorkManager, connected-network constraint) via the identity
+  call. Rotated cookie values (subset names only) arriving on
+  `*.youtube.com` responses and refreshed visitor data are absorbed
+  into the store. Health states: Healthy / Needs sign-in again /
+  Signed out. A confirmed-dead session (401/403 or an empty identity
+  answer) is destroyed with a calm "sign in again" state; a network
+  failure NEVER reads as a dead session. A playback-time auth refusal
+  triggers ONE silent re-validation + retry before anything surfaces.
+- **Surfaces (signed in).** Personalized home (`FEmusic_home` with
+  auth) replaces the anonymous home; Library gains "Your YouTube
+  library": Liked Songs (the `LM` playlist) and his playlists
+  (`FEmusic_liked_playlists`), list + open + play. YouTube-side
+  playlist *editing* is deferred — see ROADMAP for the reason.
+- **Road-switching (the completeness rule).** Each track resolves
+  through the core `PlaybackResolver`: signed in, the account road
+  (authenticated WEB_REMIX player, Premium formats when offered) goes
+  first; on refusal the anonymous road cascades silently — iOS
+  20.10.4, then ANDROID 20.31.34 (both proven to serve anonymously;
+  ANDROID_VR and TVHTML5 are bot-gated anonymously and are not in the
+  cascade). An error surfaces only when every road refuses:
+  `AllRoadsRefused` (§6) naming both roads, with the diagnostics
+  attempt log recording each road's outcome.
+- **Anonymous-road probe ladder.** On the owner's carrier a resolved
+  URL's bounded fetches can be refused 403 deterministically for a
+  given network identity while the same track serves fine elsewhere
+  (probe evidence in AUDITS). So before the player sees an
+  anonymous-road URL, up to 3 (resolve → immediate bounded probe)
+  pairs run through the shared OkHttp stack: pair 1 probes the URL the
+  resolver just served; pair 2 resolves fresh on the OTHER cascade
+  context; pair 3 returns to the first context with a fresh
+  resolution. The probe is a bounded `Range: bytes=0-0` GET; the first
+  2xx pair serves. If every pair refuses, the LAST resolved URL goes
+  to the player anyway — its own fetch and the §4 player-stage 403
+  retry remain final chances. Account-road serves are never probed.
+  Every pair's outcome is recorded in diagnostics.
+- **Tap-to-play.** Tapping any track, anywhere (feed, search, library,
+  album/playlist/artist rows), starts playback immediately — the queue
+  hands off at once, `isResolving` drives a visible loading state
+  (MiniPlayer spinner, PlayerScreen "Loading…") until READY or a named
+  error. There is no dead press-play step and no silent stall.
 
 ## 9. Branding
 

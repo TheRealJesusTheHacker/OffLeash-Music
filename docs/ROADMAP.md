@@ -30,13 +30,30 @@ Anonymous, no account:
 - Replay cache for streams
 - Named, plain-language errors when YouTube's unofficial API changes shape or refuses a track — never an endless spinner
 
-## Phase 2 — accounts (gated on its security pass)
+## Phase 2 — accounts (BUILT, 2026-10-23; security pass in `docs/AUDITS.md`)
 
-- Google sign-in for YouTube Music account features (library, likes, personal playlists)
-- The credential/storage design is reviewed and recorded in `docs/AUDITS.md` *before* any sign-in code lands
+- Sign-in: WebView to Google's ServiceLogin music flow (the app never sees the password), navigation scope enforced in code, capture limited to a deliberate 7-cookie subset, identity validation with rollback, WebView jar wiped after capture; manual cookie-paste fallback through the same pipeline
+- Storage: ONE store, AES-256-GCM under an Android Keystore key in the no-backup directory; zero plaintext copies; backup/transfer excluded on every API level; never logged (regression-tested), never displayed; sign-out is a verified wipe
+- Authenticated API: classic SAPISIDHASH, deliberate presence rule, account-switcher enumeration (no hard-coded index), visitor data maintained alongside; signed-in surfaces: Liked Songs (LM), his playlists, personalized home + recommendations, account area (identity, health, sign-out)
+- Session keep-alive: app-start + ~12 h periodic validation, rotated cookies/visitor data absorbed, health states surfaced calmly, one silent re-validation + retry on a playback-time auth refusal
+- Completeness: per-track road-switching (account road first, anonymous cascade [iOS, ANDROID] behind it, named error only when every road refuses) + the anonymous-road probe ladder (3 rotating resolve→probe pairs, last URL to the player anyway)
+- Tap-to-play everywhere, with a visible resolving state
+
+**Deferred from Phase 2, with reasons:** YouTube-side playlist *editing* (write paths can't be verified without the owner's account; a bad write could alter his real library — read/play is built, editing waits for an owner-present verification session). Subscriptions feed (its browse shape is not yet established — no surface is faked up without evidence).
+
+## Parity wave (owner-ordered 2026-10-23 — "grind until we're current")
+
+Benchmarked against the owner's reference-client screenshots (feature surface and behavior only; clean-room rule unchanged). Runs straight after the Phase 2 core, in this order, each step suite-green with a G3-signed hunt build:
+
+1. Stream/download **quality selector** honored by format selection (sensible metered-carrier defaults; the owner's reference setup sits at Low ~66 kbps)
+2. **Offline downloads**: per-track download + auto-download of Liked songs, download-quality setting, honest in-app storage accounting
+3. **Lyrics display** on Now Playing (line-synced where a source offers it; named absence where none does)
+4. **Sleep timer**, **playback speed & pitch**, **start radio**, **share**, and the full track-menu vocabulary (Like incl. account like read/write, Download, Add to a playlist, Play next, Add to queue, Artists, Album, Start radio, Sleep Timer, Playback speed & pitch, Share)
+5. Settings depth: account management entry, download/audio-version preferences (incl. "play audio version instead of MV in radio"), signed-in home chrome (greeting, mood chips, "Listen again" / "Forgotten favorites" section types where the API returns them)
 
 ## Later / open questions
 
-- Lyrics providers
+- YouTube-side playlist editing (see the deferral above)
+- Subscriptions feed (browse shape to be established by probe)
 - SponsorBlock
 - Desktop builds (the category is cross-platform; OffLeash is Android-first and desktop is undecided)

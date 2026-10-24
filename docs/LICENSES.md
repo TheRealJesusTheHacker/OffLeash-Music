@@ -16,6 +16,7 @@
 | kotlinx-serialization-json 1.7.3 | JSON parsing (API layer) | Apache-2.0 | VERIFIED 2026-10-23 |
 | kotlinx-coroutines-android 1.8.1 | Concurrency (app layer) | Apache-2.0 | VERIFIED 2026-10-23 |
 | Coil 2.7.0 (coil-compose) | Thumbnail loading | Apache-2.0 | VERIFIED 2026-10-23 |
+| AndroidX WorkManager 2.9.1 (work-runtime-ktx) | Periodic session keep-alive validation (~12 h, connected-network constraint) | Apache-2.0 | ADDED 2026-10-23 — Phase 2; version resolved by the Gradle build in CI |
 | kotlin-test 2.0.20 / JUnit 4.13.2 (+ hamcrest-core 1.3) | JVM tests — test scope only, never shipped in the APK | Apache-2.0 / EPL-2.0 | VERIFIED 2026-10-23 |
 
 *Build toolchain (not shipped in the APK, no license entries): Gradle 8.9, Android Gradle Plugin 8.7.2, compileSdk/targetSdk 35, minSdk 26. The Media3 1.5.1 pairing forced the jump from the initial AGP 8.5.2 / SDK 34 skeleton — Media3 1.5.x requires libraries to compile against SDK 35; CI installs `platforms;android-35` and `build-tools;35.0.0` accordingly.*
