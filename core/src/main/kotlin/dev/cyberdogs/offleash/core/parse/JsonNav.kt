@@ -67,9 +67,39 @@ fun findAll(node: JsonElement?, key: String, out: MutableList<JsonElement> = mut
     return out
 }
 
-/** The first value stored under [key] anywhere in the tree, if any. */
-fun findFirst(node: JsonElement?, key: String): JsonElement? =
-    findAll(node, key).firstOrNull()
+/**
+ * The first value stored under [key] anywhere in the tree, if any.
+ *
+ * Document order is exactly [findAll]'s: an object's own [key] entry
+ * wins over anything nested inside its values, and values/elements
+ * are searched in iteration order. Unlike the old
+ * `findAll(node, key).firstOrNull()` this search SHORT-CIRCUITS at
+ * the first match — the old form walked the entire tree (and built
+ * the full match list) on every call, which cost ~16 ms per call on
+ * a key sitting near the top of the 409 KB home fixture (Fleet
+ * Sweep #5 measurement, 2026-10-24). Absent keys still cost a full
+ * walk — there is no honest way to prove absence sooner.
+ */
+fun findFirst(node: JsonElement?, key: String): JsonElement? = when (node) {
+    is JsonObject -> {
+        node[key]?.let { return it }
+        var found: JsonElement? = null
+        for (value in node.values) {
+            found = findFirst(value, key)
+            if (found != null) break
+        }
+        found
+    }
+    is JsonArray -> {
+        var found: JsonElement? = null
+        for (element in node) {
+            found = findFirst(element, key)
+            if (found != null) break
+        }
+        found
+    }
+    else -> null
+}
 
 /** Largest thumbnail URL from a `thumbnails` array (by width; last wins ties). */
 fun largestThumbnailUrl(thumbnails: JsonElement?): String? {
