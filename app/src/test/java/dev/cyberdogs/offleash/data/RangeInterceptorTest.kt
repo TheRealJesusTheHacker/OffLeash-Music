@@ -104,6 +104,83 @@ class RangeInterceptorTest {
     }
 
     @Test
+    fun googlevideoGetStripsAcceptEncoding() {
+        // Media3's OkHttpDataSource adds "Accept-Encoding: identity"
+        // to every stream fetch; the probe-proven shape carries no
+        // Accept-Encoding at all (2026-10-24 hunt). The strip happens
+        // here, scoped to googlevideo GETs exactly like the range rule.
+        val out = run(
+            Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback")
+                .header("Accept-Encoding", "identity").get().build(),
+        )
+        assertNull(out.header("Accept-Encoding"))
+        assertEquals("bytes=0-1048575", out.header("Range"))
+    }
+
+    @Test
+    fun nonGooglevideoRequestsKeepTheirAcceptEncoding() {
+        val out = run(
+            Request.Builder().url("https://music.youtube.com/youtubei/v1/browse")
+                .header("Accept-Encoding", "identity").get().build(),
+        )
+        assertEquals("identity", out.header("Accept-Encoding"))
+    }
+
+    @Test
+    fun shapeCallbackReportsTheFinalShape() {
+        var capturedStatus: Int? = null
+        var capturedHost: String? = null
+        var capturedShape: StreamFetchShape? = null
+        val chain = FakeChain(
+            Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback")
+                .header("User-Agent", "some-custom-agent/1.0")
+                .header("Accept-Encoding", "identity")
+                .get().build(),
+        )
+        RangeInterceptor { status, host, shape ->
+            capturedStatus = status
+            capturedHost = host
+            capturedShape = shape
+        }.intercept(chain)
+        assertEquals(200, capturedStatus)
+        assertEquals("rr1---sn-example.googlevideo.com", capturedHost)
+        // The reported shape is the shape that LEFT the stack:
+        // bounded range, the custom UA class, encoding stripped.
+        assertEquals(
+            StreamFetchShape(
+                range = "bytes=0-1048575",
+                userAgent = "custom",
+                acceptEncoding = "absent",
+            ),
+            capturedShape,
+        )
+    }
+
+    @Test
+    fun describeShapeClasses() {
+        assertEquals(
+            StreamFetchShape("bytes=0-0", "okhttp-default", "absent"),
+            RangeInterceptor.describeShape("bytes=0-0", null, null),
+        )
+        assertEquals(
+            "okhttp-default",
+            RangeInterceptor.describeShape(null, "okhttp/4.12.0", null).userAgent,
+        )
+        assertEquals(
+            "custom",
+            RangeInterceptor.describeShape(null, "com.google.ios.youtube/20.10.4", null).userAgent,
+        )
+        assertEquals(
+            "identity",
+            RangeInterceptor.describeShape(null, null, "identity").acceptEncoding,
+        )
+        assertEquals(
+            "none",
+            RangeInterceptor.describeShape(null, null, null).range,
+        )
+    }
+
+    @Test
     fun normalizerRuleMatchesSpec() {
         assertEquals(1024L * 1024L, RangeInterceptor.STREAM_RANGE_WINDOW_BYTES)
         assertEquals(

@@ -7,11 +7,13 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.cyberdogs.offleash.AppContainer
@@ -109,13 +112,18 @@ fun SignInScreen(
     // One pipeline for both capture paths: ask the manager, then —
     // whatever the answer — wipe the WebView's jar, because the
     // session now lives (if anywhere) in the encrypted store only.
-    fun attemptSignIn(rawCookie: String) {
+    // The cookie source is a PROVIDER, not a snapshot: confirmation
+    // re-reads it across its settling window, so cookies Google is
+    // still minting in the seconds after landing are picked up
+    // instead of bouncing a real login on a half-landed capture
+    // (2026-10-24 sign-in hunt).
+    fun attemptSignIn(cookieProvider: suspend () -> String) {
         if (validating) return
         validating = true
         errorMessage = null
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                manager.completeSignIn(rawCookie)
+                manager.completeSignIn(cookieProvider)
             }
             wipeWebViewData(context)
             when (result) {
@@ -173,6 +181,22 @@ fun SignInScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
+                    val signInLines = container.signInDiagnostics.lines()
+                    if (signInLines.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "What happened",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = signInLines.joinToString("\n"),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = {
@@ -192,23 +216,32 @@ fun SignInScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        if (validating) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    text = "Checking your sign-in with YouTube…",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        if (mode == SignInMode.WEB) {
+            if (validating) {
+                // The WebView stays composed below while confirmation
+                // runs: the page keeps settling — and Google keeps
+                // minting the session's cookies — while the manager
+                // re-reads the jar across its window. The pre-hunt
+                // shape replaced the view with this spinner, which
+                // destroyed the view mid-settle (2026-10-24 hunt).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = "Checking your sign-in with YouTube — this can take " +
+                            "a moment while YouTube finishes setting up your session…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
             }
-        } else if (mode == SignInMode.WEB) {
             AndroidView(
                 factory = { viewContext ->
                     WebView(viewContext).apply {
@@ -244,9 +277,15 @@ fun SignInScreen(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 if (url == SIGNED_IN_URL && !validating) {
-                                    val raw = CookieManager.getInstance()
-                                        .getCookie(MUSIC_URL) ?: ""
-                                    attemptSignIn(raw)
+                                    // Hand over a live cookie source,
+                                    // not a one-shot capture: the jar
+                                    // keeps filling after this first
+                                    // landing, and confirmation re-reads
+                                    // it across its window.
+                                    attemptSignIn {
+                                        CookieManager.getInstance()
+                                            .getCookie(MUSIC_URL) ?: ""
+                                    }
                                 }
                             }
                         }
@@ -300,7 +339,7 @@ fun SignInScreen(
                 )
                 Spacer(Modifier.height(16.dp))
                 Button(
-                    onClick = { attemptSignIn(pasteText) },
+                    onClick = { attemptSignIn { pasteText } },
                     enabled = pasteText.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Use this cookie") }

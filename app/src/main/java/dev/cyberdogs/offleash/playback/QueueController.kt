@@ -44,15 +44,18 @@ import okhttp3.Request
 import kotlin.random.Random
 
 /**
- * User agent paired with the stream URLs we resolve. Anonymous-road
- * streams are fetched through the core client's iOS context, so playback
- * requests present the same iOS YouTube app UA the URLs were issued to.
- * (Account-road streams are resolved on the WEB_REMIX context but are
- * still fetched by the same player stack; the UA pairing that matters
- * for googlevideo is the network identity, not the context label.)
+ * There is deliberately NO app-level stream User-Agent constant
+ * anymore. Until the 2026-10-24 hunt, the player's data source
+ * presented the iOS YouTube app UA on stream fetches ("the UA the
+ * URLs were issued to"); on the owner's phone the ladder probe —
+ * which sends no UA of its own and rides OkHttp's default — was
+ * served 206 on the very URL the player was then refused 403 on.
+ * Stream fetches now carry no UA of ours at any layer (see
+ * RangeInterceptor's shape contract and AppContainer.buildPlayer),
+ * so the probe, the test fetch and the player cannot diverge. The
+ * iOS context UA still exists where it belongs: inside :core's
+ * YoutubeiContexts, on the youtubei requests themselves.
  */
-const val APP_UA: String =
-    "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X)"
 
 /** Snapshot of the play queue for the UI. */
 data class QueueUiState(
@@ -128,6 +131,9 @@ enum class LadderAction {
 
 /** Number of (fresh resolve → probe) pairs the ladder runs at most. */
 const val LADDER_MAX_PAIRS: Int = 3
+
+/** Bytes the ladder probe reads from a served response (see probeUrl). */
+const val PROBE_READ_BYTES: Long = 2048L
 
 /**
  * Pure ladder decision. [attemptsSoFar] is the 1-based number of the pair
@@ -933,21 +939,43 @@ class QueueController(
     private data class ProbeResult(val status: Int?, val exceptionClass: String?)
 
     /**
-     * One bounded-range probe GET of [url] through the shared client.
-     * The header is already bounded (`bytes=0-0`), so the shared stack's
-     * RangeInterceptor leaves it untouched. The body is closed without
-     * being read — only the status matters.
+     * One probe GET of [url] through the shared client, in the
+     * player's EXACT first-fetch shape — no headers of its own at
+     * all, so the shared stack shapes it (bounded window Range,
+     * default UA, no Accept-Encoding) precisely as it shapes the
+     * player's first fetch, and the first bytes are actually read.
+     * A 2xx here therefore predicts the player's own first fetch
+     * instead of merely proving the URL answers some other shape.
+     *
+     * Until the 2026-10-24 hunt this probe preset `Range: bytes=0-0`
+     * and read nothing — a shape the player never sends — and it
+     * certified URLs the player was then refused on (probe 206,
+     * player 403, same URL, same second, on the owner's phone). The
+     * parity is pinned by StreamShapeParityTest and
+     * PlayerFetchShapeContractTest.
      */
     private suspend fun probeUrl(client: OkHttpClient, url: String): ProbeResult =
         withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
                     .url(url)
-                    .header("Range", "bytes=0-0")
                     .get()
                     .build()
                 client.newCall(request).execute().use { response ->
-                    ProbeResult(status = response.code, exceptionClass = null)
+                    val status = response.code
+                    if (status in 200..299) {
+                        // Read the first bytes, like the player's
+                        // first read: a served status with an
+                        // unreadable body is not a serving URL.
+                        try {
+                            response.body?.source()?.request(PROBE_READ_BYTES)
+                        } catch (e: Exception) {
+                            // The status already answered the ladder's
+                            // question; a body-read hiccup after a 2xx
+                            // does not change the verdict.
+                        }
+                    }
+                    ProbeResult(status = status, exceptionClass = null)
                 }
             } catch (e: CancellationException) {
                 throw e

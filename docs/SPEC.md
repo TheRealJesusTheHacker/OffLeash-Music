@@ -246,17 +246,30 @@ signing in only adds.
   `https://music.youtube.com/`. A manual cookie-paste fallback exists
   for the WebView-loop failure class and runs through the exact same
   subset + validation pipeline.
-- **Capture = a named subset, never the jar.** Exactly seven cookies
-  are captured: `SAPISID`, `__Secure-3PAPISID`, `APISID`, `HSID`,
-  `SSID`, `SID`, `LOGIN_INFO`. The WebView's own cookie store is wiped
-  immediately after every capture attempt, success or failure.
-- **Validation with rollback.** A captured (or pasted) session is
-  accepted only after the account-switcher identity call answers with
-  at least one identity; the selected identity's real `authUser` /
-  `pageId` are adopted (never a hard-coded index — brand-channel
-  accounts live at other indices). If identity does not answer, nothing
-  is persisted and any prior session state stands untouched — rollback
-  by construction — and the user is told plainly.
+- **Capture = a named subset, never the jar.** Exactly the named
+  session family is captured: the classic seven (`SAPISID`,
+  `__Secure-3PAPISID`, `APISID`, `HSID`, `SSID`, `SID`, `LOGIN_INFO`)
+  plus the secure-prefixed PSID family (`__Secure-3PSID`,
+  `__Secure-3PSIDTS`, `__Secure-3PSIDCC`, `__Secure-1PSID`,
+  `__Secure-1PAPISID`, `__Secure-1PSIDTS`, `__Secure-1PSIDCC`,
+  `SIDCC`) that carries the modern Google session (widened
+  2026-10-24, sign-in hunt — see AUDITS). The WebView's own cookie
+  store is wiped when a confirmation attempt completes, success or
+  failure.
+- **Validation with rollback, patiently.** A captured (or pasted)
+  session is accepted only after the account-switcher identity call
+  answers with at least one identity; the selected identity's real
+  `authUser` / `pageId` are adopted (never a hard-coded index —
+  brand-channel accounts live at other indices). Confirmation is
+  not one-shot: it re-reads the cookie source and re-asks across a
+  settling window (five attempts over ~30 s), because a fresh
+  login's cookies keep landing and YouTube can take seconds to
+  recognize the session (owner directive 2026-10-24: completing
+  Google's login must converge to signed-in). Only an exhausted
+  window fails; nothing is persisted before confirmation and any
+  prior session state stands untouched — rollback by construction —
+  and the user is told plainly, with the failing stage recorded in
+  the sign-in diagnostics.
 - **Authorization.** `Authorization: SAPISIDHASH <epochSeconds>_<sha1>`
   in the classic form: SHA-1 of `"<epochSeconds> <hashSource>
   https://music.youtube.com"`, raw epoch seconds, the scheme word in
@@ -300,8 +313,10 @@ signing in only adds.
   pairs run through the shared OkHttp stack: pair 1 probes the URL the
   resolver just served; pair 2 resolves fresh on the OTHER cascade
   context; pair 3 returns to the first context with a fresh
-  resolution. The probe is a bounded `Range: bytes=0-0` GET; the first
-  2xx pair serves. If every pair refuses, the LAST resolved URL goes
+  resolution. The probe sends the player's exact first-fetch shape
+  (no headers of its own — the shared stack bounds the range — and
+  the first bytes are read), so a 2xx pair genuinely predicts the
+  player's own fetch; the first 2xx pair serves. If every pair refuses, the LAST resolved URL goes
   to the player anyway — its own fetch and the §4 player-stage 403
   retry remain final chances. Account-road serves are never probed.
   Every pair's outcome is recorded in diagnostics.

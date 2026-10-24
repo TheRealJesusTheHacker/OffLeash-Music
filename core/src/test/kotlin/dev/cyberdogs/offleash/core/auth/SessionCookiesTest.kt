@@ -13,15 +13,26 @@ import org.junit.Test
 class SessionCookiesTest {
 
     @Test
-    fun subsetKeepsExactlyTheSevenSessionNames() {
+    fun subsetKeepsExactlyTheNamedSessionFamily() {
+        // The classic seven plus the secure-prefixed PSID family
+        // (widened 2026-10-24, sign-in hunt: the modern session's
+        // carriers, which the endpoints rotate and expect). The
+        // subset stays NAMED — everything outside the list, however
+        // session-adjacent it looks, is still discarded.
         val raw = "SAPISID=sap; __Secure-3PAPISID=tpap; APISID=api; HSID=hs; " +
-            "SSID=ss; SID=sid; LOGIN_INFO=login; PREF=pref; YSC=ysc; " +
-            "VISITOR_INFO1_LIVE=visitor; CONSENT=consent; OTHER=o"
+            "SSID=ss; SID=sid; LOGIN_INFO=login; " +
+            "__Secure-3PSID=p3; __Secure-3PSIDTS=p3ts; __Secure-3PSIDCC=p3cc; " +
+            "__Secure-1PSID=p1; __Secure-1PAPISID=pap1; __Secure-1PSIDTS=p1ts; " +
+            "__Secure-1PSIDCC=p1cc; SIDCC=sidcc; " +
+            "PREF=pref; YSC=ysc; VISITOR_INFO1_LIVE=visitor; CONSENT=consent; OTHER=o"
         val subset = SessionCookies.extractSubset(raw)
         assertEquals(SESSION_COOKIE_NAMES.toSet(), subset.keys)
-        assertEquals(7, subset.size)
+        assertEquals(15, subset.size)
         assertEquals("sap", subset["SAPISID"])
         assertEquals("login", subset["LOGIN_INFO"])
+        assertEquals("p3", subset["__Secure-3PSID"])
+        assertEquals("p3ts", subset["__Secure-3PSIDTS"])
+        assertEquals("sidcc", subset["SIDCC"])
         assertFalse(subset.containsKey("PREF"))
         assertFalse(subset.containsKey("YSC"))
         assertFalse(subset.containsKey("VISITOR_INFO1_LIVE"))

@@ -36,7 +36,6 @@ import dev.cyberdogs.offleash.data.sessionFileIn
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
-import dev.cyberdogs.offleash.playback.APP_UA
 import dev.cyberdogs.offleash.playback.PlaybackDiagnostics
 import dev.cyberdogs.offleash.playback.PlaybackService
 import dev.cyberdogs.offleash.playback.QueueController
@@ -77,6 +76,10 @@ class AppContainer(app: OffleashApp) {
 
     /** Shared playback-diagnostics recorder (last attempt only). */
     val playbackDiagnostics: PlaybackDiagnostics = PlaybackDiagnostics()
+
+    /** Shared sign-in diagnostics recorder (stage lines for the last attempt). */
+    val signInDiagnostics: dev.cyberdogs.offleash.data.SignInDiagnostics =
+        dev.cyberdogs.offleash.data.SignInDiagnostics()
 
     /**
      * Late-bound handle to the session manager, for the transport's
@@ -132,6 +135,7 @@ class AppContainer(app: OffleashApp) {
         store = sessionStore,
         client = client,
         scope = sessionScope,
+        signInDiagnostics = signInDiagnostics,
     )
 
     init {
@@ -350,10 +354,16 @@ class AppContainer(app: OffleashApp) {
         // network identity matches. OkHttpDataSource replaces
         // DefaultHttpDataSource (HttpURLConnection) for http(s); local /
         // file sources still go through DefaultDataSource below.
-        // Stream URLs were resolved with the iOS context; keep the UA
-        // paired with them (see APP_UA in QueueController).
+        // The factory deliberately sets NO User-Agent: the fetch rides
+        // OkHttp's default UA, exactly like the ladder probe and the
+        // diagnostics test fetch. The 2026-10-24 hunt proved the
+        // pairing matters — with an iOS app UA set here, the player
+        // was refused 403 on URLs the probe (default UA) had just been
+        // served 206 on. The resolver's iOS context UA is a separate
+        // thing: it belongs to the youtubei requests in :core, not to
+        // stream fetches. PlayerFetchShapeContractTest pins the
+        // absence of a UA override here.
         val httpFactory = OkHttpDataSource.Factory(okHttpClient)
-            .setUserAgent(APP_UA)
         // DefaultDataSource routes http(s) to the OkHttp factory above
         // and keeps local/content schemes on their own sources.
         val upstreamFactory = DefaultDataSource.Factory(app, httpFactory)

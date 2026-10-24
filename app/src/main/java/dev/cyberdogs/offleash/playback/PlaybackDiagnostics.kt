@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.PowerManager
+import dev.cyberdogs.offleash.data.StreamFetchShape
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -205,9 +206,20 @@ class PlaybackDiagnostics {
         log("format", "$mimeType bitrate=$bitrate host=$host embedded-ip=$family")
     }
 
-    fun recordFirstFetch(status: Int, host: String) {
+    /**
+     * One googlevideo fetch's answer, with the exact request shape
+     * that was sent for it (Range bounds, UA class, Accept-Encoding)
+     * — so a probe/player divergence is visible in a single
+     * diagnostics screenshot instead of needing a second hunt
+     * (2026-10-24 regression: probe 206 vs player 403 on one URL).
+     */
+    fun recordFirstFetch(status: Int, host: String, shape: StreamFetchShape) {
         firstFetchStatus = status
-        log("first-fetch", "HTTP $status host=$host")
+        log(
+            "first-fetch",
+            "HTTP $status host=$host range=${shape.range} " +
+                "ua=${shape.userAgent} ae=${shape.acceptEncoding}",
+        )
     }
 
     fun recordPlayerError(errorCode: Int, exceptionClass: String, rootCauseClasses: List<String>) {

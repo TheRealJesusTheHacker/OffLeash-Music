@@ -12,6 +12,7 @@ import dev.cyberdogs.offleash.core.auth.SessionCookies
 import dev.cyberdogs.offleash.core.model.AccountIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +58,20 @@ class SessionManager(
     private val store: SessionStore,
     private val client: YoutubeiClient,
     private val scope: CoroutineScope,
+    private val signInDiagnostics: SignInDiagnostics = SignInDiagnostics(),
+    /**
+     * The settling window for sign-in confirmation: delays BETWEEN
+     * confirmation attempts (the attempt count is delays + 1).
+     * Completing Google's login must converge to signed-in (owner
+     * directive, 2026-10-24): a fresh session can take seconds to
+     * finish landing on YouTube's side — cookies still being minted,
+     * the session not yet recognized by the identity endpoint — and
+     * a one-shot check bounces real logins. Confirmation therefore
+     * re-reads the cookie source and re-asks YouTube across this
+     * window before it is allowed to fail. Injectable so tests run
+     * the window instantly.
+     */
+    private val confirmationDelaysMs: List<Long> = DEFAULT_CONFIRMATION_DELAYS_MS,
 ) {
 
     private val mutex = Mutex()
@@ -90,21 +105,71 @@ class SessionManager(
     fun currentAuthSession(): AuthSession? = snapshot
 
     /**
-     * Completes a sign-in from a raw cookie string (WebView capture
-     * or manual paste — both arrive in exactly this shape).
+     * Completes a sign-in from a raw cookie string (manual paste —
+     * the string is all there is, so the provider is constant; the
+     * confirmation window still applies to the identity stage,
+     * because YouTube-side settling is not about our capture).
      *
      * Nothing is stored until YouTube itself confirms which account
      * the session belongs to.
      */
-    suspend fun completeSignIn(rawCookieString: String): SignInAttempt = mutex.withLock {
-        val cookies = SessionCookies.extractSubset(rawCookieString)
-        if (!SessionCookies.isPlausibleSession(cookies)) {
-            SignInAttempt.Failed(
-                "That sign-in didn't include a usable YouTube session. " +
-                    "Sign in again and let the YouTube Music page finish loading, " +
-                    "or paste a cookie from music.youtube.com.",
-            )
-        } else {
+    suspend fun completeSignIn(rawCookieString: String): SignInAttempt =
+        completeSignIn(cookieProvider = { rawCookieString })
+
+    /**
+     * Completes a sign-in, re-reading the session cookies from
+     * [cookieProvider] on every confirmation attempt (the WebView
+     * path passes a provider that re-reads the view's cookie jar, so
+     * cookies Google mints in the seconds after landing are picked
+     * up instead of bouncing the login on a half-landed capture).
+     *
+     * The window: attempt, then re-read + re-ask after each delay in
+     * [confirmationDelaysMs]. The first confirmed identity wins and
+     * is adopted (rollback intact — nothing is persisted before
+     * confirmation, so an exhausted window leaves any previously
+     * stored session byte-for-byte untouched). One stage is exempt
+     * from patience: if the captured cookies are implausible AND the
+     * re-read string is byte-identical to the previous attempt's,
+     * waiting cannot change them, so the attempt fails at the subset
+     * stage immediately rather than spinning the window out.
+     *
+     * Every stage of every attempt is recorded in [signInDiagnostics]
+     * (cookie names and outcome classes only — never values), so a
+     * failure that survives the window still names its stage.
+     */
+    suspend fun completeSignIn(cookieProvider: suspend () -> String): SignInAttempt = mutex.withLock {
+        signInDiagnostics.startAttempt()
+        val maxAttempts = confirmationDelaysMs.size + 1
+        var lastFailure: SignInAttempt.Failed = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
+        var previousRaw: String? = null
+        for (attempt in 1..maxAttempts) {
+            if (attempt > 1) {
+                delay(confirmationDelaysMs[attempt - 2])
+                signInDiagnostics.log(
+                    "retry",
+                    "attempt $attempt of $maxAttempts — re-reading the session and asking YouTube again",
+                )
+            }
+            val raw = try {
+                cookieProvider()
+            } catch (e: Exception) {
+                ""
+            }
+            val cookies = SessionCookies.extractSubset(raw)
+            signInDiagnostics.recordCookieStage(cookies)
+            if (!SessionCookies.isPlausibleSession(cookies)) {
+                lastFailure = SignInAttempt.Failed(SUBSET_REASON)
+                if (raw == previousRaw) {
+                    signInDiagnostics.log(
+                        "cookies",
+                        "capture unchanged between attempts — the window cannot change these cookies; stopping at the subset stage",
+                    )
+                    break
+                }
+                previousRaw = raw
+                continue
+            }
+            previousRaw = raw
             // authUser starts at 0 for validation only; the identity
             // answer below supplies the real index (assuming 0 for a
             // brand channel on a later account answers as signed out).
@@ -119,20 +184,43 @@ class SessionManager(
                 is IdentityLookup.Found -> {
                     val identities = lookup.identities
                     if (identities.isEmpty()) {
-                        SignInAttempt.Failed(NOT_CONFIRMED_REASON)
+                        signInDiagnostics.log(
+                            "identity",
+                            "attempt $attempt: YouTube answered but listed no account — " +
+                                "the session is not recognized yet",
+                        )
+                        lastFailure = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
                     } else {
+                        signInDiagnostics.log(
+                            "identity",
+                            "attempt $attempt: YouTube confirmed ${identities.size} account(s)",
+                        )
                         val selected = identities.firstOrNull { it.isSelected == true }
                             ?: identities.first()
-                        adoptIdentifiedSession(cookies, selected)
+                        return@withLock adoptIdentifiedSession(cookies, selected)
                     }
                 }
-                is IdentityLookup.Rejected -> SignInAttempt.Failed(NOT_CONFIRMED_REASON)
-                is IdentityLookup.Failed -> SignInAttempt.Failed(
-                    "Couldn't reach YouTube to verify the sign-in — " +
-                        "check your connection and try again.",
-                )
+                is IdentityLookup.Rejected -> {
+                    signInDiagnostics.log(
+                        "identity",
+                        "attempt $attempt: the session was refused (HTTP ${lookup.httpStatus})",
+                    )
+                    lastFailure = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
+                }
+                is IdentityLookup.Failed -> {
+                    signInDiagnostics.log(
+                        "identity",
+                        "attempt $attempt: couldn't reach YouTube (${lookup.detail ?: "no detail"})",
+                    )
+                    lastFailure = SignInAttempt.Failed(REACH_REASON)
+                }
             }
         }
+        signInDiagnostics.log(
+            "sign-in",
+            "confirmation window exhausted after $maxAttempts attempt(s) — nothing was stored",
+        )
+        lastFailure
     }
 
     /** Persists a session whose identity YouTube has confirmed. Caller holds [mutex]. */
@@ -315,6 +403,26 @@ class SessionManager(
         const val NOT_CONFIRMED_REASON =
             "YouTube didn't confirm a signed-in account for that session. " +
                 "Sign in again, and make sure the YouTube Music page fully loads first."
+
+        const val SUBSET_REASON =
+            "That sign-in didn't include a usable YouTube session. " +
+                "Sign in again and let the YouTube Music page finish loading, " +
+                "or paste a cookie from music.youtube.com."
+
+        const val REACH_REASON =
+            "Couldn't reach YouTube to verify the sign-in — " +
+                "check your connection and try again."
+
+        /**
+         * The production confirmation window: five attempts across
+         * ~30 seconds (0s, +2s, +6s, +14s, +30s). Long enough for a
+         * WebView login's cookies to finish landing and for YouTube
+         * to recognize the session; short enough that a genuinely
+         * dead session still fails while the user is looking at the
+         * sign-in screen.
+         */
+        val DEFAULT_CONFIRMATION_DELAYS_MS: List<Long> =
+            listOf(2_000L, 4_000L, 8_000L, 16_000L)
     }
 }
 

@@ -35,7 +35,19 @@ class FakeAccountTransport(
     var behavior: Behavior = Behavior.IDENTITIES,
 ) : HttpTransport {
 
-    enum class Behavior { IDENTITIES, REJECTED, THROW }
+    enum class Behavior { IDENTITIES, REJECTED, THROW, EMPTY }
+
+    /**
+     * Scripted per-account-call behaviors, consumed in order before
+     * the standing [behavior] applies (2026-10-24 sign-in hunt: the
+     * confirmation window's convergence needs "not yet, not yet,
+     * now" sequences). Visitor-data calls never consume the script.
+     */
+    val behaviorQueue: ArrayDeque<Behavior> = ArrayDeque()
+
+    /** Account (non-visitor) calls served so far. */
+    var accountCallCount: Int = 0
+        private set
 
     /** The authUser index the fake's enumeration reports. */
     var enumeratedAuthUser: Int = 1
@@ -50,18 +62,21 @@ class FakeAccountTransport(
         handle(url)
 
     private fun handle(url: String): HttpResponse {
-        if (behavior == Behavior.THROW) {
-            throw RuntimeException("connection reset by peer")
-        }
         if (isVisitorDataCall(url)) {
+            if (behavior == Behavior.THROW) {
+                throw RuntimeException("connection reset by peer")
+            }
             return HttpResponse(200, visitorDataBody())
         }
-        return when (behavior) {
+        accountCallCount++
+        val effective = if (behaviorQueue.isEmpty()) behavior else behaviorQueue.removeFirst()
+        return when (effective) {
             Behavior.IDENTITIES -> HttpResponse(200, identitiesBody())
             Behavior.REJECTED -> HttpResponse(
                 401,
                 """{"error":{"code":401,"message":"Unauthorized","status":"UNAUTHENTICATED"}}""",
             )
+            Behavior.EMPTY -> HttpResponse(200, """{"accounts":[]}""")
             Behavior.THROW -> throw RuntimeException("connection reset by peer")
         }
     }
@@ -172,11 +187,18 @@ fun testSecretBox(key: SecretKey = testSecretKey()): AesGcmSecretBox =
 fun testSessionStore(storage: SecretStorage = InMemorySecretStorage()): SessionStore =
     SessionStore(storage, testSecretBox())
 
-fun testSessionManager(store: SessionStore, transport: FakeAccountTransport): SessionManager =
+fun testSessionManager(
+    store: SessionStore,
+    transport: FakeAccountTransport,
+    confirmationDelaysMs: List<Long> = emptyList(),
+    signInDiagnostics: SignInDiagnostics = SignInDiagnostics(),
+): SessionManager =
     SessionManager(
         store = store,
         client = YoutubeiClient(transport),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        signInDiagnostics = signInDiagnostics,
+        confirmationDelaysMs = confirmationDelaysMs,
     )
 
 /** A plausible stored session, as a previous successful sign-in would have left it. */

@@ -28,8 +28,8 @@ internal fun buildSharedClient(diagnostics: PlaybackDiagnostics): OkHttpClient =
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         .addInterceptor(
-            RangeInterceptor { status, host ->
-                diagnostics.recordFirstFetch(status, host)
+            RangeInterceptor { status, host, shape ->
+                diagnostics.recordFirstFetch(status, host, shape)
             },
         )
         .build()

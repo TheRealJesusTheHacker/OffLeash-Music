@@ -5,9 +5,20 @@ package dev.cyberdogs.offleash.core.auth
  *
  * Sign-in capture keeps ONLY these names (Phase 2, per the cookie-auth
  * study's minimize-capture rule): the SAPISID family that feeds the
- * SAPISIDHASH, the session ids the API expects back, and LOGIN_INFO.
- * Anything else the browser holds (PREF, YSC, VISITOR_INFO1_LIVE,
+ * SAPISIDHASH, the session ids the API expects back, LOGIN_INFO, and —
+ * since the 2026-10-24 sign-in hunt — the secure-prefixed PSID family
+ * that carries the modern Google session. The classic seven alone did
+ * not confirm a real, healthy sign-in on the owner's phone: Google's
+ * endpoints now rotate and expect the `__Secure-*PSID*` companions
+ * (the 3PSID is the third-party-context session token and the
+ * 3PSIDTS its rotating timestamp), and the reference client — which
+ * replays its whole captured string — was signed in on the same
+ * phone and account throughout. The subset stays a NAMED subset:
+ * anything else the browser holds (PREF, YSC, VISITOR_INFO1_LIVE,
  * CONSENT, …) is never captured, never stored, and never replayed.
+ * The presence rules below (hash source, session id) are unchanged:
+ * the widening adds session carriers, it does not weaken what counts
+ * as a plausible session.
  */
 val SESSION_COOKIE_NAMES: List<String> = listOf(
     "SAPISID",
@@ -17,6 +28,14 @@ val SESSION_COOKIE_NAMES: List<String> = listOf(
     "SSID",
     "SID",
     "LOGIN_INFO",
+    "__Secure-3PSID",
+    "__Secure-3PSIDTS",
+    "__Secure-3PSIDCC",
+    "__Secure-1PSID",
+    "__Secure-1PAPISID",
+    "__Secure-1PSIDTS",
+    "__Secure-1PSIDCC",
+    "SIDCC",
 )
 
 /** Parsing and presence rules for session cookies. Pure and total. */

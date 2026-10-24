@@ -60,6 +60,14 @@ class AccountIdentitiesTest {
         assertEquals(session.cookieHeader(), transport.lastGetHeaders!!["Cookie"])
         assertTrue(transport.lastGetHeaders!!.containsKey("Authorization"))
         assertEquals("0", transport.lastGetHeaders!!["X-Goog-Authuser"])
+        // The switcher endpoint is a web-app XHR: it is called with
+        // the web client's presentation, not a bare library UA
+        // (2026-10-24 sign-in hunt).
+        assertEquals(
+            YoutubeiContexts.WEB_REMIX.userAgent,
+            transport.lastGetHeaders!!["User-Agent"],
+        )
+        assertEquals("application/json", transport.lastGetHeaders!!["Accept"])
     }
 
     @Test

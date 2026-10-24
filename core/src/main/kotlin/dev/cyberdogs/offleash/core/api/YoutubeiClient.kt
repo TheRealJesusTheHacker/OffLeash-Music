@@ -376,8 +376,19 @@ class YoutubeiClient(
      * response carries no accounts (a signed-out session).
      */
     fun accountIdentities(auth: AuthSession): IdentityLookup {
+        // The switcher endpoint is a YouTube web-app XHR: it is built
+        // to be called by the page, with the page's presentation. Send
+        // the WEB_REMIX user agent and a JSON Accept alongside the
+        // session headers — the bare OkHttp default UA is not how this
+        // endpoint is ever legitimately consumed, and Google's
+        // session checks treat unknown presentations inconsistently
+        // (2026-10-24 sign-in hunt).
+        val switcherHeaders = auth.headers(nowEpochSeconds()) + mapOf(
+            "User-Agent" to YoutubeiContexts.WEB_REMIX.userAgent,
+            "Accept" to "application/json",
+        )
         val response = try {
-            transport.get(ACCOUNT_SWITCHER_URL, auth.headers(nowEpochSeconds()))
+            transport.get(ACCOUNT_SWITCHER_URL, switcherHeaders)
         } catch (e: Exception) {
             return IdentityLookup.Failed(e.message ?: e.javaClass.simpleName)
         }
