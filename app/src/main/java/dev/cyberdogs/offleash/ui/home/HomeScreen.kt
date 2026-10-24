@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -21,6 +22,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.cyberdogs.offleash.AppContainer
+import dev.cyberdogs.offleash.core.api.AuthSession
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.model.Section
 import dev.cyberdogs.offleash.ui.ErrorMessages
@@ -34,20 +36,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-class HomeViewModel(private val client: YoutubeiClient) : ViewModel() {
+/**
+ * Home feed. Signed out, this is exactly the Phase 1 anonymous feed
+ * (`client.home()` with no session). Signed in, the feed is loaded with
+ * the current session (`client.home(auth)`) so YouTube serves the
+ * personalized home. The screen observes the session state and reloads
+ * whenever sign-in state flips.
+ */
+class HomeViewModel(
+    private val client: YoutubeiClient,
+    private val sessionProvider: () -> AuthSession? = { null },
+) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<List<Section>>>(UiState.Loading)
     val state: StateFlow<UiState<List<Section>>> = _state
 
-    init {
-        load()
-    }
-
     fun load() {
         _state.value = UiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
+            val auth = sessionProvider()
             _state.value = try {
-                UiState.Content(client.home())
+                UiState.Content(if (auth != null) client.home(auth) else client.home())
             } catch (e: Exception) {
                 UiState.Error(ErrorMessages.userMessage(e))
             }
@@ -64,8 +73,18 @@ fun HomeScreen(
     onArtistClick: (String) -> Unit,
     onPlaylistClick: (String, String?) -> Unit,
 ) {
-    val viewModel: HomeViewModel = viewModel { HomeViewModel(container.client) }
+    val viewModel: HomeViewModel = viewModel {
+        HomeViewModel(container.client) { container.sessionManager.currentAuthSession() }
+    }
     val state by viewModel.state.collectAsState()
+    val sessionState by container.sessionManager.uiState.collectAsState()
+
+    // Load on first composition and reload on every sign-in/out
+    // transition, so the feed matches the current session.
+    LaunchedEffect(sessionState.signedIn) {
+        viewModel.load()
+    }
+
     val actions = rememberFeedActions(
         queueController = container.queueController,
         playlistStore = container.localPlaylistStore,

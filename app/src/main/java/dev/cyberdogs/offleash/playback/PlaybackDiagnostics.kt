@@ -184,6 +184,18 @@ class PlaybackDiagnostics {
         log("resolver", outcome)
     }
 
+    /**
+     * One road-switching attempt, as a single log line
+     * (`road: account refused (PlayerRefused)`,
+     * `road: anonymous probe 2/3 HTTP 403`). The caller composes the
+     * outcome string; this recorder stays dumb. By construction the
+     * outcome carries only road names, statuses and exception class
+     * names — never URLs, cookies or any credential material.
+     */
+    fun recordRoadAttempt(road: String, outcome: String) {
+        log("road", "$road $outcome")
+    }
+
     fun recordChosenFormat(mimeType: String, bitrate: Int, url: String) {
         val host = streamHost(url)
         val family = embeddedIpFamily(url)

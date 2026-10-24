@@ -71,6 +71,20 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
     val sessionForegroundLine = remember(refreshTick, lines) { foregroundStatusText(context) }
     val sessionBatteryLine = remember(refreshTick, lines) { batteryStatusText(context) }
 
+    // Account & session block: identity display name + health label
+    // only — never cookie values or anything derived from them.
+    val sessionState by container.sessionManager.uiState.collectAsState()
+    val accountIdentityLine = if (sessionState.signedIn) {
+        sessionState.identityName ?: sessionState.identityEmail ?: "Signed in"
+    } else {
+        "Signed out"
+    }
+    val accountHealthLine = when (sessionState.health.name) {
+        "HEALTHY" -> "Healthy"
+        "NEEDS_SIGN_IN" -> "Sign in again"
+        else -> "Checking…"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -99,6 +113,21 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
                 "No addresses or personal data are shown here.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Account & session",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Account: $accountIdentityLine\n" +
+                "Session: $accountHealthLine",
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(20.dp))
         Text(

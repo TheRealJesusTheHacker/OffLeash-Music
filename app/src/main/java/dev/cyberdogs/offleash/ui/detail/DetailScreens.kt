@@ -17,9 +17,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -28,6 +32,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.cyberdogs.offleash.AppContainer
+import dev.cyberdogs.offleash.core.api.AuthSession
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.model.AlbumPage
 import dev.cyberdogs.offleash.core.model.ArtistPage
@@ -288,10 +293,18 @@ fun ArtistScreen(
 // Playlist (remote, from YouTube Music)
 // ---------------------------------------------------------------------------
 
+/**
+ * Remote playlist page — auth-aware in Phase 2. The load carries the
+ * current session when signed in (this is also how the Liked Songs
+ * playlist, browseId "VLLM", loads) and no session when signed out, so
+ * public playlists keep working anonymously. Album and artist pages
+ * stay anonymous by design (out of Phase 2 scope).
+ */
 class PlaylistViewModel(
     private val client: YoutubeiClient,
     private val browseId: String,
     private val params: String?,
+    private val authProvider: () -> AuthSession? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<PlaylistPage>>(UiState.Loading)
@@ -305,7 +318,7 @@ class PlaylistViewModel(
         _state.value = UiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             _state.value = try {
-                UiState.Content(client.playlist(browseId, params))
+                UiState.Content(client.playlist(browseId, params, auth = authProvider()))
             } catch (e: Exception) {
                 UiState.Error(ErrorMessages.userMessage(e))
             }
@@ -316,9 +329,24 @@ class PlaylistViewModel(
 @Composable
 fun PlaylistScreen(container: AppContainer, browseId: String, params: String?) {
     val viewModel: PlaylistViewModel = viewModel(key = browseId + (params ?: "")) {
-        PlaylistViewModel(container.client, browseId, params)
+        PlaylistViewModel(container.client, browseId, params) {
+            container.sessionManager.currentAuthSession()
+        }
     }
     val state by viewModel.state.collectAsState()
+    val sessionState by container.sessionManager.uiState.collectAsState()
+
+    // Reload when sign-in state flips after the initial load, so an
+    // account playlist (e.g. Liked Songs) opened signed-out picks up the
+    // session once the user signs in — and drops it on sign-out.
+    var authEffectSeen by remember { mutableStateOf(false) }
+    LaunchedEffect(sessionState.signedIn) {
+        if (authEffectSeen) {
+            viewModel.load()
+        } else {
+            authEffectSeen = true
+        }
+    }
 
     when (val current = state) {
         is UiState.Loading -> LoadingPanel()

@@ -1,5 +1,6 @@
 package dev.cyberdogs.offleash.ui
 
+import dev.cyberdogs.offleash.core.error.AllRoadsRefused
 import dev.cyberdogs.offleash.core.error.ContextRejected
 import dev.cyberdogs.offleash.core.error.NetworkFailure
 import dev.cyberdogs.offleash.core.error.NoPlayableStream
@@ -13,6 +14,10 @@ import dev.cyberdogs.offleash.core.error.PlayerRefused
 object ErrorMessages {
 
     fun userMessage(error: Throwable): String = when (error) {
+        is AllRoadsRefused ->
+            "YouTube refused this track on both paths. " +
+                "Signed-in path: ${error.accountError.message ?: "refused"} " +
+                "Anonymous path: ${error.anonymousError.message ?: "refused"}"
         is ContextRejected ->
             "YouTube refused the app's request — the API has likely changed. " +
                 "(server said: ${error.serverMessage})"

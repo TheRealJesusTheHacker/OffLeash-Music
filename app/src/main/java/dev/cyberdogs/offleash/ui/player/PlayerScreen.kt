@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.core.playback.RepeatMode
+import dev.cyberdogs.offleash.playback.showLoadingIndicator
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.components.BatteryRestrictionCard
 import dev.cyberdogs.offleash.ui.components.TrackRow
@@ -270,13 +272,19 @@ fun PlayerScreen(
                 }
             }
 
-            if (playbackState.isBuffering) {
+            if (showLoadingIndicator(playbackState.isResolving, playbackState.isBuffering)) {
+                // Resolving (any road / ladder step) or buffering before
+                // READY: name the wait instead of stalling silently.
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Loading…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp))
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        text = "Loading…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,8 +49,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.cyberdogs.offleash.AppContainer
+import dev.cyberdogs.offleash.playback.showLoadingIndicator
 import dev.cyberdogs.offleash.ui.about.AboutScreen
 import dev.cyberdogs.offleash.ui.about.PlaybackDiagnosticsScreen
+import dev.cyberdogs.offleash.ui.account.SignInScreen
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.detail.AlbumScreen
 import dev.cyberdogs.offleash.ui.detail.ArtistScreen
@@ -239,11 +242,22 @@ fun OffleashRoot(container: AppContainer) {
                         onPlaylistClick = { id ->
                             navController.navigate("localPlaylist/${Uri.encode(id)}")
                         },
+                        onSignInClick = { navController.navigate("signin") },
+                        onRemotePlaylistClick = openPlaylist,
                     )
                 }
                 composable("about") {
                     AboutScreen(
+                        container = container,
                         onOpenDiagnostics = { navController.navigate("diagnostics") },
+                        onSignInClick = { navController.navigate("signin") },
+                    )
+                }
+                composable("signin") {
+                    SignInScreen(
+                        container = container,
+                        onSignedIn = { navController.popBackStack() },
+                        onBack = { navController.popBackStack() },
                     )
                 }
                 composable("diagnostics") {
@@ -349,15 +363,26 @@ private fun MiniPlayer(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            IconButton(onClick = { container.queueController.togglePlayPause() }) {
-                Icon(
-                    imageVector = if (playbackState.isPlaying) {
-                        Icons.Default.Pause
-                    } else {
-                        Icons.Default.PlayArrow
-                    },
-                    contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
+            if (showLoadingIndicator(playbackState.isResolving, playbackState.isBuffering)) {
+                // A resolve (any road, any ladder step) or buffering is
+                // in flight: show progress in place of the play/pause
+                // button so a tap never looks like a silent stall.
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .padding(12.dp),
                 )
+            } else {
+                IconButton(onClick = { container.queueController.togglePlayPause() }) {
+                    Icon(
+                        imageVector = if (playbackState.isPlaying) {
+                            Icons.Default.Pause
+                        } else {
+                            Icons.Default.PlayArrow
+                        },
+                        contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
+                    )
+                }
             }
             IconButton(onClick = { container.queueController.next() }) {
                 Icon(imageVector = Icons.Default.SkipNext, contentDescription = "Next track")

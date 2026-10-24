@@ -163,6 +163,19 @@ class AppContainer(app: OffleashApp) {
         player = player,
         recentsStore = recentsStore,
         diagnostics = playbackDiagnostics,
+        // Phase 2 road-switching wiring (Lane C, merged by the
+        // coordinator). `sessionManager` is this container's member;
+        // the lambdas read it at resolve time, never at construction
+        // time.
+        sessionProvider = { sessionManager.currentAuthSession() },
+        revalidateSession = {
+            sessionManager.validateNow()
+            sessionManager.currentAuthSession()
+        },
+        // The shared client runs the anonymous-road probe ladder, so a
+        // probe sees the same network identity as the resolve and the
+        // player's own fetch.
+        probeClient = okHttpClient,
     )
 
     /**
