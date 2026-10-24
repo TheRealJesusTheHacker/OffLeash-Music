@@ -315,7 +315,7 @@ fun SectionRow(
                     when (item) {
                         is FeedItem.OfAlbum -> FeedCard(
                             title = item.album.title,
-                            subtitle = item.album.artist,
+                            subtitle = item.album.artist ?: "",
                             thumbnailUrl = item.album.thumbnailUrl,
                             onClick = { actions.onAlbumClick(item.album.browseId) },
                         )
@@ -327,7 +327,7 @@ fun SectionRow(
                         )
                         is FeedItem.OfPlaylist -> FeedCard(
                             title = item.playlist.title,
-                            subtitle = item.playlist.author,
+                            subtitle = item.playlist.author ?: "",
                             thumbnailUrl = item.playlist.thumbnailUrl,
                             onClick = { actions.onPlaylistClick(item.playlist.browseId, null) },
                         )

@@ -1,6 +1,10 @@
 package dev.cyberdogs.offleash.ui
 
-import dev.cyberdogs.offleash.core.error.OffleashException
+import dev.cyberdogs.offleash.core.error.ContextRejected
+import dev.cyberdogs.offleash.core.error.NetworkFailure
+import dev.cyberdogs.offleash.core.error.NoPlayableStream
+import dev.cyberdogs.offleash.core.error.ParseFailure
+import dev.cyberdogs.offleash.core.error.PlayerRefused
 
 /**
  * The ONE place core errors become user copy — the SPEC §6 shapes.
@@ -9,16 +13,16 @@ import dev.cyberdogs.offleash.core.error.OffleashException
 object ErrorMessages {
 
     fun userMessage(error: Throwable): String = when (error) {
-        is OffleashException.ContextRejected ->
+        is ContextRejected ->
             "YouTube refused the app's request — the API has likely changed. " +
                 "(server said: ${error.serverMessage})"
-        is OffleashException.PlayerRefused ->
+        is PlayerRefused ->
             "YouTube won't play this track: ${error.reason}"
-        is OffleashException.NoPlayableStream ->
+        is NoPlayableStream ->
             "No playable stream for this track — YouTube served only locked formats."
-        is OffleashException.NetworkFailure ->
+        is NetworkFailure ->
             "Couldn't reach YouTube Music — check your connection."
-        is OffleashException.ParseFailure ->
+        is ParseFailure ->
             "YouTube Music answered in a shape this app doesn't understand yet — " +
                 "the API has likely changed."
         else ->

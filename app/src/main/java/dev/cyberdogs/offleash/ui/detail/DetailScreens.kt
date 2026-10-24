@@ -174,7 +174,7 @@ fun AlbumScreen(container: AppContainer, browseId: String) {
             val page = current.data
             val album = page.album
             val meta = listOfNotNull(
-                album.artist.takeIf { it.isNotBlank() },
+                album.artist?.takeIf { it.isNotBlank() },
                 album.year?.toString()?.takeIf { it.isNotBlank() },
             ).joinToString(" • ")
             val playlists by container.localPlaylistStore.playlists.collectAsState()
@@ -326,7 +326,7 @@ fun PlaylistScreen(container: AppContainer, browseId: String, params: String?) {
         is UiState.Content -> {
             val page = current.data
             val meta = listOfNotNull(
-                page.author.takeIf { it.isNotBlank() },
+                page.author?.takeIf { it.isNotBlank() },
                 "${page.tracks.size} tracks",
             ).joinToString(" • ")
             val playlists by container.localPlaylistStore.playlists.collectAsState()
