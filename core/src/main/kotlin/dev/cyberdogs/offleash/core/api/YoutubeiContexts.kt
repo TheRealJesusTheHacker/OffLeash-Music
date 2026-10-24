@@ -12,9 +12,10 @@ import kotlinx.serialization.json.putJsonObject
  * not code paths — when Google retires a client version, the fix is a
  * data update here (SPEC §1).
  *
- * Both contexts below are anonymous and public (they ship in every page
- * load of music.youtube.com / the iOS app). There is no sign-in, session,
- * or credential material anywhere in Phase 1 (SPEC §7).
+ * The contexts below are anonymous and public (they ship in every page
+ * load of music.youtube.com / the official apps). Account sessions
+ * (Phase 2) ride on top of WEB_REMIX via auth headers; no credential
+ * material lives in a context record.
  */
 data class YoutubeiContext(
     val clientName: String,
@@ -26,6 +27,7 @@ data class YoutubeiContext(
     val deviceModel: String? = null,
     val osName: String? = null,
     val osVersion: String? = null,
+    val androidSdkVersion: Int? = null,
 ) {
     /** The `context` object embedded in every youtubei request body. */
     fun toJson(): JsonObject = buildJsonObject {
@@ -39,6 +41,7 @@ data class YoutubeiContext(
             deviceModel?.let { put("deviceModel", it) }
             osName?.let { put("osName", it) }
             osVersion?.let { put("osVersion", it) }
+            androidSdkVersion?.let { put("androidSdkVersion", it) }
         }
         putJsonObject("user") {
             put("lockedSafetyMode", false)
@@ -88,6 +91,30 @@ object YoutubeiContexts {
         osName = "iPhone",
         osVersion = "18.3.1.22D72",
     )
+
+    /**
+     * The Android client, the anonymous road's second context. Proven
+     * live 2026-10-23 from the sandbox on a track the owner's phone saw
+     * the iOS stream gate refuse (itag 251 served, bounded fetch 206):
+     * some refusals are network-identity-specific, so the anonymous
+     * road cascades across contexts before giving up.
+     */
+    val ANDROID = YoutubeiContext(
+        clientName = "ANDROID",
+        clientVersion = "20.31.34",
+        apiKey = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+        host = "www.youtube.com",
+        userAgent = "com.google.android.youtube/20.31.34 (Linux; U; Android 14; en_US)",
+        osName = "Android",
+        osVersion = "14",
+        androidSdkVersion = 34,
+    )
+
+    /**
+     * The anonymous playback road, in order: contexts are tried one by
+     * one at resolution level and the first that serves wins.
+     */
+    val ANONYMOUS_ROAD: List<YoutubeiContext> = listOf(IOS, ANDROID)
 }
 
 /**

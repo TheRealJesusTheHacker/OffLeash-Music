@@ -32,3 +32,29 @@ class NetworkFailure(val networkDetail: String?) : OffleashException(
 class ParseFailure(val detail: String) : OffleashException(
     "YouTube Music answered in a shape this app doesn't understand yet — the API has likely changed. ($detail)"
 )
+
+/**
+ * Playback failed on BOTH roads (Phase 2 road-switching): the account
+ * road refused and the anonymous spare refused too. Carries both
+ * refusals so the UI can name what actually happened on each road.
+ */
+class AllRoadsRefused(
+    val accountError: OffleashException,
+    val anonymousError: OffleashException,
+) : OffleashException(
+    "YouTube won't play this track on either road — " +
+        "account road: ${accountError.message} " +
+        "anonymous road: ${anonymousError.message}"
+)
+
+/**
+ * Whether this failure reads as an auth refusal: a [ContextRejected]
+ * (HTTP 4xx — e.g. a dead session's 401/403), or a [PlayerRefused]
+ * whose server reason names LOGIN_REQUIRED. Everything else (network,
+ * parse, unavailable, locked formats) is not an auth refusal.
+ */
+fun OffleashException.isAuthRefusal(): Boolean = when (this) {
+    is ContextRejected -> true
+    is PlayerRefused -> reason.contains("LOGIN_REQUIRED", ignoreCase = true)
+    else -> false
+}

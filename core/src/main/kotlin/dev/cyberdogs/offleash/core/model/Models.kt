@@ -104,3 +104,18 @@ data class LocalPlaylist(
     val createdAtEpochMs: Long,
     val tracks: List<Track>,
 )
+
+/**
+ * One identity a session cookie can act as, learned from the account
+ * switcher (Phase 2). [authUser] and [pageId] are the routing pair a
+ * request must carry to act as this identity — a brand channel's
+ * [pageId] is only valid together with its owning [authUser].
+ */
+data class AccountIdentity(
+    val name: String,
+    val email: String?,
+    val avatarUrl: String?,
+    val authUser: Int,
+    val pageId: String?,
+    val isSelected: Boolean,
+)
