@@ -44,6 +44,7 @@ import dev.cyberdogs.offleash.ui.components.rememberFeedActions
 import dev.cyberdogs.offleash.ui.components.rememberTrackActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -75,11 +76,22 @@ class SearchViewModel(private val client: YoutubeiClient) : ViewModel() {
         }
         _state.value = SearchUiState.Loading
         searchJob = viewModelScope.launch(Dispatchers.IO) {
-            _state.value = try {
+            val result = try {
                 SearchUiState.Content(client.search(trimmed, filter))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 SearchUiState.Error(ErrorMessages.userMessage(e))
+            }
+            // Sweep #5: client.search is a BLOCKING call, so
+            // cancelling this job (a newer search superseding this
+            // one) cannot interrupt it — the call runs to completion
+            // on its IO thread regardless. Publishing unconditionally
+            // here let a slow superseded search overwrite the newer
+            // search's state with stale results. A cancelled job
+            // publishes nothing; the current job's own result is the
+            // only one that may land.
+            if (isActive) {
+                _state.value = result
             }
         }
     }
