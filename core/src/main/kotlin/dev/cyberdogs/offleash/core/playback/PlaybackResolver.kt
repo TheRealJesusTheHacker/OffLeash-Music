@@ -42,14 +42,23 @@ data class ResolvedStream(
  * Signed-out playback keeps Phase 1 error semantics: the cascade runs,
  * but when every context refuses, the FIRST context's exception is
  * rethrown (iOS is first, so the common case reads exactly as Phase 1).
+ *
+ * A [QualityPreference] (Wave 2) rides through to every road and
+ * context unchanged — the road that serves is picked by availability,
+ * the format it serves by the preference. It defaults to HIGH, so
+ * existing callers resolve exactly as they always did.
  */
 class PlaybackResolver(
     private val client: YoutubeiClient,
 ) {
 
-    fun resolve(videoId: String, auth: AuthSession?): ResolvedStream {
+    fun resolve(
+        videoId: String,
+        auth: AuthSession?,
+        quality: QualityPreference = QualityPreference.HIGH,
+    ): ResolvedStream {
         if (auth == null) {
-            val (info, attempts) = resolveAnonymous(videoId)
+            val (info, attempts) = resolveAnonymous(videoId, quality)
             return ResolvedStream(
                 info = info,
                 servedByRoad = "anonymous",
@@ -57,7 +66,7 @@ class PlaybackResolver(
             )
         }
         val accountError = try {
-            val info = client.streamInfoAuthed(videoId, auth)
+            val info = client.streamInfoAuthed(videoId, auth, quality)
             return ResolvedStream(
                 info = info,
                 servedByRoad = "account",
@@ -72,7 +81,7 @@ class PlaybackResolver(
         var firstAnonymousError: OffleashException? = null
         for (context in YoutubeiContexts.ANONYMOUS_ROAD) {
             try {
-                val info = client.streamInfo(videoId, context)
+                val info = client.streamInfo(videoId, context, quality)
                 attempts.add(RoadAttempt("anonymous", "served:${context.clientName}"))
                 return ResolvedStream(
                     info = info,
@@ -97,12 +106,15 @@ class PlaybackResolver(
      * attempt on success; when all contexts refuse, rethrows the FIRST
      * context's exception.
      */
-    private fun resolveAnonymous(videoId: String): Pair<StreamInfo, List<RoadAttempt>> {
+    private fun resolveAnonymous(
+        videoId: String,
+        quality: QualityPreference,
+    ): Pair<StreamInfo, List<RoadAttempt>> {
         val attempts = mutableListOf<RoadAttempt>()
         var firstError: OffleashException? = null
         for (context in YoutubeiContexts.ANONYMOUS_ROAD) {
             try {
-                val info = client.streamInfo(videoId, context)
+                val info = client.streamInfo(videoId, context, quality)
                 attempts.add(RoadAttempt("anonymous", "served:${context.clientName}"))
                 return info to attempts
             } catch (e: OffleashException) {
