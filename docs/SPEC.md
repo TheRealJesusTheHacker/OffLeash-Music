@@ -103,11 +103,23 @@ UI tap → QueueController.setQueue(tracks, index)
   `audio/mp4` at equal bitrate for device compatibility; muxed formats are
   a last resort. No direct formats at all → `NoPlayableStream`.
 - **Player:** Media3 ExoPlayer inside a `MediaSessionService`; media
-  notification + lock-screen controls come from the session. Queue
+  notification + lock-screen controls come from the session. The session
+  is registered with the service via `addSession(...)` in
+  `PlaybackService.onCreate` AND a process-lifetime `MediaController`
+  (held by `AppContainer`) connects to the service's `SessionToken` —
+  both are required wiring: Media3 posts the media notification from the
+  session and promotes the service to foreground (`mediaPlayback`) while
+  playback is active only for sessions it knows about. Service start is
+  attempted on every play (no one-shot latch), so a play after
+  task-removal restarts the service. Queue
   semantics (order, shuffle, repeat off/all/one) live in `:core`
   `PlayQueue` (pure, unit-tested); the app's `QueueController` drives the
   player one resolved item at a time and resolves the next item when the
-  current ends. Repeat-one is the player's own repeat mode.
+  current ends. Repeat-one is the player's own repeat mode. A
+  battery-restriction card (Player + About) deep-links to the system
+  battery-optimization exemption when the app is restricted, and the
+  Playback diagnostics screen shows a live "Session & battery" block
+  (service running, foreground, battery state) above the attempt log.
 - **On resolve failure during playback:** the queue stops, the error state
   carries the named failure (§6) and the UI shows it in the player and a
   snackbar. No silent skipping — a skipped track the user never hears about

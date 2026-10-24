@@ -12,16 +12,26 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.BuildConfig
 import dev.cyberdogs.offleash.core.model.Track
+import dev.cyberdogs.offleash.playback.batteryStatusText
+import dev.cyberdogs.offleash.playback.foregroundStatusText
+import dev.cyberdogs.offleash.playback.serviceRunningText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -45,6 +55,21 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
     val lines by diagnostics.snapshot.collectAsState()
     val scope = rememberCoroutineScope()
     val appContext = LocalContext.current.applicationContext
+    val context = LocalContext.current
+
+    // Session & battery block: computed live on render, refreshed on resume.
+    var refreshTick by remember { mutableStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val sessionServiceLine = remember(refreshTick, lines) { serviceRunningText(diagnostics) }
+    val sessionForegroundLine = remember(refreshTick, lines) { foregroundStatusText(context) }
+    val sessionBatteryLine = remember(refreshTick, lines) { batteryStatusText(context) }
 
     Column(
         modifier = Modifier
@@ -74,6 +99,22 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
                 "No addresses or personal data are shown here.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Session & battery",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "PlaybackService: $sessionServiceLine\n" +
+                "Foreground: $sessionForegroundLine\n" +
+                "Battery: $sessionBatteryLine",
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(16.dp))
         Button(

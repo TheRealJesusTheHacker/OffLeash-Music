@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.cyberdogs.offleash.R
+import dev.cyberdogs.offleash.ui.components.BatteryRestrictionCard
 
 private fun rememberVersionName(context: android.content.Context): String {
     return try {
@@ -69,6 +70,8 @@ fun AboutScreen(onOpenDiagnostics: () -> Unit = {}) {
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        BatteryRestrictionCard()
+        Spacer(Modifier.height(16.dp))
         Image(
             painter = painterResource(id = R.drawable.cyberdogs_logo),
             contentDescription = "Cyberdogs logo",

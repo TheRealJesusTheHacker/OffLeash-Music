@@ -1,6 +1,8 @@
 package dev.cyberdogs.offleash
 
 import android.app.Application
+import android.content.ComponentName
+import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -16,8 +18,12 @@ import dev.cyberdogs.offleash.data.LocalPlaylistStore
 import dev.cyberdogs.offleash.data.OkHttpTransport
 import dev.cyberdogs.offleash.data.RangeInterceptor
 import dev.cyberdogs.offleash.data.RecentsStore
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import dev.cyberdogs.offleash.playback.APP_UA
 import dev.cyberdogs.offleash.playback.PlaybackDiagnostics
+import dev.cyberdogs.offleash.playback.PlaybackService
 import dev.cyberdogs.offleash.playback.QueueController
 import okhttp3.OkHttpClient
 import java.io.File
@@ -91,6 +97,54 @@ class AppContainer(app: OffleashApp) {
         recentsStore = recentsStore,
         diagnostics = playbackDiagnostics,
     )
+
+    /**
+     * Process-lifetime MediaController connection to PlaybackService.
+     *
+     * MediaSessionService vends its session — and with it the media
+     * notification and foreground promotion — to connected controllers
+     * (and to sessions registered via addSession, which PlaybackService
+     * also does). Retaining this connection for the process lifetime
+     * keeps that path live. QueueController keeps driving the shared
+     * player directly; playback never depends on this controller, and a
+     * failed connection only logs into diagnostics.
+     */
+    @Volatile
+    var mediaController: MediaController? = null
+        private set
+
+    val mediaControllerFuture: ListenableFuture<MediaController>? = buildMediaController(app)
+
+    private fun buildMediaController(app: OffleashApp): ListenableFuture<MediaController>? {
+        return try {
+            val token = SessionToken(
+                app,
+                ComponentName(app, PlaybackService::class.java),
+            )
+            val future = MediaController.Builder(app, token).buildAsync()
+            future.addListener(
+                {
+                    try {
+                        mediaController = future.get()
+                        playbackDiagnostics.log("controller", "MediaController connected")
+                    } catch (e: Exception) {
+                        playbackDiagnostics.log(
+                            "controller",
+                            "MediaController connection failed (${e.javaClass.simpleName})",
+                        )
+                    }
+                },
+                ContextCompat.getMainExecutor(app),
+            )
+            future
+        } catch (e: Exception) {
+            playbackDiagnostics.log(
+                "controller",
+                "MediaController build failed (${e.javaClass.simpleName})",
+            )
+            null
+        }
+    }
 
     private fun buildPlayer(app: OffleashApp): ExoPlayer {
         // Replay cache: 512 MB LRU SimpleCache in the app cache dir, wrapped

@@ -28,7 +28,7 @@ android {
         create("hunt") {
             dimension = "edition"
             applicationId = "dev.cyberdogs.offleash.hunt"
-            versionNameSuffix = "-hunt1"
+            versionNameSuffix = "-hunt2"
             buildConfigField("String", "EDITION_LABEL", "\"HUNT BUILD\"")
         }
     }

@@ -91,7 +91,6 @@ class QueueController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var resolveJob: Job? = null
-    private var serviceStarted = false
     private var retriedCurrentTrack: Boolean = false
     private var lastQueueIndex: Int = -1
     private var keepDiagnosticsAttempt: Boolean = false
@@ -366,8 +365,11 @@ class QueueController(
     }
 
     private fun ensureServiceStarted() {
-        if (serviceStarted) return
-        serviceStarted = true
+        // Attempted on every play, with no permanent latch: after
+        // onTaskRemoved stops the service while paused, a later play in
+        // the same process must be able to start it again. Repeat attempts
+        // are safe — once the service is running/foreground,
+        // startForegroundService is a no-op re-delivery of the intent.
         try {
             ContextCompat.startForegroundService(
                 context,
@@ -376,7 +378,6 @@ class QueueController(
         } catch (e: IllegalStateException) {
             // Background-start restrictions: playback still works in-process;
             // the next foreground play attempt retries service start.
-            serviceStarted = false
         }
     }
 

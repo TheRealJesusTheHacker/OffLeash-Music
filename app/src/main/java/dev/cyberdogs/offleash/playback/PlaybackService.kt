@@ -22,7 +22,16 @@ class PlaybackService : MediaSessionService() {
         // The container is created in Application.onCreate, which always
         // runs before any service in this process starts.
         val container = (application as OffleashApp).container
-        mediaSession = MediaSession.Builder(this, container.player).build()
+        val session = MediaSession.Builder(this, container.player).build()
+        mediaSession = session
+        // Register the session with this service: MediaSessionService only
+        // posts the media notification and promotes the service to the
+        // foreground for sessions it knows about (via addSession or a
+        // connected controller). Without this, the started service never
+        // became a foreground service and was reaped shortly after the
+        // screen went off.
+        addSession(session)
+        container.playbackDiagnostics.recordServiceRunning(true)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
@@ -38,6 +47,12 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        try {
+            (application as OffleashApp).container.playbackDiagnostics
+                .recordServiceRunning(false)
+        } catch (e: Exception) {
+            // Diagnostics must never block service teardown.
+        }
         // Release the session only. The player itself belongs to
         // AppContainer and outlives any single service instance.
         mediaSession?.release()

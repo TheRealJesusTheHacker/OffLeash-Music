@@ -1,8 +1,10 @@
 package dev.cyberdogs.offleash.playback
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.PowerManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +34,53 @@ fun streamHost(url: String): String =
     } catch (e: Exception) {
         "unknown"
     }
+
+/** Label for the tracked PlaybackService lifecycle flag. */
+fun serviceRunningLabel(running: Boolean?): String = when (running) {
+    true -> "running"
+    false -> "not running"
+    null -> "unknown"
+}
+
+/** Label for battery-optimization state. */
+fun batteryStatusLabel(isIgnoringBatteryOptimizations: Boolean): String =
+    if (isIgnoringBatteryOptimizations) {
+        "unrestricted"
+    } else {
+        "restricted (battery optimization on)"
+    }
+
+/** True when the app is exempt from battery optimizations, false otherwise. */
+fun isIgnoringBatteryOptimizations(context: Context): Boolean = try {
+    val pm = context.getSystemService(PowerManager::class.java)
+    pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+} catch (e: Exception) {
+    false
+}
+
+/** Battery line for the diagnostics screen. */
+fun batteryStatusText(context: Context): String =
+    batteryStatusLabel(isIgnoringBatteryOptimizations(context))
+
+/** Service-running line, from the recorder's tracked lifecycle flag. */
+fun serviceRunningText(diagnostics: PlaybackDiagnostics): String =
+    serviceRunningLabel(diagnostics.serviceRunning)
+
+/**
+ * Foreground line: whether our PlaybackService is currently reported as a
+ * foreground service. Own-app services are visible to this API; any
+ * failure reads as "unknown" rather than guessing.
+ */
+fun foregroundStatusText(context: Context): String = try {
+    val am = context.getSystemService(ActivityManager::class.java)
+    val services = am?.getRunningServices(Int.MAX_VALUE) ?: return "unknown"
+    val ours = services.firstOrNull {
+        it.service.className == PlaybackService::class.java.name
+    } ?: return "no"
+    if (ours.foreground) "yes" else "no"
+} catch (e: Exception) {
+    "unknown"
+}
 
 private fun queryParam(url: String, name: String): String? {
     val q = url.substringAfter('?', "")
@@ -93,6 +142,16 @@ class PlaybackDiagnostics {
     @Volatile
     var networkSummary: String? = null
         private set
+
+    /** Tracked PlaybackService lifecycle: true after onCreate, false after onDestroy, null if never recorded. */
+    @Volatile
+    var serviceRunning: Boolean? = null
+        private set
+
+    fun recordServiceRunning(running: Boolean) {
+        serviceRunning = running
+        log("service", if (running) "PlaybackService running" else "PlaybackService stopped")
+    }
 
     fun startAttempt(label: String) {
         synchronized(lock) {

@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.core.playback.RepeatMode
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
+import dev.cyberdogs.offleash.ui.components.BatteryRestrictionCard
 import dev.cyberdogs.offleash.ui.components.TrackRow
 import dev.cyberdogs.offleash.ui.components.formatDuration
 import kotlinx.coroutines.launch
@@ -90,6 +91,8 @@ fun PlayerScreen(
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            BatteryRestrictionCard()
+            Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
