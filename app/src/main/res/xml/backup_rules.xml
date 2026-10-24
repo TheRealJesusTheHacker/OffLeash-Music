@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy full-backup-content rules (API < 31): exclude the same
+  no-backup directory the credential lives in, so the session file
+  is backup-ineligible on every API level, not just 31+. The file
+  also physically lives in noBackupFilesDir, which the platform
+  excludes by itself — this rule is the second layer, not the only
+  one.
+-->
+<full-backup-content>
+    <exclude domain="file" path="no_backup/" />
+</full-backup-content>

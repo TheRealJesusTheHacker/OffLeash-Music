@@ -20,8 +20,8 @@ android {
         applicationId = "dev.cyberdogs.offleash"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-phase1"
+        versionCode = 2
+        versionName = "0.2.0-phase2"
     }
 
     flavorDimensions += "edition"
@@ -35,7 +35,7 @@ android {
         create("hunt") {
             dimension = "edition"
             applicationId = "dev.cyberdogs.offleash.hunt"
-            versionNameSuffix = "-hunt2"
+            versionNameSuffix = "-hunt1"
             buildConfigField("String", "EDITION_LABEL", "\"HUNT BUILD\"")
         }
     }
@@ -101,6 +101,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     testImplementation("junit:junit:4.13.2")
 }
