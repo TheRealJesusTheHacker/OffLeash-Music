@@ -10,7 +10,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import dev.cyberdogs.offleash.core.api.AuthSession
+import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.api.YoutubeiContext
 import dev.cyberdogs.offleash.core.api.YoutubeiContexts

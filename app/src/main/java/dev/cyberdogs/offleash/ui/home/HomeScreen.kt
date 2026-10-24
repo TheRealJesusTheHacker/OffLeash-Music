@@ -22,7 +22,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.cyberdogs.offleash.AppContainer
-import dev.cyberdogs.offleash.core.api.AuthSession
+import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.model.Section
 import dev.cyberdogs.offleash.ui.ErrorMessages

@@ -3,10 +3,11 @@ package dev.cyberdogs.offleash.data
 import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebStorage
-import dev.cyberdogs.offleash.core.api.IdentityLookup
-import dev.cyberdogs.offleash.core.api.SessionValidation
+import dev.cyberdogs.offleash.core.auth.IdentityLookup
+import dev.cyberdogs.offleash.core.auth.SessionValidation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.AuthSession
+import dev.cyberdogs.offleash.core.auth.SESSION_COOKIE_NAMES
 import dev.cyberdogs.offleash.core.auth.SessionCookies
 import dev.cyberdogs.offleash.core.model.AccountIdentity
 import kotlinx.coroutines.CoroutineScope
@@ -268,7 +269,7 @@ class SessionManager(
      */
     fun onResponseCookies(rotated: Map<String, String>) {
         if (snapshot == null || rotated.isEmpty()) return
-        val filtered = rotated.filterKeys { name -> name in SessionCookies.SESSION_COOKIE_NAMES }
+        val filtered = rotated.filterKeys { name -> name in SESSION_COOKIE_NAMES }
         if (filtered.isEmpty()) return
         scope.launch(Dispatchers.IO) {
             mutex.withLock {
