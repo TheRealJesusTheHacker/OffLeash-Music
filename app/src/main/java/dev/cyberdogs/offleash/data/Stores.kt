@@ -136,7 +136,7 @@ class LocalPlaylistStore(private val file: File) {
             try {
                 file.parentFile?.mkdirs()
                 val payload = PlaylistsFile(playlists.map { LocalPlaylistDto.from(it) })
-                file.writeText(storeJson.encodeToString(payload))
+                writeTextAtomically(file, storeJson.encodeToString(payload))
             } catch (e: Exception) {
                 // Best-effort persistence; in-memory state stays authoritative
                 // for this session rather than crashing the UI.
@@ -257,7 +257,7 @@ class RecentsStore(private val file: File) {
                 try {
                     file.parentFile?.mkdirs()
                     val payload = RecentsFile(updated.map { TrackDto.from(it) })
-                    file.writeText(storeJson.encodeToString(payload))
+                    writeTextAtomically(file, storeJson.encodeToString(payload))
                 } catch (e: Exception) {
                     // Best-effort; see LocalPlaylistStore.
                 }

@@ -37,8 +37,10 @@ class FileSecretStorage(private val file: File) : SecretStorage {
     }
 
     override fun write(bytes: ByteArray) {
-        file.parentFile?.mkdirs()
-        file.writeBytes(bytes)
+        // Atomic (Sweep #5): a torn session write used to read back
+        // as "no session" and sign the user out over a crash's
+        // timing; the sealed blob now lands by temp-file + rename.
+        writeFileAtomically(file, bytes)
     }
 
     override fun clear() {

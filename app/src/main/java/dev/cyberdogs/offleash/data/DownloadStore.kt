@@ -177,7 +177,7 @@ class DownloadStore(private val file: File) {
         try {
             file.parentFile?.mkdirs()
             val payload = DownloadsFile(records.map { DownloadRecordDto.from(it) })
-            file.writeText(downloadJson.encodeToString(payload))
+            writeTextAtomically(file, downloadJson.encodeToString(payload))
         } catch (e: Exception) {
             // Best-effort persistence; in-memory state stays
             // authoritative for this session (Stores.kt's rule).
