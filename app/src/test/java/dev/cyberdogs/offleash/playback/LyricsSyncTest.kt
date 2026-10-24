@@ -70,6 +70,21 @@ class LyricsSyncTest {
     }
 
     @Test
+    fun outOfOrderTimedLinesAreStillSelected() {
+        // Sweep #5: a multi-timestamp LRC line expands in textual
+        // order, so entries can arrive out of chronological order.
+        // The old early-break scan returned -1 here (it stopped at
+        // the 20s line and never reached the 10s line behind it).
+        val unordered = listOf(
+            LyricsLine("later chorus", startMs = 20_000L),
+            LyricsLine("earlier verse", startMs = 10_000L),
+        )
+        assertEquals(1, currentLyricsIndex(unordered, 15_000L))
+        assertEquals(0, currentLyricsIndex(unordered, 25_000L))
+        assertEquals(-1, currentLyricsIndex(unordered, 5_000L))
+    }
+
+    @Test
     fun cacheStoresAndReturnsPerTrackIncludingUnavailable() {
         val cache = LyricsCache(maxEntries = 4)
         val found = LyricsResult.Found(listOf(LyricsLine("x", 0L)), source = "LRCLIB")

@@ -22,12 +22,22 @@ import dev.cyberdogs.offleash.core.model.LyricsResult
  */
 fun currentLyricsIndex(lines: List<LyricsLine>, positionMs: Long): Int {
     var current = -1
+    var currentStart = Long.MIN_VALUE
     for ((index, line) in lines.withIndex()) {
         val start = line.startMs ?: continue
-        if (start <= positionMs) {
+        // No early break, and not "last in list order" either: the
+        // list is NOT guaranteed time-sorted. LRCLIB lines carrying
+        // several timestamps expand to one entry per timestamp in
+        // textual (not chronological) order in
+        // YoutubeiClient.parseLrc, so a later entry can start
+        // earlier than one already passed. The current line is the
+        // one with the GREATEST start at or before the position
+        // (a later list entry wins an exact-start tie), which is
+        // exactly the old result on sorted lists — every list the
+        // shipped tests and the common LRCLIB shape produce.
+        if (start <= positionMs && start >= currentStart) {
             current = index
-        } else {
-            break
+            currentStart = start
         }
     }
     return current
