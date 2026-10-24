@@ -247,21 +247,6 @@ class AppPreferences(private val store: KeyValueStore) {
         _autoDownloadLikedFlow.value = enabled
     }
 
-    private val _audioVersionInRadioFlow =
-        MutableStateFlow(readBoolean(KEY_AUDIO_VERSION_IN_RADIO, DEFAULT_AUDIO_VERSION_IN_RADIO))
-
-    /** Whether radio prefers audio versions, updated on every set. Plumbing only — nothing reads this for behavior yet. */
-    val audioVersionInRadioFlow: StateFlow<Boolean> = _audioVersionInRadioFlow.asStateFlow()
-
-    /** Whether radio prefers audio versions (default off). Plumbing only — nothing reads this for behavior yet. */
-    val audioVersionInRadio: Boolean
-        get() = _audioVersionInRadioFlow.value
-
-    fun setAudioVersionInRadio(enabled: Boolean) {
-        store.putString(KEY_AUDIO_VERSION_IN_RADIO, enabled.toString())
-        _audioVersionInRadioFlow.value = enabled
-    }
-
     companion object {
         /** The SharedPreferences file every plain preference lives in. */
         const val PREFS_FILE_NAME: String = "offleash_prefs"
