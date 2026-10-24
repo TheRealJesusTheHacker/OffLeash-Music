@@ -7,18 +7,27 @@
 **The defect:** `QueueController.onPlayerError` was a generic catch-all that discarded the `PlaybackException` entirely — no error code, no HTTP status, no cause. That is a SPEC §6 taxonomy hole: the player stage had no named errors at all, so a diagnosable server refusal surfaced as a content-free toast and left nothing to act on. Fixed on branch `hunt-playback`: `ErrorMessages.playerMessage(errorCode, httpStatus)` now names every player-stage shape (see SPEC §6 player rows), the fallback still names the numeric error code, an HTTP 403 triggers exactly one re-resolve-and-retry for the same track, and a Playback diagnostics recorder + screen (About → Playback diagnostics, with a Test playback probe track) records the last attempt stage by stage.
 
 **Probe evidence (agent-side, before the fix):**
-- For the owner's track (videoId `lY5V4hSLWY8`), the resolver's pick (itag 251, `audio/webm` opus, URL param `gir=yes`) answers a GET with **no Range header → HTTP 403, deterministically, twice**; any Range form → **206**. itag 140 (no `gir` param) tolerates a plain GET.
-- Media3's default HTTP data source omits the Range header when position is 0 and length is unset (`HttpUtil.buildRangeRequestHeader` returns null) — so the player's first fetch was exactly the refused shape.
-- Every prior smoke always sent Range explicitly; the range-less seam was never exercised. The live smoke now also probes a range-less GET informationally (non-gating; see SPEC §8).
+- Fuller coordinator probe (owner's track, videoId `lY5V4hSLWY8`, fresh resolution, **both itag 251 and itag 140, both `gir=yes`**):
+
+  | Request shape | Result |
+  |---|---|
+  | GET with **no Range header** | **HTTP 403** (deterministic, repeated) |
+  | GET with `Range: bytes=0-` (**open-ended**) | **HTTP 403** |
+  | GET with `Range: bytes=0-2047` (**bounded**) | **206** |
+  | GET with a **bounded mid-file range** | **206** |
+
+  The server requires a **bounded** range (an explicit end byte). This corrects the first probe's summary ("any Range form → 206" — an open-ended range does *not* pass) and its note on itag 140: with a fresh `gir=yes` URL, itag 140 is refused in the same shapes as 251.
+- Media3's data sources produce exactly the refused shapes: no Range header when position is 0 and length is unset (`HttpUtil.buildRangeRequestHeader` returns null), and an open-ended `bytes=N-` when a length is unset at a non-zero position — so the player's fetches were refused by shape, not by content.
+- Every prior smoke always sent a bounded Range explicitly; the range-less and open-ended seams were never exercised. The live smoke now also probes a range-less GET and an open-ended GET informationally (non-gating; see SPEC §8).
 - Both stream URLs embed an `ip=` param: googlevideo binds streams to the resolver's egress identity, so resolver/player stack divergence is a real risk, not a theory.
-- UA is **not** the gate: no-UA and foreign-UA fetches return 206 when ranged.
+- UA is **not** the gate: no-UA and foreign-UA fetches return 206 when the range is bounded.
 
 **Hypotheses verdicts:**
 - **H1 — resolver/player stack divergence (OkHttp vs HttpURLConnection, address-family choices on an IPv6-first carrier): plausible-contributor.** Fixed by alignment: stream fetches now go through the shared OkHttp stack (`media3-datasource-okhttp`, `CacheDataSource → OkHttpDataSource` on the shared client) — the same stack that resolved the URLs fetches them.
-- **H2 — User-Agent mismatch is the gate: refuted.** No-UA and foreign-UA ranged fetches return 206 (see probe evidence above).
+- **H2 — User-Agent mismatch is the gate: refuted.** No-UA and foreign-UA bounded-range fetches return 206 (see probe evidence above).
 - **H3 — replay-cache interference: not indicated.** The upstream failure is cold-cache-shaped, and the cache factory sets `FLAG_IGNORE_CACHE_ON_ERROR` — the cache falls back to the network source on its own errors and is never a gate.
 - **H4 — resolver/browse failure misreported as a player failure: refuted.** The toast string existed only in `QueueController.onPlayerError`; its provenance proves resolution succeeded and the failure was post-hand-off, in the player.
-- **H5 — the range-less first fetch is refused (403) on `gir=yes` formats: PROVEN agent-side.** Deterministic no-Range → 403 / ranged → 206 on the owner's exact track and format pick (above). Fixed by a scoped OkHttp application interceptor (`RangeInterceptor`): `Range: bytes=0-` is added only on GET requests to `*.googlevideo.com` hosts that carry no Range header yet — never on youtubei POSTs, never on other hosts. Its scoping is unit-tested exactly.
+- **H5 — the player's first fetch shape (range-less or open-ended) is refused; bounded ranges required: PROVEN agent-side.** Deterministic on the owner's exact track, both itags (above): no-Range → 403, open-ended `bytes=0-` → 403, bounded → 206. An earlier draft of this hunt briefed a "add `bytes=0-` when absent" interceptor — that would **not** have fixed the phone, and the coordinator's fuller probe caught it before merge. Fixed instead by a scoped OkHttp application interceptor (`RangeInterceptor`, a range *normalizer*) on GET requests to `*.googlevideo.com` hosts only — never on youtubei POSTs, never on other hosts: no Range → `bytes=0-1048575` (1 MiB window, `STREAM_RANGE_WINDOW_BYTES`); open-ended `bytes=N-` → `bytes=N-(N+1048575)`; already bounded → untouched. Its normalization and scoping are unit-tested exactly (absent→bounded-from-0, open-ended→bounded preserving start, bounded→unchanged, POST untouched, non-googlevideo untouched).
 
 **Remaining proof:** the on-device verdict is still the owner's — the hunt build (`hunt` flavor, applicationId `dev.cyberdogs.offleash.hunt`, label "OffLeash Hunt") plus the diagnostics screenshot from a failed or successful attempt on his phone and network. No agent-side result substitutes for that.
 

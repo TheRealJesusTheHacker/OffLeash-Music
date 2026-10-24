@@ -95,10 +95,11 @@ if video_id:
                 check("stream range GET", r.status == 206 and len(data) > 0,
                       f"status={r.status} bytes={len(data)} "
                       f"type={r.headers.get('Content-Type')}")
-            # NON-GATING informational probe: the same URL WITHOUT a
-            # Range header. Some formats (gir=yes) refuse this with 403
-            # — that is the shape the app's fetch contract defends
-            # against (SPEC §4). Printed as INFO only, never a failure.
+            # NON-GATING informational probes: the same URL WITHOUT a
+            # Range header, and with an open-ended one. gir=yes formats
+            # refuse both shapes with 403 — bounded ranges are required,
+            # which is what the app's fetch contract defends (SPEC §4).
+            # Printed as INFO only, never a failure.
             try:
                 plain = urllib.request.Request(best["url"], method="GET")
                 plain.add_header("User-Agent", IOS_UA)
@@ -109,6 +110,20 @@ if video_id:
                 print(f"INFO  stream no-range GET  status={e.code}")
             except Exception as e:  # noqa: BLE001 - informational only
                 print(f"INFO  stream no-range GET  error={e!r}")
+            # NON-GATING informational probe: the same URL with an
+            # OPEN-ENDED Range. gir=yes formats refuse this with 403
+            # too — bounded ranges are required (SPEC §4). INFO only.
+            try:
+                opened = urllib.request.Request(best["url"], method="GET")
+                opened.add_header("User-Agent", IOS_UA)
+                opened.add_header("Range", "bytes=0-")
+                with urllib.request.urlopen(opened, timeout=45) as r:
+                    r.read(256)
+                    print(f"INFO  stream open-ended GET  status={r.status}")
+            except urllib.error.HTTPError as e:
+                print(f"INFO  stream open-ended GET  status={e.code}")
+            except Exception as e:  # noqa: BLE001 - informational only
+                print(f"INFO  stream open-ended GET  error={e!r}")
     except urllib.error.HTTPError as e:
         check("player iOS", False,
               f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:120]}")

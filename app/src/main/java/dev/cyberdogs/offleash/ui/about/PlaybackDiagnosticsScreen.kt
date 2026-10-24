@@ -135,8 +135,8 @@ private suspend fun runTestPlayback(container: AppContainer, appContext: android
         return
     }
     // (b) Fetch the first bytes through the shared OkHttp client. The
-    // scoped RangeInterceptor adds the Range header and records the
-    // status into diagnostics itself.
+    // scoped RangeInterceptor normalizes the range to a bounded window
+    // and records the status into diagnostics itself.
     try {
         withContext(Dispatchers.IO) {
             val request = Request.Builder().url(stream.url).get().build()

@@ -122,13 +122,16 @@ UI tap → QueueController.setQueue(tracks, index)
   through the shared OkHttp stack — the same client that resolved the URLs
   fetches them (`CacheDataSource` → `OkHttpDataSource` on the shared
   `OkHttpClient`), because googlevideo binds stream URLs to the resolving
-  network identity (`ip=` param). A Range header is always present on
-  stream GETs: a scoped OkHttp application interceptor adds
-  `Range: bytes=0-` to any GET on a `*.googlevideo.com` host that carries
-  no Range header yet (some formats refuse a range-less GET with HTTP
-  403; see `docs/AUDITS.md`, 2026-10-23 playback hunt). On an HTTP 403
-  player error the track is re-resolved and retried exactly once; a
-  second 403 surfaces the named §6 player error — no retry loop.
+  network identity (`ip=` param). Stream GETs always carry a **bounded**
+  Range header: `gir=yes` stream URLs refuse both a range-less GET and
+  an open-ended `bytes=N-` GET with HTTP 403, and answer bounded ranges
+  with 206 (see `docs/AUDITS.md`, 2026-10-23 playback hunt). A scoped
+  OkHttp application interceptor (a range normalizer, GETs on
+  `*.googlevideo.com` hosts only) enforces it: no Range header →
+  `bytes=0-1048575` (a 1 MiB window); open-ended `bytes=N-` →
+  `bytes=N-(N+1048575)`; already bounded `bytes=N-M` → untouched. On an
+  HTTP 403 player error the track is re-resolved and retried exactly
+  once; a second 403 surfaces the named §6 player error — no retry loop.
 
 ## 5. On-device data
 
@@ -195,10 +198,11 @@ territory and it gets its own security pass first (see `docs/ROADMAP.md`).
   debug APK uploaded as a workflow artifact. A separate non-gating
   live-smoke job replays the §1 probes (browse/search/player/stream range
   GET) and reports the true result. The live smoke now also probes a
-  range-less GET of the chosen stream URL informationally (printed as
-  INFO, never a failure): a range-less refusal is the known `gir=yes`
-  shape the §4 fetch contract defends against, and watching it keeps
-  that defence honest if googlevideo behaviour changes.
+  range-less GET — and an open-ended GET — of the chosen stream URL
+  informationally (printed as INFO, never a failure): range-less and
+  open-ended refusals are the known `gir=yes` shapes the §4 fetch
+  contract defends against, and watching them keeps that defence honest
+  if googlevideo behaviour changes.
 - The debug APK is a **personal-use build artifact**, never a release.
 
 ## 9. Branding

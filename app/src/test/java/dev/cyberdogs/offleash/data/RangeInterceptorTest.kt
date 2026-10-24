@@ -45,15 +45,29 @@ class RangeInterceptorTest {
     }
 
     @Test
-    fun addsRangeOnGooglevideoGetWithoutRange() {
+    fun absentRangeBecomesBoundedFromZero() {
         val out = run(
             Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback").get().build(),
         )
-        assertEquals("bytes=0-", out.header("Range"))
+        assertEquals("bytes=0-1048575", out.header("Range"))
     }
 
     @Test
-    fun leavesExistingRangeUntouched() {
+    fun openEndedRangeBecomesBoundedPreservingStart() {
+        val out = run(
+            Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback")
+                .header("Range", "bytes=2048-").get().build(),
+        )
+        assertEquals("bytes=2048-1050623", out.header("Range"))
+        val fromZero = run(
+            Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback")
+                .header("Range", "bytes=0-").get().build(),
+        )
+        assertEquals("bytes=0-1048575", fromZero.header("Range"))
+    }
+
+    @Test
+    fun boundedRangeIsUnchanged() {
         val out = run(
             Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback")
                 .header("Range", "bytes=100-200").get().build(),
@@ -68,6 +82,12 @@ class RangeInterceptorTest {
             Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback").post(body).build(),
         )
         assertNull(out.header("Range"))
+        // Even a POST that already carries an open-ended Range is untouched.
+        val posted = run(
+            Request.Builder().url("https://rr1---sn-example.googlevideo.com/videoplayback")
+                .header("Range", "bytes=0-").post(body).build(),
+        )
+        assertEquals("bytes=0-", posted.header("Range"))
     }
 
     @Test
@@ -76,13 +96,28 @@ class RangeInterceptorTest {
             Request.Builder().url("https://music.youtube.com/youtubei/v1/browse").get().build(),
         )
         assertNull(out.header("Range"))
+        val ranged = run(
+            Request.Builder().url("https://example.com/file")
+                .header("Range", "bytes=0-").get().build(),
+        )
+        assertEquals("bytes=0-", ranged.header("Range"))
     }
 
     @Test
-    fun scopingRuleMatchesSpec() {
-        assertEquals(true, RangeInterceptor.shouldAddRange("GET", "x.googlevideo.com", null))
-        assertEquals(false, RangeInterceptor.shouldAddRange("POST", "x.googlevideo.com", null))
-        assertEquals(false, RangeInterceptor.shouldAddRange("GET", "x.googlevideo.com", "bytes=1-"))
-        assertEquals(false, RangeInterceptor.shouldAddRange("GET", "example.com", null))
+    fun normalizerRuleMatchesSpec() {
+        assertEquals(1024L * 1024L, RangeInterceptor.STREAM_RANGE_WINDOW_BYTES)
+        assertEquals(
+            "bytes=0-1048575",
+            RangeInterceptor.normalizedRangeHeader("GET", "x.googlevideo.com", null),
+        )
+        assertEquals(
+            "bytes=5-1048580",
+            RangeInterceptor.normalizedRangeHeader("GET", "x.googlevideo.com", "bytes=5-"),
+        )
+        assertNull(RangeInterceptor.normalizedRangeHeader("GET", "x.googlevideo.com", "bytes=5-9"))
+        assertNull(RangeInterceptor.normalizedRangeHeader("POST", "x.googlevideo.com", null))
+        assertNull(RangeInterceptor.normalizedRangeHeader("POST", "x.googlevideo.com", "bytes=5-"))
+        assertNull(RangeInterceptor.normalizedRangeHeader("GET", "example.com", null))
+        assertNull(RangeInterceptor.normalizedRangeHeader("GET", "example.com", "bytes=5-"))
     }
 }

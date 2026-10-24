@@ -59,7 +59,7 @@ class AppContainer(app: OffleashApp) {
      * stream fetches go through the same stack (same connection pool,
      * same address-family choices), because googlevideo stream URLs are
      * bound to the network identity that resolved them. The scoped
-     * [RangeInterceptor] guarantees a Range header on googlevideo GETs
+     * [RangeInterceptor] normalizes googlevideo GETs to bounded ranges
      * and records their first-fetch status into diagnostics.
      */
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
