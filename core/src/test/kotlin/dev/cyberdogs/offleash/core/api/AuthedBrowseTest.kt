@@ -33,8 +33,8 @@ class AuthedBrowseTest {
         assertEquals(session.cookieHeader(), headers["Cookie"])
         val authorization = headers["Authorization"]
         assertTrue(
-            "Authorization must be <epochSeconds>_<sha1hex>, was $authorization",
-            authorization != null && authorization.matches(Regex("""\d+_[0-9a-f]{40}"""))
+            "Authorization must be SAPISIDHASH <epochSeconds>_<sha1hex>, was $authorization",
+            authorization != null && authorization.matches(Regex("""SAPISIDHASH \d+_[0-9a-f]{40}"""))
         )
         assertEquals("1", headers["X-Goog-Authuser"])
         assertEquals("CgVisitorDataValue", headers["X-Goog-Visitor-Id"])
