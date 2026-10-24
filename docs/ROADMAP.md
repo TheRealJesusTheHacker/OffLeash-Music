@@ -45,7 +45,7 @@ Anonymous, no account:
 
 Benchmarked against the owner's reference-client screenshots (feature surface and behavior only; clean-room rule unchanged). Runs straight after the Phase 2 core, in this order, each step suite-green with a G3-signed hunt build:
 
-1. Stream/download **quality selector** honored by format selection (sensible metered-carrier defaults; the owner's reference setup sits at Low ~66 kbps)
+1. ✅ **LANDED 2026-10-23** — Stream/download **quality selector** honored by format selection (sensible metered-carrier defaults; the owner's reference setup sits at Low ~66 kbps). Settings surface + `AppPreferences`; build `0.3.0-parity-hunt1`, main `628f4f61` (CI 40061288341 branch / 40061599846 main, both green; core 104, app 61/flavor). Carried flag: no JVM-level QueueController wiring test (needs Android Context/ExoPlayer) — see AUDITS.
 2. **Offline downloads**: per-track download + auto-download of Liked songs, download-quality setting, honest in-app storage accounting
 3. **Lyrics display** on Now Playing (line-synced where a source offers it; named absence where none does)
 4. **Sleep timer**, **playback speed & pitch**, **start radio**, **share**, and the full track-menu vocabulary (Like incl. account like read/write, Download, Add to a playlist, Play next, Add to queue, Artists, Album, Start radio, Sleep Timer, Playback speed & pitch, Share)
