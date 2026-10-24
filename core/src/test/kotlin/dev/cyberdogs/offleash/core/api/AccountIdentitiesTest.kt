@@ -81,9 +81,9 @@ class AccountIdentitiesTest {
 
     @Test
     fun unflaggedSelectionDefaultsToFirstIdentity() {
-        val body = """{"accounts":[` +
-            """{"accountName":"First","accountNo":0},""" +
-            """{"accountName":"Second","accountNo":1}]}"""
+        val body = "{\"accounts\":[" +
+            "{\"accountName\":\"First\",\"accountNo\":0}," +
+            "{\"accountName\":\"Second\",\"accountNo\":1}]}"
         val lookup = YoutubeiClient(GetTransport(body = body)).accountIdentities(session)
             as IdentityLookup.Found
         assertEquals(2, lookup.identities.size)
