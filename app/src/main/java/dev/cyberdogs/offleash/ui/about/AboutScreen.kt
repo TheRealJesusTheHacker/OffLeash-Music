@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -11,11 +12,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.cyberdogs.offleash.R
@@ -28,10 +35,33 @@ private fun rememberVersionName(context: android.content.Context): String {
     }
 }
 
+/** Third-party libraries this build stands on — every one Apache-2.0. */
+private val THIRD_PARTY_CREDITS: List<Pair<String, String>> = listOf(
+    "Kotlin standard library" to "Apache License 2.0",
+    "Jetpack Compose (UI, Material 3, Navigation, Lifecycle)" to "Apache License 2.0",
+    "AndroidX Media3 (ExoPlayer, session, datasource)" to "Apache License 2.0",
+    "OkHttp" to "Apache License 2.0",
+    "kotlinx-serialization" to "Apache License 2.0",
+    "kotlinx-coroutines" to "Apache License 2.0",
+    "Coil" to "Apache License 2.0",
+)
+
 @Composable
 fun AboutScreen() {
     val context = LocalContext.current
     val versionName = rememberVersionName(context)
+    var showLicense by remember { mutableStateOf(false) }
+    val licenseText = remember(showLicense) {
+        if (!showLicense) {
+            ""
+        } else {
+            try {
+                context.resources.openRawResource(R.raw.gpl3).bufferedReader().use { it.readText() }
+            } catch (e: Exception) {
+                "The license text could not be loaded."
+            }
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -77,6 +107,14 @@ fun AboutScreen() {
         )
         Spacer(Modifier.height(16.dp))
         Text(
+            text = "Sign-in is planned for a later phase. It arrives only after its " +
+                "own dedicated security pass — until then, nothing in this app " +
+                "handles your Google account or stores any credential.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
             text = "If you have YouTube Premium, keep it — Premium pays the artists " +
                 "and this app is a different way in, not a replacement for supporting them.",
             style = MaterialTheme.typography.bodyLarge,
@@ -89,6 +127,41 @@ fun AboutScreen() {
                 "under the terms of that license.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = { showLicense = !showLicense }) {
+            Text(if (showLicense) "Hide the full license" else "Read the full license")
+        }
+        if (showLicense) {
+            Text(
+                text = licenseText,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+        }
+        Text(
+            text = "Built with",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(8.dp))
+        THIRD_PARTY_CREDITS.forEach { (name, license) ->
+            Text(
+                text = "$name — $license",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "The full dependency ledger, with exact versions, lives in " +
+                "docs/LICENSES.md in the source repository.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(16.dp))
         Text(

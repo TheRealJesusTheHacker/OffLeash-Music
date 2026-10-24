@@ -6,7 +6,15 @@
 - **Sign-in is Phase 2, by the owner's design.** No account code exists until credential handling gets its own dedicated security pass.
 - **Originality is a standing rule, not a phase.** OffLeash is an independent implementation. Other open clients in the category are concept references only — no code is copied or adapted from them, and the project's GPL-3.0 license covers *our* work; it changes nothing about where our code comes from.
 
-## Phase 1 — the player (in progress)
+## Phase 1 — the player (BUILT, 2026-10-23)
+
+Shipped as code + a green CI gate, no release made. Evidence on record:
+
+- `:core` JVM suite: 31/31 tests green, pinned to 9 recorded youtubei fixtures + 2 synthetic fixtures (fixtures are named as such); playback-resolution logic proven on fixtures (direct audio chosen by bitrate with audio/mp4 tie-break; `PlayerRefused` on UNPLAYABLE; `NoPlayableStream` on ciphered-only; fake-transport 400 → `ContextRejected`, throw → `NetworkFailure`; shuffle permutation seeded Random(42)).
+- CI (`.github/workflows/android.yml`, SHA-pinned fleet actions): runs `:core:test` + `:app:testDebugUnitTest` and assembles the debug APK on every push to `main`. The `live-smoke` job (non-gating by design) replays the anonymous probes — browse, search, iOS-context player, ranged stream GET — and passes from GitHub's runners too.
+- Debug APK artifact from the green run: a personal-use build only (Android Debug signer), held in `~/workspace/offleash-apk/` with size + SHA-256 recorded in the coordinator's report — never called or treated as a release.
+
+Honest remainder: no agent can exercise the on-device surface (media notification, lock-screen controls, background playback across task removal) from CI — the owner's install test on a real phone is the only runtime proof. That verdict is still open.
 
 Anonymous, no account:
 
