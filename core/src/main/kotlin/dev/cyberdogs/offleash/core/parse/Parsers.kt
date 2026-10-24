@@ -5,6 +5,8 @@ import dev.cyberdogs.offleash.core.model.AlbumSummary
 import dev.cyberdogs.offleash.core.model.ArtistPage
 import dev.cyberdogs.offleash.core.model.ArtistSummary
 import dev.cyberdogs.offleash.core.model.FeedItem
+import dev.cyberdogs.offleash.core.model.HomeChip
+import dev.cyberdogs.offleash.core.model.HomeFeed
 import dev.cyberdogs.offleash.core.model.MoodCategory
 import dev.cyberdogs.offleash.core.model.PlaylistPage
 import dev.cyberdogs.offleash.core.model.PlaylistSummary
@@ -396,6 +398,48 @@ object YoutubeiParsers {
     // ------------------------------------------------------------------
     // Search
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // Home feed header chips (Lane H)
+    // ------------------------------------------------------------------
+
+    /**
+     * The home response's header chips, in published order. In the
+     * recorded home fixture they live in the `sectionListRenderer`
+     * header's `chipCloudRenderer.chips`, each a
+     * `chipCloudChipRenderer` whose label is its `text` and whose
+     * target is `navigationEndpoint.browseEndpoint` (browseId
+     * `FEmusic_home` plus the chip's own params). Chips without a
+     * browse endpoint — the search response's filter chips use a
+     * `searchEndpoint` instead — are not home chips and are skipped,
+     * as are blank labels and duplicate labels (first wins). A
+     * response with no chip cloud yields an empty list, never a
+     * fabricated row.
+     */
+    fun parseHomeChips(root: JsonElement?): List<HomeChip> {
+        val chips = mutableListOf<HomeChip>()
+        val seen = mutableSetOf<String>()
+        for (cloudElement in findAll(root, "chipCloudRenderer")) {
+            val cloud = cloudElement.asObj() ?: continue
+            for (chipElement in cloud.arr("chips") ?: continue) {
+                val chip = chipElement.asObj().obj("chipCloudChipRenderer") ?: continue
+                val label = textOf(chip.obj("text"))?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: continue
+                val browse = chip.obj("navigationEndpoint").obj("browseEndpoint")
+                    ?: chip.obj("onSelectedCommand").obj("browseEndpoint")
+                    ?: continue
+                val browseId = browse.str("browseId")?.takeIf { it.isNotEmpty() } ?: continue
+                if (seen.add(label)) {
+                    chips.add(HomeChip(label, browseId, browse.str("params")))
+                }
+            }
+        }
+        return chips
+    }
+
+    /** The whole home feed: titled sections plus header chips, one parse. */
+    fun parseHome(root: JsonElement?): HomeFeed =
+        HomeFeed(sections = parseSections(root), chips = parseHomeChips(root))
 
     /** Filter chips published by the search response itself. */
     fun parseSearchFilters(root: JsonElement?): List<SearchFilter> {

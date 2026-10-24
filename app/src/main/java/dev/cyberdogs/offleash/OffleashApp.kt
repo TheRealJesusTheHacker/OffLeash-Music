@@ -238,6 +238,15 @@ class AppContainer(app: OffleashApp) {
         _showPlayerRequests.value += 1
     }
 
+    /**
+     * The Lane F-owned parity preferences (download quality,
+     * auto-download Liked, audio-version-in-radio — Lane H), over the
+     * same `offleash_prefs` file under the contract's exact keys.
+     */
+    val parityPreferences: dev.cyberdogs.offleash.data.ParityPreferences =
+        dev.cyberdogs.offleash.data.ParityPreferences.fromContext(app)
+
+
     val localPlaylistStore: LocalPlaylistStore =
         LocalPlaylistStore(File(app.filesDir, "playlists.json"))
 

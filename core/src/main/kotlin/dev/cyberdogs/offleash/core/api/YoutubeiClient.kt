@@ -11,6 +11,8 @@ import dev.cyberdogs.offleash.core.model.AccountIdentity
 import dev.cyberdogs.offleash.core.model.AlbumPage
 import dev.cyberdogs.offleash.core.model.ArtistPage
 import dev.cyberdogs.offleash.core.model.FeedItem
+import dev.cyberdogs.offleash.core.model.HomeChip
+import dev.cyberdogs.offleash.core.model.HomeFeed
 import dev.cyberdogs.offleash.core.model.LyricsLine
 import dev.cyberdogs.offleash.core.model.LyricsResult
 import dev.cyberdogs.offleash.core.model.MoodCategory
@@ -66,6 +68,22 @@ class YoutubeiClient(
 
     fun home(auth: AuthSession? = null): List<Section> =
         browseSections("FEmusic_home", auth = auth)
+
+    /**
+     * The home feed with its header chips (Lane H): one browse of
+     * `FEmusic_home` parsed for both the titled sections and the
+     * `chipCloudRenderer` chips the sections-only parse drops.
+     * With no [chip] this is the plain home browse; with one, it is
+     * the chip's own re-browse (its browseId + params, the exact
+     * request the response's chip endpoint describes).
+     */
+    fun homeFeed(auth: AuthSession? = null, chip: HomeChip? = null): HomeFeed {
+        val root = postJson(
+            "browse", YoutubeiContexts.WEB_REMIX,
+            browseBody(chip?.browseId ?: "FEmusic_home", chip?.params, auth), auth,
+        )
+        return YoutubeiParsers.parseHome(root)
+    }
 
     fun charts(): List<Section> = browseSections("FEmusic_charts")
 

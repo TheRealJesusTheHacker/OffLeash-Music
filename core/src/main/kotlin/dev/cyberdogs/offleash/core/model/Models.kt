@@ -54,6 +54,31 @@ data class Section(
     val items: List<FeedItem>,
 )
 
+/**
+ * One mood/filter chip published by the home response itself, in the
+ * `sectionListRenderer` header's `chipCloudRenderer` (Lane H). A chip
+ * is a re-browse of the home feed: [browseId] is `FEmusic_home` and
+ * [params] selects the chip's slice of it, exactly as the response
+ * publishes them. Chips the response doesn't carry are never invented
+ * by the app — an empty list is the honest "no chips" state.
+ */
+data class HomeChip(
+    val label: String,
+    val browseId: String,
+    val params: String?,
+)
+
+/**
+ * The full home feed (Lane H): the titled [sections] the Phase 1
+ * parser already yields, plus the header [chips] it used to drop.
+ * [YoutubeiClient.home] keeps returning just the sections; this is
+ * the shape the signed-in home chrome renders from.
+ */
+data class HomeFeed(
+    val sections: List<Section>,
+    val chips: List<HomeChip>,
+)
+
 data class AlbumPage(
     val album: AlbumSummary,
     val description: String?,
