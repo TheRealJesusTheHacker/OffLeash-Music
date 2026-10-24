@@ -5,6 +5,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// CI-stable DEBUG identity only, never a release signing path: when the
+// -PoffleashDebugKeystore property is present (CI passes the cached
+// ci-debug/debug.keystore), debug builds sign with that keystore so the
+// hunt APK keeps one signer across runs. When the property is absent,
+// this is inert and builds behave exactly as stock (auto debug keystore).
+val ciDebugKeystore: String? = providers.gradleProperty("offleashDebugKeystore").orNull
+
 android {
     namespace = "dev.cyberdogs.offleash"
     compileSdk = 35
@@ -33,7 +40,23 @@ android {
         }
     }
 
+    signingConfigs {
+        if (ciDebugKeystore != null) {
+            create("ciDebug") {
+                storeFile = file(ciDebugKeystore)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (ciDebugKeystore != null) {
+                signingConfig = signingConfigs.getByName("ciDebug")
+            }
+        }
         release {
             isMinifyEnabled = false
         }
