@@ -84,6 +84,7 @@ class FakeAccountTransport(
               "accountEmail": "$IDENTITY_EMAIL",
               "photoUrl": "$IDENTITY_AVATAR_URL",
               "accountPhotoUrl": "$IDENTITY_AVATAR_URL",
+              "accountNo": $enumeratedAuthUser,
               "authUser": $enumeratedAuthUser,
               "accountIndex": $enumeratedAuthUser,
               "pageId": "$enumeratedPageId",
