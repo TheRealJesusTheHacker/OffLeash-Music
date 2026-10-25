@@ -36,6 +36,72 @@ fun streamHost(url: String): String =
         "unknown"
     }
 
+private val BOUNDED_RANGE_PATTERN = Regex("""^bytes=(\d+)-(\d+)$""")
+
+/**
+ * Pure helper: the (offset, window) pair a bounded Range header
+ * names — `bytes=1048576-1310719` is offset 1048576 with a 262144
+ * window. Returns null for "none", open-ended, or unparseable
+ * shapes (post-interceptor stream loads are always bounded, so a
+ * null here itself names a shape worth seeing in diagnostics).
+ */
+fun rangeOffsetAndWindow(range: String): Pair<Long, Long>? {
+    val match = BOUNDED_RANGE_PATTERN.matchEntire(range.trim()) ?: return null
+    val start = match.groupValues[1].toLongOrNull() ?: return null
+    val end = match.groupValues[2].toLongOrNull() ?: return null
+    if (end < start) return null
+    return start to (end - start + 1)
+}
+
+/**
+ * Pure formatter: one stream load's diagnostics detail — its
+ * per-attempt sequence number, status, host, offset and window
+ * (parsed out of the sent Range), the Range itself, and the UA /
+ * Accept-Encoding classes. Round 3: EVERY load of an attempt gets
+ * one of these lines (old on-device logs showed four player loads
+ * per attempt; all of them must be readable, not only the first).
+ */
+fun streamLoadLine(index: Int, status: Int, host: String, shape: StreamFetchShape): String {
+    val offsetWindow = rangeOffsetAndWindow(shape.range)
+    val offset = offsetWindow?.first?.toString() ?: "none"
+    val window = offsetWindow?.second?.toString() ?: "none"
+    return "#$index HTTP $status host=$host offset=$offset window=$window " +
+        "range=${shape.range} ua=${shape.userAgent} ae=${shape.acceptEncoding}"
+}
+
+/**
+ * Pure formatter: one ladder probe window's diagnostics detail —
+ * which pair and context tried which window, the exact Range that
+ * window produces from offset 0, and what the gate answered (an
+ * HTTP status, or the probe's transport-failure class).
+ */
+fun probeWindowLine(
+    pair: Int,
+    pairs: Int,
+    contextName: String,
+    windowBytes: Long,
+    status: Int?,
+    exceptionClass: String?,
+): String {
+    val answer = when {
+        status != null -> "HTTP $status"
+        exceptionClass != null -> "probe failed ($exceptionClass)"
+        else -> "probe failed"
+    }
+    return "pair $pair/$pairs context $contextName window=$windowBytes " +
+        "range=bytes=0-${windowBytes - 1} $answer"
+}
+
+/**
+ * Pure formatter: the winning-window line recorded when a resolved
+ * stream is handed to the player — the window its loads of that
+ * stream will be shaped with, and the Range that window produces
+ * from offset 0.
+ */
+fun winningWindowLine(windowBytes: Long): String =
+    "winner window=$windowBytes range=bytes=0-${windowBytes - 1} " +
+        "— player loads of this stream use this window"
+
 /** Label for the tracked PlaybackService lifecycle flag. */
 fun serviceRunningLabel(running: Boolean?): String = when (running) {
     true -> "running"
@@ -136,6 +202,11 @@ class PlaybackDiagnostics {
     var firstFetchStatus: Int? = null
         private set
 
+    /** How many stream loads this attempt has recorded so far (round 3). */
+    @Volatile
+    var streamLoadCount: Int = 0
+        private set
+
     @Volatile
     var playerError: String? = null
         private set
@@ -162,6 +233,7 @@ class PlaybackDiagnostics {
             streamHost = null
             embeddedIpFamily = null
             firstFetchStatus = null
+            streamLoadCount = 0
             playerError = null
             addLocked("attempt", label)
         }
@@ -220,6 +292,57 @@ class PlaybackDiagnostics {
             "HTTP $status host=$host range=${shape.range} " +
                 "ua=${shape.userAgent} ae=${shape.acceptEncoding}",
         )
+    }
+
+    /**
+     * EVERY googlevideo load's answer (round 3), numbered per
+     * attempt: the shared stack's interceptor callback routes here,
+     * so probe fetches, the player's first fetch, its seek/segment
+     * loads, and any other stream load through the shared client
+     * each land as their own `load:` line carrying offset + window
+     * + status — the four-loads-per-attempt pattern from the old
+     * on-device logs is fully readable now. The FIRST load of an
+     * attempt additionally records the legacy `first-fetch` line
+     * and [firstFetchStatus], exactly as before.
+     */
+    fun recordStreamLoad(status: Int, host: String, shape: StreamFetchShape) {
+        val index = synchronized(lock) {
+            streamLoadCount += 1
+            streamLoadCount
+        }
+        if (index == 1) {
+            recordFirstFetch(status, host, shape)
+        }
+        log("load", streamLoadLine(index, status, host, shape))
+    }
+
+    /**
+     * One ladder probe window tried (round 3): every window of
+     * every pair lands as its own `probe-window:` line, so the
+     * descent 1 MiB → 256 KiB → 64 KiB → 2 KiB (and where it
+     * stopped) is readable from one screenshot.
+     */
+    fun recordProbeWindow(
+        pair: Int,
+        pairs: Int,
+        contextName: String,
+        windowBytes: Long,
+        status: Int?,
+        exceptionClass: String?,
+    ) {
+        log(
+            "probe-window",
+            probeWindowLine(pair, pairs, contextName, windowBytes, status, exceptionClass),
+        )
+    }
+
+    /**
+     * The window that won for the stream being handed to the
+     * player (round 3) — recorded at the hand-off, so the
+     * diagnostics show which window the player's loads carry.
+     */
+    fun recordWinningWindow(windowBytes: Long) {
+        log("window", winningWindowLine(windowBytes))
     }
 
     fun recordPlayerError(errorCode: Int, exceptionClass: String, rootCauseClasses: List<String>) {

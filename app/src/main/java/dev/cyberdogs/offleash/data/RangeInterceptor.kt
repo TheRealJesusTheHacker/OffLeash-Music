@@ -2,6 +2,7 @@ package dev.cyberdogs.offleash.data
 
 import okhttp3.Interceptor
 import okhttp3.Response
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The wire shape of one googlevideo GET as it leaves the shared
@@ -19,8 +20,56 @@ data class StreamFetchShape(
 )
 
 /**
+ * The ONE shared record of which Range window won for which stream
+ * URL — the handoff between the ladder probe and the player
+ * (2026-10-25 hunt, round 3).
+ *
+ * The probe does not preset a Range header (the pinned probe shape
+ * is "no headers of its own"); instead it records the CANDIDATE
+ * window for the URL here before fetching bare, and [RangeInterceptor]
+ * — the one shaping point every stream fetch passes through —
+ * normalizes that fetch with the recorded window. When a window
+ * answers 2xx the probe leaves it recorded as the WINNER, and
+ * QueueController re-records it for the URL it hands to the player,
+ * so the player's own loads of that stream are normalized with the
+ * winning window by the same definition. Probe shape and player
+ * shape cannot drift: neither side names a window of its own; both
+ * read this store through the interceptor.
+ *
+ * Keys are full stream URLs (each resolution mints a fresh signed
+ * URL, so an entry can only ever shape fetches of the exact stream
+ * it was won on). Values are byte counts only — never logged from
+ * here. The map is bounded: past [MAX_ENTRIES] it clears rather
+ * than growing for the process lifetime (a stale winner is harmless
+ * — worst case a later fetch of an evicted URL rides the default
+ * window, exactly the pre-round-3 behavior).
+ */
+class StreamWindowStore {
+
+    private val windows = ConcurrentHashMap<String, Long>()
+
+    /** Record [windowBytes] as the window to shape fetches of [url] with. */
+    fun recordWinner(url: String, windowBytes: Long) {
+        if (windows.size >= MAX_ENTRIES) windows.clear()
+        windows[url] = windowBytes
+    }
+
+    /** The recorded window for [url], or null when none was recorded. */
+    fun windowFor(url: String): Long? = windows[url]
+
+    /** Forget [url]'s window (its next fetch rides the default). */
+    fun clear(url: String) {
+        windows.remove(url)
+    }
+
+    companion object {
+        const val MAX_ENTRIES: Int = 64
+    }
+}
+
+/**
  * Normalizes stream fetches to the probe-proven shape, and reports
- * the first-fetch HTTP status for googlevideo responses.
+ * the HTTP status for googlevideo responses.
  *
  * Why the range rule exists: a fresh coordinator probe on the
  * owner's track (fresh resolution, both itag 251 and itag 140,
@@ -37,11 +86,20 @@ data class StreamFetchShape(
  * seeking with an unset length), so this interceptor normalizes
  * every googlevideo GET to a bounded window — see
  * [normalizedRangeHeader]:
- * - no Range header -> `Range: bytes=0-1048575` (1 MiB window);
- * - open-ended `bytes=N-` -> `bytes=N-(N+1048575)`;
+ * - no Range header -> `Range: bytes=0-(W-1)`;
+ * - open-ended `bytes=N-` -> `bytes=N-(N+W-1)`;
  * - already bounded `bytes=N-M` -> untouched;
  * - non-GET or non-googlevideo -> untouched (a Range header on a
  *   youtubei POST would be wrong, and other hosts are not streams).
+ *
+ * W is the PER-STREAM window (round 3): the window recorded in the
+ * shared [StreamWindowStore] for this exact URL — the window the
+ * ladder probe won on — or [STREAM_RANGE_WINDOW_BYTES] (1 MiB) when
+ * no window was recorded for the URL. The ladder descends
+ * [STREAM_WINDOW_LADDER] within one resolution before re-resolving,
+ * because the only proven on-track wins before round 3 used tiny
+ * windows (`bytes=0-2047`, `bytes=0-0`) while the fixed 1 MiB window
+ * kept being refused on the owner's phone.
  *
  * The shape contract (2026-10-24 hunt): a googlevideo GET leaves
  * this stack with a bounded Range, NO Accept-Encoding header, and
@@ -62,9 +120,10 @@ data class StreamFetchShape(
  * [onGoogleVideoResponse] is invoked with (status, host, shape) for
  * every googlevideo GET response, so playback diagnostics can record
  * what the stream server actually answered and the exact shape that
- * was sent for it.
+ * was sent for it — every load, not only the first.
  */
 class RangeInterceptor(
+    private val windowStore: StreamWindowStore? = null,
     private val onGoogleVideoResponse: ((status: Int, host: String, shape: StreamFetchShape) -> Unit)? = null,
 ) : Interceptor {
 
@@ -75,10 +134,13 @@ class RangeInterceptor(
             host = original.url.host,
         )
         val request = if (isGoogleVideoGet) {
+            val windowBytes = windowStore?.windowFor(original.url.toString())
+                ?: STREAM_RANGE_WINDOW_BYTES
             val normalized = normalizedRangeHeader(
                 method = original.method,
                 host = original.url.host,
                 existingRange = original.header("Range"),
+                windowBytes = windowBytes,
             )
             original.newBuilder()
                 .removeHeader("Accept-Encoding")
@@ -106,12 +168,35 @@ class RangeInterceptor(
 
     companion object {
         /**
-         * Bounded window size for normalized stream ranges: 1 MiB.
-         * Coordinator probe (see class doc): `gir=yes` stream URLs
-         * refuse range-less AND open-ended requests; bounded windows
-         * are what YouTube's own players send.
+         * Default bounded window size for normalized stream ranges:
+         * 1 MiB — also the FIRST (largest) rung of
+         * [STREAM_WINDOW_LADDER]. Coordinator probe (see class doc):
+         * `gir=yes` stream URLs refuse range-less AND open-ended
+         * requests; bounded windows are what YouTube's own players
+         * send.
          */
         const val STREAM_RANGE_WINDOW_BYTES: Long = 1024L * 1024L
+
+        /**
+         * The window descent ladder, largest first (round 3): the
+         * probe tries these windows IN ORDER within one resolution
+         * and the first window answered 2xx wins for that stream.
+         * The last rung is the tiny-window shape family of the only
+         * proven on-track wins (`bytes=0-2047`, `bytes=0-0`). This
+         * list is the one shared definition: the probe descends it,
+         * the interceptor shapes with its winner, and tests pin its
+         * exact contents.
+         */
+        val STREAM_WINDOW_LADDER: List<Long> = listOf(
+            STREAM_RANGE_WINDOW_BYTES,
+            256L * 1024L,
+            64L * 1024L,
+            2048L,
+        )
+
+        /** The bounded Range header for a fetch of [windowBytes] starting at [start]. */
+        fun boundedRangeHeader(start: Long, windowBytes: Long): String =
+            "bytes=$start-${start + windowBytes - 1}"
 
         private val RANGE_PATTERN = Regex("""^bytes=(\d+)-(\d*)$""")
 
@@ -120,20 +205,37 @@ class RangeInterceptor(
             method.equals("GET", ignoreCase = true) && host.endsWith(".googlevideo.com")
 
         /**
-         * The Range header to send for this request, or null when the
-         * request must be left exactly as it is (non-GET, non-googlevideo,
-         * already bounded, or a Range shape we do not understand).
+         * The Range header to send for this request at the default
+         * window, or null when the request must be left exactly as
+         * it is. Delegates to the per-stream overload with
+         * [STREAM_RANGE_WINDOW_BYTES].
          */
-        fun normalizedRangeHeader(method: String, host: String, existingRange: String?): String? {
+        fun normalizedRangeHeader(method: String, host: String, existingRange: String?): String? =
+            normalizedRangeHeader(method, host, existingRange, STREAM_RANGE_WINDOW_BYTES)
+
+        /**
+         * The Range header to send for this request at the
+         * per-stream [windowBytes], or null when the request must
+         * be left exactly as it is (non-GET, non-googlevideo,
+         * already bounded, or a Range shape we do not understand).
+         * Loads stay bounded by construction: the only headers this
+         * produces are bounded, and bounded headers pass untouched.
+         */
+        fun normalizedRangeHeader(
+            method: String,
+            host: String,
+            existingRange: String?,
+            windowBytes: Long,
+        ): String? {
             if (!isGoogleVideoGet(method, host)) return null
             if (existingRange == null) {
-                return "bytes=0-${STREAM_RANGE_WINDOW_BYTES - 1}"
+                return boundedRangeHeader(0L, windowBytes)
             }
             val match = RANGE_PATTERN.matchEntire(existingRange.trim()) ?: return null
             val start = match.groupValues[1].toLongOrNull() ?: return null
             val end = match.groupValues[2]
             if (end.isNotEmpty()) return null // already bounded — untouched
-            return "bytes=$start-${start + STREAM_RANGE_WINDOW_BYTES - 1}"
+            return boundedRangeHeader(start, windowBytes)
         }
 
         /**

@@ -1,6 +1,7 @@
 package dev.cyberdogs.offleash.playback
 
 import dev.cyberdogs.offleash.core.api.YoutubeiContexts
+import dev.cyberdogs.offleash.data.RangeInterceptor
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -99,5 +100,64 @@ class LadderDecisionTest {
             road[1],
             ladderContextFor(1, road, YoutubeiContexts.WEB_REMIX),
         )
+    }
+
+    // -- Window descent (round 3) --------------------------------------------
+
+    @Test
+    fun window403DescendsBeforeAnyReResolve() {
+        // Within one resolution: 1 MiB refused -> descend, 256 KiB
+        // refused -> descend, 64 KiB refused -> descend, 2 KiB is
+        // the last rung: refused there, the descent stops and the
+        // pair verdict takes over.
+        val count = RangeInterceptor.STREAM_WINDOW_LADDER.size
+        assertEquals(WindowAction.DESCEND, windowProbeVerdict(0, count, 403))
+        assertEquals(WindowAction.DESCEND, windowProbeVerdict(1, count, 403))
+        assertEquals(WindowAction.DESCEND, windowProbeVerdict(2, count, 403))
+        assertEquals(WindowAction.STOP, windowProbeVerdict(3, count, 403))
+    }
+
+    @Test
+    fun window2xxWinsAtAnyRungAndStopsTheDescent() {
+        val count = RangeInterceptor.STREAM_WINDOW_LADDER.size
+        for (index in 0 until count) {
+            assertEquals(WindowAction.WINNER, windowProbeVerdict(index, count, 206))
+            assertEquals(WindowAction.WINNER, windowProbeVerdict(index, count, 200))
+        }
+    }
+
+    @Test
+    fun windowDescentStopsAtTheFirst206() {
+        // The descent order as the ladder runs it: walk the verdicts
+        // for 403, 403, 206 and the walk must visit exactly the
+        // first three rungs, in ladder order, and stop at the win.
+        val ladder = RangeInterceptor.STREAM_WINDOW_LADDER
+        val answers = listOf(403, 403, 206)
+        val visited = mutableListOf<Long>()
+        var winner: Long? = null
+        for (index in ladder.indices) {
+            visited += ladder[index]
+            when (windowProbeVerdict(index, ladder.size, answers[index])) {
+                WindowAction.WINNER -> {
+                    winner = ladder[index]
+                    break
+                }
+                WindowAction.DESCEND -> continue
+                WindowAction.STOP -> break
+            }
+        }
+        assertEquals(listOf(1048576L, 262144L, 65536L), visited)
+        assertEquals(65536L, winner)
+    }
+
+    @Test
+    fun non403RefusalsDoNotDescend() {
+        // Shrinking the window is the answer to a 403-shaped
+        // refusal only; other refusals and transport failures stop
+        // the descent and let the pair verdict decide.
+        val count = RangeInterceptor.STREAM_WINDOW_LADDER.size
+        assertEquals(WindowAction.STOP, windowProbeVerdict(0, count, 404))
+        assertEquals(WindowAction.STOP, windowProbeVerdict(0, count, 500))
+        assertEquals(WindowAction.STOP, windowProbeVerdict(1, count, null))
     }
 }

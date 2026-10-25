@@ -44,6 +44,12 @@ class RangeInterceptorTest {
         return chain.proceeded!!
     }
 
+    private fun runWithStore(request: Request, store: StreamWindowStore): Request {
+        val chain = FakeChain(request)
+        RangeInterceptor(store).intercept(chain)
+        return chain.proceeded!!
+    }
+
     @Test
     fun absentRangeBecomesBoundedFromZero() {
         val out = run(
@@ -196,5 +202,81 @@ class RangeInterceptorTest {
         assertNull(RangeInterceptor.normalizedRangeHeader("POST", "x.googlevideo.com", "bytes=5-"))
         assertNull(RangeInterceptor.normalizedRangeHeader("GET", "example.com", null))
         assertNull(RangeInterceptor.normalizedRangeHeader("GET", "example.com", "bytes=5-"))
+    }
+
+    // -- Round 3: the shared window ladder + per-stream store ---------------
+
+    @Test
+    fun windowLadderIsTheSharedDescent() {
+        // The ONE shared definition the probe descends and the
+        // interceptor shapes with: 1 MiB -> 256 KiB -> 64 KiB -> 2 KiB.
+        assertEquals(
+            listOf(1048576L, 262144L, 65536L, 2048L),
+            RangeInterceptor.STREAM_WINDOW_LADDER,
+        )
+        assertEquals(
+            RangeInterceptor.STREAM_RANGE_WINDOW_BYTES,
+            RangeInterceptor.STREAM_WINDOW_LADDER.first(),
+        )
+        assertEquals(
+            RangeInterceptor.STREAM_WINDOW_LADDER.sortedDescending(),
+            RangeInterceptor.STREAM_WINDOW_LADDER,
+        )
+    }
+
+    @Test
+    fun normalizerUsesThePerStreamWindow() {
+        assertEquals(
+            "bytes=0-262143",
+            RangeInterceptor.normalizedRangeHeader("GET", "x.googlevideo.com", null, 262144L),
+        )
+        assertEquals(
+            "bytes=5000-70535",
+            RangeInterceptor.normalizedRangeHeader("GET", "x.googlevideo.com", "bytes=5000-", 65536L),
+        )
+        // Already bounded stays untouched at any window.
+        assertNull(
+            RangeInterceptor.normalizedRangeHeader("GET", "x.googlevideo.com", "bytes=5-9", 2048L),
+        )
+        assertEquals("bytes=0-2047", RangeInterceptor.boundedRangeHeader(0L, 2048L))
+    }
+
+    @Test
+    fun storeWindowShapesAbsentAndOpenEndedFetches() {
+        val url = "https://rr1---sn-example.googlevideo.com/videoplayback?expire=1"
+        val store = StreamWindowStore()
+        store.recordWinner(url, 262144L)
+        val absent = runWithStore(Request.Builder().url(url).get().build(), store)
+        assertEquals("bytes=0-262143", absent.header("Range"))
+        val openEnded = runWithStore(
+            Request.Builder().url(url).header("Range", "bytes=4096-").get().build(),
+            store,
+        )
+        assertEquals("bytes=4096-266239", openEnded.header("Range"))
+    }
+
+    @Test
+    fun storeEntryForAnotherUrlDoesNotLeak() {
+        val store = StreamWindowStore()
+        store.recordWinner("https://rr1---sn-example.googlevideo.com/videoplayback?expire=1", 2048L)
+        val out = runWithStore(
+            Request.Builder()
+                .url("https://rr1---sn-example.googlevideo.com/videoplayback?expire=2")
+                .get().build(),
+            store,
+        )
+        assertEquals("bytes=0-1048575", out.header("Range"))
+    }
+
+    @Test
+    fun boundedFetchUntouchedEvenWithAStoreEntry() {
+        val url = "https://rr1---sn-example.googlevideo.com/videoplayback?expire=1"
+        val store = StreamWindowStore()
+        store.recordWinner(url, 2048L)
+        val out = runWithStore(
+            Request.Builder().url(url).header("Range", "bytes=100-200").get().build(),
+            store,
+        )
+        assertEquals("bytes=100-200", out.header("Range"))
     }
 }

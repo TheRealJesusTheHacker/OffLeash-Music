@@ -28,6 +28,7 @@ import dev.cyberdogs.offleash.data.OkHttpTransport
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.data.SessionManager
 import dev.cyberdogs.offleash.data.SessionStore
+import dev.cyberdogs.offleash.data.StreamWindowStore
 import dev.cyberdogs.offleash.data.OkHttpChunkFetcher
 import dev.cyberdogs.offleash.data.buildSharedClient
 import dev.cyberdogs.offleash.data.downloadRecordsFileIn
@@ -109,12 +110,23 @@ class AppContainer(app: OffleashApp) {
      * same address-family choices), because googlevideo stream URLs are
      * bound to the network identity that resolved them. The scoped
      * RangeInterceptor normalizes googlevideo GETs to bounded ranges
-     * and records their first-fetch status into diagnostics.
+     * (per-stream windows from [streamWindows]) and records every
+     * stream load's status into diagnostics.
      * Construction lives in [buildSharedClient] so a contract test
      * can build the production client and pin what is (and is not)
      * installed on it.
      */
-    val okHttpClient: OkHttpClient = buildSharedClient(playbackDiagnostics)
+    /**
+     * The ONE per-stream window record (round 3): the ladder probe's
+     * winning Range window per stream URL. This single instance is
+     * shared by the shared client's RangeInterceptor (which shapes
+     * every stream fetch with the recorded window) and the
+     * QueueController (which records candidates and winners) — the
+     * probe/player window parity holds by construction.
+     */
+    val streamWindows: StreamWindowStore = StreamWindowStore()
+
+    val okHttpClient: OkHttpClient = buildSharedClient(playbackDiagnostics, streamWindows)
 
     /** Scope for session work that outlives any single screen. */
     private val sessionScope: CoroutineScope =
@@ -279,6 +291,10 @@ class AppContainer(app: OffleashApp) {
         // probe sees the same network identity as the resolve and the
         // player's own fetch.
         probeClient = okHttpClient,
+        // Round 3: the same window record the shared client's
+        // interceptor reads, so ladder candidates/winners shape the
+        // player's loads of the winning stream.
+        streamWindows = streamWindows,
         // Stream quality (Wave 2 parity): read at resolve time, so a
         // Settings change applies to the next resolve without restart.
         qualityProvider = { appPreferences.streamQuality },

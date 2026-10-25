@@ -75,6 +75,12 @@ class StreamShapeParityTest {
         return chain.proceeded!!
     }
 
+    private fun throughStack(request: Request, store: StreamWindowStore): Request {
+        val chain = FakeChain(request)
+        RangeInterceptor(store).intercept(chain)
+        return chain.proceeded!!
+    }
+
     private val gvUrl = "https://rr8---sn-example.googlevideo.com/videoplayback?expire=1"
 
     /** The ladder probe's request: no headers of its own (probeUrl). */
@@ -127,5 +133,32 @@ class StreamShapeParityTest {
         assertEquals("bytes=1048576-2097151", chunk.header("Range"))
         assertNull(chunk.header("User-Agent"))
         assertNull(chunk.header("Accept-Encoding"))
+    }
+
+    // -- Round 3: parity holds at the WINNING window, not only the default --
+
+    @Test
+    fun probeAndPlayerStayIdenticalAtTheWinningWindow() {
+        // The ladder won 64 KiB for this URL and recorded it; the
+        // probe fetch that won and the player's first fetch of the
+        // same URL must emerge with that exact window.
+        val store = StreamWindowStore()
+        store.recordWinner(gvUrl, 65536L)
+        val probe = throughStack(probeRequest(), store)
+        val player = throughStack(playerFirstFetchRequest(), store)
+        assertEquals("bytes=0-65535", probe.header("Range"))
+        assertEquals(probe.header("Range"), player.header("Range"))
+        assertNull(player.header("User-Agent"))
+        assertNull(player.header("Accept-Encoding"))
+    }
+
+    @Test
+    fun playerSeekFetchUsesTheWinningWindow() {
+        val store = StreamWindowStore()
+        store.recordWinner(gvUrl, 2048L)
+        val seek = throughStack(playerSeekRequest(), store)
+        assertEquals("bytes=5000-7047", seek.header("Range"))
+        assertNull(seek.header("User-Agent"))
+        assertNull(seek.header("Accept-Encoding"))
     }
 }

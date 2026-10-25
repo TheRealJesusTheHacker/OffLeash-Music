@@ -26,7 +26,9 @@ import dev.cyberdogs.offleash.core.playback.QualityPreference
 import dev.cyberdogs.offleash.core.playback.RepeatMode
 import dev.cyberdogs.offleash.core.playback.ResolvedStream
 import dev.cyberdogs.offleash.data.DownloadedPlayback
+import dev.cyberdogs.offleash.data.RangeInterceptor
 import dev.cyberdogs.offleash.data.RecentsStore
+import dev.cyberdogs.offleash.data.StreamWindowStore
 import dev.cyberdogs.offleash.ui.ErrorMessages
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -153,6 +155,53 @@ fun ladderProbeVerdict(attemptsSoFar: Int, probeStatus: Int?): LadderAction = wh
     else -> LadderAction.RE_RESOLVE
 }
 
+/** What the window descent should do after one probe at one window. */
+enum class WindowAction {
+    /** This window answered 2xx — it wins for the stream. */
+    WINNER,
+
+    /** Refused at this window — try the next smaller window. */
+    DESCEND,
+
+    /** Stop descending this resolution (winner or not, see caller). */
+    STOP,
+}
+
+/**
+ * Pure window-descent decision (round 3). The ladder descends
+ * [RangeInterceptor.STREAM_WINDOW_LADDER] WITHIN one resolution
+ * before re-resolving: a 403 at the current window descends to the
+ * next smaller window; a 2xx at ANY window wins immediately; any
+ * other outcome (a non-403 refusal, or a transport failure with no
+ * status at all) stops the descent for this resolution — shrinking
+ * the window is the specific answer to a 403-shaped refusal, not a
+ * generic retry — and the pair-level [ladderProbeVerdict] decides
+ * what happens next. A 403 at the LAST window also stops: the
+ * descent is exhausted and the pair verdict takes over.
+ */
+fun windowProbeVerdict(windowIndex: Int, windowCount: Int, probeStatus: Int?): WindowAction =
+    when {
+        probeStatus != null && probeStatus in 200..299 -> WindowAction.WINNER
+        probeStatus == 403 && windowIndex < windowCount - 1 -> WindowAction.DESCEND
+        else -> WindowAction.STOP
+    }
+
+/**
+ * A resolved stream plus the Range window its loads must use: the
+ * window the ladder probe won for it, or
+ * [RangeInterceptor.STREAM_RANGE_WINDOW_BYTES] when the stream was
+ * not probed (account road, or probing unwired). This is the
+ * hand-off type from resolution to the player: [windowBytes]
+ * travels with the stream and is recorded into the shared
+ * [StreamWindowStore] at the hand-off (see handToPlayer), where the
+ * shared stack's RangeInterceptor shapes the player's loads of
+ * this exact URL with it.
+ */
+data class ResolvedPlayback(
+    val info: StreamInfo,
+    val windowBytes: Long,
+)
+
 /**
  * Pure ladder rotation: which context pair number [attemptIndex]
  * (0-based) resolves on. The ladder starts on the context the resolver
@@ -198,6 +247,18 @@ class QueueController(
      * the player, the pre-ladder behaviour).
      */
     private val probeClient: OkHttpClient? = null,
+    /**
+     * The shared per-stream window record (round 3): the SAME
+     * [StreamWindowStore] instance the shared client's
+     * RangeInterceptor reads. The ladder records each candidate
+     * window here before probing (the bare probe fetch is then
+     * shaped with it by the interceptor), leaves the winning window
+     * recorded, and the hand-off re-records the winner for the URL
+     * the player is about to load. Null means the descent cannot
+     * shape probes, so the ladder falls back to probing the single
+     * default window per pair (the pre-round-3 behaviour).
+     */
+    private val streamWindows: StreamWindowStore? = null,
     /**
      * Supplies the current stream-quality preference. Read fresh at
      * every resolve (and at every ladder re-resolve) so a Settings
@@ -628,12 +689,36 @@ class QueueController(
                 return@launch
             }
 
-            handToPlayer(track, Uri.parse(stream.url), stream.mimeType)
+            handToPlayer(
+                track,
+                Uri.parse(stream.info.url),
+                stream.info.mimeType,
+                streamUrl = stream.info.url,
+                windowBytes = stream.windowBytes,
+            )
         }
     }
 
-    /** Hands one prepared item — a stream URL or a local file — to the player. */
-    private fun handToPlayer(track: Track, uri: Uri, mimeType: String?) {
+    /**
+     * Hands one prepared item — a stream URL or a local file — to the
+     * player. For a network stream ([streamUrl] + [windowBytes]
+     * given), the winning window is recorded into the shared
+     * [StreamWindowStore] BEFORE the item reaches the player, so the
+     * shared stack shapes the player's very first load of this URL
+     * with the window its probe won (round 3) — the record and the
+     * diagnostics line happen here, at the hand-off, never after.
+     */
+    private fun handToPlayer(
+        track: Track,
+        uri: Uri,
+        mimeType: String?,
+        streamUrl: String? = null,
+        windowBytes: Long? = null,
+    ) {
+        if (streamUrl != null && windowBytes != null) {
+            streamWindows?.recordWinner(streamUrl, windowBytes)
+            diagnostics.recordWinningWindow(windowBytes)
+        }
         val metadata = MediaMetadata.Builder()
             .setTitle(track.title)
             .setArtist(track.artists.joinToString(", "))
@@ -658,11 +743,12 @@ class QueueController(
     /**
      * Resolve [track] through the core road-switching resolver, applying
      * the auth-refusal revalidation retry and the anonymous-road probe
-     * ladder. Returns the [StreamInfo] to hand to the player. Throws the
+     * ladder. Returns the [ResolvedPlayback] to hand to the player —
+     * the stream plus the Range window its loads must use. Throws the
      * named failure (the resolver's original exception signed-out, or
      * [AllRoadsRefused] signed-in) when every road refuses.
      */
-    private suspend fun resolveWithRoads(track: Track): StreamInfo {
+    private suspend fun resolveWithRoads(track: Track): ResolvedPlayback {
         val resolver = PlaybackResolver(client)
         var auth = sessionProvider()
         while (true) {
@@ -821,6 +907,22 @@ class QueueController(
      * anyway — its own fetch and the player-stage 403 retry remain as
      * final chances; the ladder never errors earlier than we must.
      *
+     * Round 3 (window descent): WITHIN one pair's resolution, the
+     * probe is itself a descent over
+     * [RangeInterceptor.STREAM_WINDOW_LADDER] (1 MiB → 256 KiB →
+     * 64 KiB → 2 KiB). Before each probe fetch the candidate window
+     * is recorded into the shared [StreamWindowStore] for that URL,
+     * so the bare probe is shaped with exactly that window by the
+     * shared stack's RangeInterceptor; a 403 descends to the next
+     * smaller window BEFORE any re-resolve, and the first window to
+     * answer 2xx wins for that stream — it stays recorded, travels
+     * out in the returned [ResolvedPlayback], and is re-recorded at
+     * the hand-off so the player's loads of that stream are shaped
+     * with the winning window too. Every window tried is recorded
+     * into diagnostics (`probe-window:` lines). When no window store
+     * is wired the descent cannot shape probes, so each pair probes
+     * the single default window, as before round 3.
+     *
      * Account-road successes are never probed: the ladder is scoped to
      * the anonymous road only. When the account road refuses and the
      * anonymous cascade serves, the ladder runs on that result, starting
@@ -829,15 +931,18 @@ class QueueController(
     private suspend fun runLadderIfNeeded(
         track: Track,
         first: ResolvedStream,
-    ): StreamInfo {
-        if (first.servedByRoad != "anonymous") return first.info
+    ): ResolvedPlayback {
+        val defaultWindow = RangeInterceptor.STREAM_RANGE_WINDOW_BYTES
+        if (first.servedByRoad != "anonymous") {
+            return ResolvedPlayback(first.info, defaultWindow)
+        }
         val probe = probeClient
         if (probe == null) {
             diagnostics.log(
                 "ladder",
                 "no probe client wired — handing the resolved URL to the player unprobed",
             )
-            return first.info
+            return ResolvedPlayback(first.info, defaultWindow)
         }
         val road = YoutubeiContexts.ANONYMOUS_ROAD
         if (road.isEmpty()) {
@@ -845,7 +950,12 @@ class QueueController(
                 "ladder",
                 "anonymous road has no contexts — handing the resolved URL to the player",
             )
-            return first.info
+            return ResolvedPlayback(first.info, defaultWindow)
+        }
+        val windows = if (streamWindows != null) {
+            RangeInterceptor.STREAM_WINDOW_LADDER
+        } else {
+            listOf(defaultWindow)
         }
         val startContext = servedContextOf(first)
         // The last URL we managed to resolve; handed to the player when
@@ -889,26 +999,65 @@ class QueueController(
                             "final pair's resolve refused — handing the last resolved " +
                                 "URL to the player anyway",
                         )
-                        return lastInfo
+                        return ResolvedPlayback(lastInfo, windows.last())
                     }
                     pair++
                     continue
                 }
             }
-            val result = probeUrl(probe, info.url)
+            // Window descent within this pair's one resolution: each
+            // candidate window is recorded for the URL first, so the
+            // bare probe fetch is shaped with exactly that window by
+            // the shared stack; the first window answered 2xx wins.
+            var winningWindow: Long? = null
+            var pairResult: ProbeResult? = null
+            for (windowIndex in windows.indices) {
+                val window = windows[windowIndex]
+                streamWindows?.recordWinner(info.url, window)
+                val result = probeUrl(probe, info.url)
+                pairResult = result
+                diagnostics.recordProbeWindow(
+                    pair = pair,
+                    pairs = LADDER_MAX_PAIRS,
+                    contextName = pairContext.clientName,
+                    windowBytes = window,
+                    status = result.status,
+                    exceptionClass = result.exceptionClass,
+                )
+                when (windowProbeVerdict(windowIndex, windows.size, result.status)) {
+                    WindowAction.WINNER -> {
+                        winningWindow = window
+                        break
+                    }
+                    WindowAction.DESCEND -> continue
+                    WindowAction.STOP -> break
+                }
+            }
+            val result = pairResult ?: ProbeResult(status = null, exceptionClass = null)
+            val winner = winningWindow
             val statusText = when {
                 result.status != null -> "HTTP ${result.status}"
                 result.exceptionClass != null -> "probe failed (${result.exceptionClass})"
                 else -> "probe failed"
             }
             val pairLabel = "probe $pair/$LADDER_MAX_PAIRS context ${pairContext.clientName}"
+            if (winner != null) {
+                diagnostics.recordRoadAttempt(
+                    road = "anonymous",
+                    outcome = "$pairLabel $statusText window=$winner — serving this URL",
+                )
+                return ResolvedPlayback(info, winner)
+            }
             when (ladderProbeVerdict(pair, result.status)) {
                 LadderAction.PROCEED -> {
+                    // Unreachable: a 2xx probe sets a winning window
+                    // above. Kept so the pair verdict's full matrix
+                    // stays handled in one place.
                     diagnostics.recordRoadAttempt(
                         road = "anonymous",
                         outcome = "$pairLabel $statusText — serving this URL",
                     )
-                    return info
+                    return ResolvedPlayback(info, windows.first())
                 }
                 LadderAction.HAND_TO_PLAYER_ANYWAY -> {
                     diagnostics.recordRoadAttempt(
@@ -918,9 +1067,10 @@ class QueueController(
                     diagnostics.log(
                         "ladder",
                         "all $LADDER_MAX_PAIRS probes refused — handing the last resolved " +
-                            "URL to the player anyway",
+                            "URL to the player anyway, at the smallest window " +
+                            "(${windows.last()} bytes)",
                     )
-                    return info
+                    return ResolvedPlayback(info, windows.last())
                 }
                 LadderAction.RE_RESOLVE -> {
                     diagnostics.recordRoadAttempt(
@@ -932,7 +1082,7 @@ class QueueController(
             }
         }
         // Unreachable: the verdict on the final pair always returns.
-        return lastInfo
+        return ResolvedPlayback(lastInfo, windows.last())
     }
 
     /** Outcome of one ladder probe: an HTTP status, or the transport failure's class. */
@@ -944,6 +1094,12 @@ class QueueController(
      * all, so the shared stack shapes it (bounded window Range,
      * default UA, no Accept-Encoding) precisely as it shapes the
      * player's first fetch, and the first bytes are actually read.
+     * Round 3: the bounded window the stack shapes it with is the
+     * ladder's current CANDIDATE window for this URL, recorded in
+     * the shared StreamWindowStore by runLadderIfNeeded just before
+     * this call — the probe still presets nothing itself, so a
+     * window's probe verdict is a verdict on the exact shape the
+     * player would send at that window.
      * A 2xx here therefore predicts the player's own first fetch
      * instead of merely proving the URL answers some other shape.
      *

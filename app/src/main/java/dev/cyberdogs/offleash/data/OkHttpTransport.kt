@@ -15,21 +15,26 @@ import java.util.concurrent.TimeUnit
  * same address-family choices), because googlevideo stream URLs are
  * bound to the network identity that resolved them. The scoped
  * [RangeInterceptor] normalizes googlevideo GETs to bounded ranges
- * and records their first-fetch status into diagnostics.
+ * — shaped per stream by [streamWindows], the shared record of the
+ * window the ladder probe won for each URL (round 3) — and records
+ * EVERY stream load's status into diagnostics.
  *
  * There is deliberately NO logging interceptor here, at any level:
  * authenticated requests carry session material in their headers,
  * and header-bearing request logging is how that material leaks.
  * A contract test pins the absence.
  */
-internal fun buildSharedClient(diagnostics: PlaybackDiagnostics): OkHttpClient =
+internal fun buildSharedClient(
+    diagnostics: PlaybackDiagnostics,
+    streamWindows: StreamWindowStore = StreamWindowStore(),
+): OkHttpClient =
     OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         .addInterceptor(
-            RangeInterceptor { status, host, shape ->
-                diagnostics.recordFirstFetch(status, host, shape)
+            RangeInterceptor(streamWindows) { status, host, shape ->
+                diagnostics.recordStreamLoad(status, host, shape)
             },
         )
         .build()
