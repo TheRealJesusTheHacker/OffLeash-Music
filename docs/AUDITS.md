@@ -1,5 +1,24 @@
 # OffLeash Music — Audit Log
 
+## 2026-10-25 — Playback hunt round 3 CLOSED (coordinator): the Range window was the refusing field; adaptive window shipped
+
+**Landing:** fix commit `0709bcfa` (branch `hunt-window`, parented on `db3af086`) — branch CI run 40174857069 SUCCESS, fast-forwarded to main, main CI run 40175191612 SUCCESS (artifact taken from this run). Suites: core 116, app 203 per flavor.
+
+**Lane A field matrix (sandbox, live googlevideo, 116 cells; fresh app-parity resolutions of `lY5V4hSLWY8` and `pYAg_d-iQLk`, iOS 20.10.4 primary + ANDROID context replication; full table in the hunt workspace `matrix-results.md`):**
+- Bounded windows ≤ 256 KiB: **43/43 answered cells → 206** (bytes=0-0, 2 KiB, 64 KiB, 256 KiB — both tracks, both contexts, every discipline).
+- The production 1 MiB window: **36×403 vs 6×206** among 42 answered in-range cells (86% refused); on `lY5V4hSLWY8`, **0 served / 22 refused** across BOTH contexts. Same-URL proof: one fresh URL answered 1 MiB → [302, 403] and 2 KiB seconds later → [206].
+- Absent Range → 403 ×3/3; open-ended `bytes=0-` → 403 ×3/3 (rounds 1–2 confirmed again).
+- Connection discipline (fresh / pooled / pool-with-reconnect) NEVER changed an answer, and at 1 MiB refusal was present at load #0 and every in-range offset — no connection-discipline fix was warranted; the window is the field. At 2 KiB every offset served.
+- The refusal threshold lies between 256 KiB (always served) and 1 MiB (usually refused); 512 KiB was not in the matrix — unmeasured, and the descent makes the exact threshold unnecessary.
+- Per-instance leniency is real: within one signed URL instance the gradient was perfectly consistent; across instances strictness varies — the likely shape of the phone's intermittency (a lenient instance plays, a strict one 403s, same track, same app).
+
+**Mechanism, final form:** the gate refuses large Range windows on strict URL instances. Round 3's code (Lane B entry below) makes the window a probed, per-stream variable: descent 1 MiB → 256 KiB → 64 KiB → 2 KiB inside one resolution, winner handed to the player by construction, every player load logged. The pre-round-3 probe could never have discovered this: it set no window of its own, so the interceptor shaped every probe to the same fixed 1 MiB — the field was never a variable in any verdict until this round.
+
+**Delivered build:** `OffLeash-Hunt-0.6.2-window-hunt1.apk` (~/workspace/offleash-apk/), 21,095,532 B, SHA-256 `53a7dee0f7092a9154ec49d63711adbf4944c9d7b097dad808c62994f33f1068`, package `dev.cyberdogs.offleash.hunt`, versionCode 8 / versionName `0.6.2-window-hunt1`, signer G3 `3176e075d152787d2f4d5224d26f42ca38a88563abcc3d4a12cb4a17081e84b4` (coordinator-verified from the main-CI artifact, two methods). Installs in place over the sweep build. No public release.
+
+**What remains unproven:** on-device behavior on the owner's carrier — this build has not yet run on his phone. His next diagnostics screenshot is decisive either way: `probe-window:` lines descending to a winner + `window: winner` + `load:` lines answering 206 = the fix holds on his network. `probe-window:` 403 at EVERY rung including 2 KiB on an instance where a re-resolution then wins would refute window-only causation and reopen the hunt at the per-instance level.
+
+
 ## 2026-10-25 — Playback hunt round 3 (Lane B, code): adaptive Range window
 
 **Starting HEAD:** `db3af086` (0.6.1-streamfix + Sweep #5; suites core 116 / app 182 per flavor). **Branch:** `hunt-window` (coordinator integrates; no release).
