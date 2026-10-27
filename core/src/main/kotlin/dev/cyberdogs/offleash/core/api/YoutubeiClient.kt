@@ -418,7 +418,43 @@ class YoutubeiClient(
         } catch (e: Exception) {
             return IdentityLookup.Failed("account response was not valid JSON (${e.message})")
         }
-        return IdentityLookup.Found(parseSwitcherIdentities(root))
+        // The parse walk is total by construction — every helper is
+        // nullable-safe, and the 2026-10-27 crash hunt proved it
+        // against 23 structural variants (no/several selected, many
+        // sections, missing optional fields, alien renderer kinds,
+        // deep and wide trees) without one escape. This boundary is
+        // still wrapped, Throwable and not just Exception: the input
+        // is a network response nobody modeled exhaustively, and a
+        // pathological tree failing with an Error (a recursive walk
+        // running out of stack) must degrade to the diagnostics card
+        // naming the stage, never to a dead process. The lookup's
+        // "never throws" contract is the load-bearing one.
+        val identities = try {
+            parseSwitcherIdentities(root)
+        } catch (t: Throwable) {
+            return IdentityLookup.Failed(
+                "account response couldn't be read (${t.javaClass.simpleName})" +
+                    " — shape: ${switcherShapeSummary(root)}"
+            )
+        }
+        return IdentityLookup.Found(identities, switcherShapeSummary(root))
+    }
+
+    /**
+     * What the switcher answer looked like, for the diagnostics
+     * panel: the top-level keys and how many account sections and
+     * identity items the menu carried. Names and counts only — no
+     * value from the response is ever included. Defensive by
+     * contract: a summary that itself fails reads "unavailable"
+     * rather than becoming the failure it was describing.
+     */
+    private fun switcherShapeSummary(root: JsonElement): String = try {
+        val topKeys = root.asObj()?.keys?.joinToString(", ") ?: "not an object"
+        val sections = findAll(root, "accountSectionListRenderer").size
+        val items = findAll(root, "accountItem").size
+        "top-level keys [$topKeys], $sections account section(s), $items identity item(s)"
+    } catch (t: Throwable) {
+        "unavailable (${t.javaClass.simpleName})"
     }
 
     /**

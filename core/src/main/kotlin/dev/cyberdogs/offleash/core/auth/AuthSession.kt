@@ -96,8 +96,20 @@ data class AuthSession(
 
 /** The outcome of asking the account switcher who a session belongs to. */
 sealed interface IdentityLookup {
-    /** The endpoint answered; [identities] may be empty (signed-out). */
-    data class Found(val identities: List<AccountIdentity>) : IdentityLookup
+    /**
+     * The endpoint answered; [identities] may be empty (signed-out).
+     *
+     * [shapeSummary] describes the menu the answer carried — section
+     * and item counts and the top-level keys, names and counts only,
+     * never values — so a failure downstream can be diagnosed from
+     * the sign-in diagnostics panel (2026-10-27 crash hunt: the
+     * first real response the app ever parsed was also the first it
+     * could not describe).
+     */
+    data class Found(
+        val identities: List<AccountIdentity>,
+        val shapeSummary: String? = null,
+    ) : IdentityLookup
 
     /** HTTP 401/403 — the session itself was refused. */
     data class Rejected(val httpStatus: Int) : IdentityLookup
