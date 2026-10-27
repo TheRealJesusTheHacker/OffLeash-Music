@@ -60,6 +60,10 @@ class OffleashApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // First, before anything can fail: the last-crash recorder,
+        // so a dying process leaves its trace where the next launch's
+        // sign-in screen can show it (2026-10-27 crash hunt).
+        dev.cyberdogs.offleash.data.CrashReporter.install(this)
         container = AppContainer(this)
     }
 }

@@ -108,6 +108,17 @@ fun SignInScreen(
     var blockedNote by remember { mutableStateOf<String?>(null) }
     var pasteText by remember { mutableStateOf("") }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    // The last crash the app recorded, if any (2026-10-27 crash
+    // hunt): after a crash this screen is where the owner lands to
+    // retry, so this is where the trace surfaces — local only,
+    // dismissible, and gone once cleared.
+    var savedCrash by remember {
+        mutableStateOf(
+            dev.cyberdogs.offleash.data.CrashReporter.read(
+                dev.cyberdogs.offleash.data.CrashReporter.fileIn(context)
+            )
+        )
+    }
 
     // One pipeline for both capture paths: ask the manager, then —
     // whatever the answer — wipe the WebView's jar, because the
@@ -123,7 +134,21 @@ fun SignInScreen(
         errorMessage = null
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                manager.completeSignIn(cookieProvider)
+                // Last-resort guard (2026-10-27 crash hunt): the
+                // manager's confirmation is total by contract, but
+                // this launch has no exception handler — anything
+                // that ever escaped from here crashed the whole app
+                // (0.6.3's sign-in crash). A surprise becomes the
+                // failure card, never a dead process.
+                try {
+                    manager.completeSignIn(cookieProvider)
+                } catch (t: Throwable) {
+                    if (t is kotlinx.coroutines.CancellationException) throw t
+                    SignInAttempt.Failed(
+                        "Something went wrong while confirming the sign-in. " +
+                            "Nothing was saved. Try signing in again."
+                    )
+                }
             }
             wipeWebViewData(context)
             when (result) {
@@ -157,6 +182,41 @@ fun SignInScreen(
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
+
+        savedCrash?.let { trace ->
+            Spacer(Modifier.height(12.dp))
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        text = "The app stopped during the last sign-in attempt. " +
+                            "Here's what it recorded:",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = trace,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(
+                        onClick = {
+                            dev.cyberdogs.offleash.data.CrashReporter.clear(
+                                dev.cyberdogs.offleash.data.CrashReporter.fileIn(context)
+                            )
+                            savedCrash = null
+                        },
+                    ) { Text("Clear") }
+                }
+            }
+        }
 
         blockedNote?.let { note ->
             Spacer(Modifier.height(12.dp))
