@@ -1,6 +1,12 @@
 package dev.cyberdogs.offleash.ui
 
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -202,6 +208,19 @@ fun OffleashRoot(container: AppContainer) {
             NavHost(
                 navController = navController,
                 startDestination = "home",
+                // One motion language for every route change
+                // (2026-10-27 polish pass): a short fade with a
+                // slight forward slide in, a plain fade back out.
+                enterTransition = {
+                    fadeIn(tween(NAV_TRANSITION_MS)) +
+                        slideInHorizontally(tween(NAV_TRANSITION_MS)) { it / 8 }
+                },
+                exitTransition = { fadeOut(tween(NAV_TRANSITION_MS)) },
+                popEnterTransition = { fadeIn(tween(NAV_TRANSITION_MS)) },
+                popExitTransition = {
+                    fadeOut(tween(NAV_TRANSITION_MS)) +
+                        slideOutHorizontally(tween(NAV_TRANSITION_MS)) { it / 8 }
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
@@ -435,3 +454,6 @@ private fun MiniPlayer(
         }
     }
 }
+
+/** Route-change motion duration (polish pass, 2026-10-27). */
+private const val NAV_TRANSITION_MS = 220
