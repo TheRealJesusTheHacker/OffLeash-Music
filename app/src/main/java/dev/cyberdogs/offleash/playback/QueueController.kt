@@ -134,6 +134,16 @@ enum class LadderAction {
 /** Number of (fresh resolve → probe) pairs the ladder runs at most. */
 const val LADDER_MAX_PAIRS: Int = 3
 
+/**
+ * Consecutive failures autoplay tolerates among the tracks IT lined
+ * up before it stops the chain and surfaces the failure like any
+ * other (2026-10-27). A track the listener chose always stops on
+ * failure (SPEC §4); a track autoplay chose skips forward instead —
+ * but never forever: three dead tracks in a row means the road is
+ * broken, not the songs, and spinning on is worse than stopping.
+ */
+const val MAX_AUTOPLAY_CONSECUTIVE_FAILURES: Int = 3
+
 /** Bytes the ladder probe reads from a served response (see probeUrl). */
 const val PROBE_READ_BYTES: Long = 2048L
 
@@ -292,6 +302,26 @@ class QueueController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var resolveJob: Job? = null
+
+    // -- Autoplay continuation (2026-10-27 queue-advancement hunt) ------
+    //
+    // The owner's report: "I click on the song, it plays, then it
+    // stops." Queues were built for list taps all along; the chain
+    // broke at the END — onTrackEnded/next() found queue.next() null
+    // and paused, and nothing anywhere continued with watch-next
+    // tracks. The fix reuses the radio machinery (client.related +
+    // the pure continuation builder in RadioQueue.kt): when the
+    // queue exhausts, related tracks are appended and play continues
+    // through the same resolveAndPlay path as a tapped track.
+
+    /** The in-flight related-fetch that extends an exhausted queue. */
+    private var autoplayJob: Job? = null
+
+    /** Video ids the current autoplay chain itself lined up. */
+    private val autoplayTrackIds = mutableSetOf<String>()
+
+    /** Consecutive failures among autoplay-lined tracks (see the cap). */
+    private var consecutiveAutoplayFailures: Int = 0
     private var retriedCurrentTrack: Boolean = false
     private var revalidatedCurrentTrack: Boolean = false
     private var lastQueueIndex: Int = -1
@@ -341,6 +371,7 @@ class QueueController(
                     setResolving(false)
                     if (player.playWhenReady) {
                         retriedCurrentTrack = false
+                        consecutiveAutoplayFailures = 0
                         diagnostics.recordReady()
                     }
                 }
@@ -373,6 +404,16 @@ class QueueController(
                     syncPlaybackState()
                     return
                 }
+                // Autoplay-lined tracks skip forward on failure
+                // instead of stalling the chain (user-chosen tracks
+                // keep the SPEC §4 stop).
+                val failedTrack = queue.current()
+                if (failedTrack != null &&
+                    trySkipFailedAutoplayTrack(failedTrack, "player error ${error.errorCode}")
+                ) {
+                    syncPlaybackState()
+                    return
+                }
                 setResolving(false)
                 _namedError.value = ErrorMessages.playerMessage(error.errorCode, httpStatus)
                 syncPlaybackState()
@@ -400,8 +441,23 @@ class QueueController(
 
     // -- Public API ---------------------------------------------------------
 
+    /**
+     * The listener took the wheel: any autoplay chain belonging to
+     * the previous queue is over. Cancels the in-flight continuation
+     * fetch and forgets which tracks autoplay had lined up, so a
+     * failure on the NEW queue stops the way SPEC §4 says a chosen
+     * track's failure stops.
+     */
+    private fun resetAutoplayChain() {
+        autoplayJob?.cancel()
+        autoplayJob = null
+        autoplayTrackIds.clear()
+        consecutiveAutoplayFailures = 0
+    }
+
     fun playTracks(tracks: List<Track>, startIndex: Int) {
         if (tracks.isEmpty()) return
+        resetAutoplayChain()
         queue.setQueue(tracks, startIndex.coerceIn(tracks.indices))
         syncQueueState()
         queue.current()?.let { resolveAndPlay(it) }
@@ -424,9 +480,15 @@ class QueueController(
         if (nextTrack != null) {
             resolveAndPlay(nextTrack)
         } else {
-            // End of queue with repeat off: stop where we are.
-            player.pause()
-            syncPlaybackState()
+            // End of queue with repeat off: keep going with
+            // watch-next tracks instead of stopping (autoplay).
+            val seed = queue.current()
+            if (seed != null) {
+                continueWithAutoplay(seed, fromTrackEnd = false)
+            } else {
+                player.pause()
+                syncPlaybackState()
+            }
         }
     }
 
@@ -471,6 +533,7 @@ class QueueController(
     }
 
     fun playQueueItem(index: Int) {
+        resetAutoplayChain()
         val track = queue.playIndex(index) ?: return
         syncQueueState()
         resolveAndPlay(track)
@@ -545,6 +608,10 @@ class QueueController(
     }
 
     private fun expireSleepTimer() {
+        // Autoplay never defeats the sleep timer: a continuation
+        // fetch still in flight dies with it.
+        autoplayJob?.cancel()
+        autoplayJob = null
         cancelSleepTimer()
         player.pause()
         syncPlaybackState()
@@ -624,9 +691,147 @@ class QueueController(
         if (nextTrack != null) {
             resolveAndPlay(nextTrack)
         } else {
-            player.pause()
-            syncPlaybackState()
+            // Queue exhausted: autoplay continues with watch-next
+            // tracks instead of stopping (the owner's "it plays,
+            // then it stops" report). The track that just ended is
+            // still the queue's current — it seeds the continuation.
+            val seed = queue.current()
+            if (seed != null) {
+                continueWithAutoplay(seed, fromTrackEnd = true)
+            } else {
+                player.pause()
+                syncPlaybackState()
+            }
         }
+    }
+
+    /**
+     * Extends an exhausted queue with the seed's related/watch-next
+     * tracks and plays on. Default behavior, not a setting: the
+     * product is hands-free listening.
+     *
+     * Guards, in order:
+     * - One fetch at a time: a second end-of-queue while a fetch is
+     *   in flight is a no-op.
+     * - Listener takeover: if the queue was replaced while fetching
+     *   (a new tap, a radio start), the continuation is abandoned
+     *   silently — the listener's queue wins.
+     * - The sleep timer always wins: both its end-of-track mode and
+     *   a timed deadline that passed during the fetch stop playback
+     *   instead of continuing.
+     * - An empty continuation or a failed fetch stops gracefully
+     *   with a visible, honest state — never a silent spin.
+     */
+    private fun continueWithAutoplay(seed: Track, fromTrackEnd: Boolean) {
+        if (autoplayJob?.isActive == true) return
+        val queueAtRequest = queue.tracks
+        val indexAtRequest = queue.currentIndex
+        setResolving(true)
+        autoplayJob = scope.launch {
+            val related = try {
+                withContext(Dispatchers.IO) { client.related(seed.videoId) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            if (queue.tracks !== queueAtRequest) {
+                // The listener replaced the queue mid-fetch; their
+                // own resolve owns the resolving flag now.
+                if (resolveJob?.isActive != true) setResolving(false)
+                return@launch
+            }
+            if (fromTrackEnd &&
+                sleepTimerShouldStopAtTrackEnd(_sleepTimerState.value)
+            ) {
+                cancelSleepTimer()
+                player.pause()
+                syncPlaybackState()
+                diagnostics.log(
+                    "sleep-timer",
+                    "end of track reached — playback stopped",
+                )
+                setResolving(false)
+                return@launch
+            }
+            val timer = _sleepTimerState.value
+            if (timer.isArmed &&
+                sleepTimerShouldPause(timer, System.currentTimeMillis())
+            ) {
+                expireSleepTimer()
+                setResolving(false)
+                return@launch
+            }
+            val continuation = if (related == null) {
+                emptyList()
+            } else {
+                autoplayContinuation(
+                    seed = seed,
+                    related = related,
+                    queuedIds = queueAtRequest.mapTo(HashSet()) { it.videoId },
+                )
+            }
+            if (continuation.isEmpty()) {
+                setResolving(false)
+                player.pause()
+                syncPlaybackState()
+                _namedError.value = if (related == null) {
+                    "Playback stopped — couldn't reach YouTube to line up a next song."
+                } else {
+                    "Playback stopped — YouTube didn't offer a next song to autoplay."
+                }
+                diagnostics.log(
+                    "autoplay",
+                    if (related == null) {
+                        "related fetch failed at end of queue"
+                    } else {
+                        "no continuation offered at end of queue"
+                    },
+                )
+                return@launch
+            }
+            autoplayTrackIds.addAll(continuation.map { it.videoId })
+            queue.setQueue(queueAtRequest + continuation, indexAtRequest)
+            syncQueueState()
+            diagnostics.log(
+                "autoplay",
+                "lined up ${continuation.size} related tracks after ${seed.videoId}",
+            )
+            val nextTrack = queue.next()
+            if (nextTrack != null) {
+                resolveAndPlay(nextTrack)
+            } else {
+                setResolving(false)
+                player.pause()
+                syncPlaybackState()
+            }
+        }
+    }
+
+    /**
+     * Skips a failed AUTOPLAY-lined track forward instead of
+     * stalling the chain. Returns true when the failure was handled
+     * by advancing. Only tracks autoplay itself lined up qualify —
+     * a track the listener chose stops on failure exactly as SPEC
+     * §4 requires — and only up to [MAX_AUTOPLAY_CONSECUTIVE_FAILURES]
+     * in a row (a success resets the count in the READY transition).
+     */
+    private fun trySkipFailedAutoplayTrack(failed: Track, stage: String): Boolean {
+        if (failed.videoId !in autoplayTrackIds) return false
+        consecutiveAutoplayFailures += 1
+        if (consecutiveAutoplayFailures > MAX_AUTOPLAY_CONSECUTIVE_FAILURES) {
+            return false
+        }
+        val next = queue.next() ?: return false
+        diagnostics.log(
+            "autoplay",
+            "autoplay track ${failed.videoId} failed at $stage — " +
+                "skipping to ${next.videoId} " +
+                "($consecutiveAutoplayFailures/$MAX_AUTOPLAY_CONSECUTIVE_FAILURES)",
+        )
+        syncQueueState()
+        resolveAndPlay(next)
+        return true
     }
 
     private fun resolveAndPlay(track: Track, isRetry: Boolean = false) {
@@ -679,6 +884,11 @@ class QueueController(
                 setResolving(false)
                 throw e
             } catch (e: Exception) {
+                // An autoplay-lined track that fails to resolve skips
+                // forward instead of stalling the chain.
+                if (trySkipFailedAutoplayTrack(track, "resolve")) {
+                    return@launch
+                }
                 // Named failure: stop the queue, keep the position, tell
                 // the user (SPEC §4/§6). No silent skip. Resolver-stage
                 // diagnostics were already recorded inside resolveWithRoads.

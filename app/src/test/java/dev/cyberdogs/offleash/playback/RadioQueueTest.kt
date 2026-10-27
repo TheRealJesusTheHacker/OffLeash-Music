@@ -59,6 +59,50 @@ class RadioQueueTest {
         )
     }
 
+    // -- autoplayContinuation (2026-10-27 queue-advancement hunt) -----
+
+    @Test
+    fun continuationKeepsApiOrderAndDropsTheSeed() {
+        val seed = track("seed")
+        val related = listOf(track("a"), track("seed"), track("b"))
+        val continuation = autoplayContinuation(seed, related, queuedIds = setOf("seed"))
+        assertEquals(listOf("a", "b"), continuation.map { it.videoId })
+    }
+
+    @Test
+    fun continuationExcludesEverythingAlreadyQueued() {
+        // Played and upcoming alike: the chain must never loop back
+        // over the queue it extends.
+        val seed = track("now")
+        val related = listOf(track("played"), track("now"), track("upnext"), track("fresh"))
+        val continuation = autoplayContinuation(
+            seed,
+            related,
+            queuedIds = setOf("played", "now", "upnext"),
+        )
+        assertEquals(listOf("fresh"), continuation.map { it.videoId })
+    }
+
+    @Test
+    fun continuationDedupesInsideRelated() {
+        val continuation = autoplayContinuation(
+            track("seed"),
+            listOf(track("a"), track("a"), track("b")),
+            queuedIds = setOf("seed"),
+        )
+        assertEquals(listOf("a", "b"), continuation.map { it.videoId })
+    }
+
+    @Test
+    fun continuationIsEmptyWhenNothingNewIsOffered() {
+        val continuation = autoplayContinuation(
+            track("seed"),
+            listOf(track("seed"), track("only")),
+            queuedIds = setOf("seed", "only"),
+        )
+        assertEquals(emptyList<Track>(), continuation)
+    }
+
     @Test
     fun shareUrlIsTheCanonicalMusicUrl() {
         assertEquals(

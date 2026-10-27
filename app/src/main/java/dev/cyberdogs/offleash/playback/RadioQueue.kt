@@ -50,6 +50,36 @@ fun buildRadioQueue(
     return queue
 }
 
+/**
+ * The tracks autoplay appends when a queue runs out (2026-10-27
+ * queue-advancement hunt): the seed's related/watch-next list in
+ * the API's own order, minus the seed itself and minus EVERY track
+ * already in the queue — played or upcoming — so the chain always
+ * moves forward and can never loop back over what it already lined
+ * up or played. Deduped by videoId, first occurrence wins.
+ *
+ * Deliberately NOT [buildRadioQueue]: radio REPLACES the queue with
+ * the seed at its head; autoplay APPENDS to the queue the listener
+ * already has, behind its current position. Both draw from the same
+ * `related()` machinery — one source of watch-next truth, two
+ * honest uses.
+ */
+fun autoplayContinuation(
+    seed: Track,
+    related: List<Track>,
+    queuedIds: Set<String>,
+): List<Track> {
+    val seen = queuedIds.toMutableSet()
+    seen.add(seed.videoId)
+    val continuation = mutableListOf<Track>()
+    for (track in related) {
+        if (seen.add(track.videoId)) {
+            continuation.add(track)
+        }
+    }
+    return continuation
+}
+
 /** The track's canonical YouTube Music URL — the share target. */
 fun youtubeMusicTrackUrl(videoId: String): String =
     "https://music.youtube.com/watch?v=$videoId"
