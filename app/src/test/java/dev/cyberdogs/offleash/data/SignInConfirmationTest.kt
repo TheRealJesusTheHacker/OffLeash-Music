@@ -115,11 +115,62 @@ class SignInConfirmationTest {
 
         assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
         assertTrue(
-            (result as SignInAttempt.Failed).reason.contains("didn't include a usable"),
+            (result as SignInAttempt.Failed).reason.contains("didn't give the app a usable"),
         )
         // One re-read proved the capture unchanged; waiting cannot
         // change cookies that are not changing, so the window stops.
         assertEquals(2, reads)
+        assertEquals(0, transport.accountCallCount)
+    }
+
+    // ------------------------------------------------------------------
+    // Cookie hunt (2026-10-27): 0.6.4 on the owner's phone read the
+    // capture EMPTY twice inside two seconds and the unchanged-abort
+    // sealed it — "capture unchanged between attempts" — while the
+    // WebView showed the signed-in page. Two identical EMPTY reads
+    // prove only that nothing had landed yet; the sign-in flow can
+    // plant the session cookies after them. The unchanged exemption
+    // now applies only to a NON-BLANK capture (the pasted-garbage
+    // case above, which keeps its early stop).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun blankCapturesDoNotStopTheWindow() = runBlocking {
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
+        var reads = 0
+        val provider: suspend () -> String = {
+            reads++
+            if (reads <= 2) "" else FakeAccountTransport.RAW_COOKIE
+        }
+
+        val result = manager.completeSignIn(provider)
+
+        assertTrue("expected Success, was $result", result is SignInAttempt.Success)
+        assertEquals(3, reads)
+        assertEquals(1, transport.accountCallCount)
+    }
+
+    @Test
+    fun blankCaptureThroughoutExhaustsEveryAttempt() = runBlocking {
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
+        var reads = 0
+        val provider: suspend () -> String = {
+            reads++
+            ""
+        }
+
+        val result = manager.completeSignIn(provider)
+
+        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
+        assertTrue(
+            (result as SignInAttempt.Failed).reason.contains("didn't give the app a usable"),
+        )
+        // No early stop on empty reads: the full window ran.
+        assertEquals(delays.size + 1, reads)
         assertEquals(0, transport.accountCallCount)
     }
 

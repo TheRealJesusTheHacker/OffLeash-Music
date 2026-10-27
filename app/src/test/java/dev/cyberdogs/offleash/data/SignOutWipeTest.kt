@@ -80,7 +80,7 @@ class SignOutWipeTest {
         assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
         assertTrue(
             (result as SignInAttempt.Failed).reason.startsWith(
-                "That sign-in didn't include a usable YouTube session",
+                "That sign-in didn't give the app a usable YouTube session",
             ),
         )
         assertTrue(store.isWipedClean())

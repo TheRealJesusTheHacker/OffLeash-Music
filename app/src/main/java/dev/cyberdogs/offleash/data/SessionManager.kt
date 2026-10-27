@@ -132,7 +132,16 @@ class SessionManager(
      * from patience: if the captured cookies are implausible AND the
      * re-read string is byte-identical to the previous attempt's,
      * waiting cannot change them, so the attempt fails at the subset
-     * stage immediately rather than spinning the window out.
+     * stage immediately rather than spinning the window out. The
+     * exemption never applies to a BLANK capture (2026-10-27 cookie
+     * hunt): an empty read proves only that nothing had landed in
+     * the store at that instant — the sign-in page may still be
+     * mid-redirect, planting the session cookies after the read —
+     * so identical empty reads are not evidence of impossibility
+     * and the window always runs its full course on them. On the
+     * owner's phone, 0.6.4 read empty twice inside the first two
+     * seconds, called the capture "unchanged", and gave up while
+     * the WebView below showed the signed-in page.
      *
      * Every stage of every attempt is recorded in [signInDiagnostics]
      * (cookie names and outcome classes only — never values), so a
@@ -160,7 +169,7 @@ class SessionManager(
             signInDiagnostics.recordCookieStage(cookies)
             if (!SessionCookies.isPlausibleSession(cookies)) {
                 lastFailure = SignInAttempt.Failed(SUBSET_REASON)
-                if (raw == previousRaw) {
+                if (raw.isNotBlank() && raw == previousRaw) {
                     signInDiagnostics.log(
                         "cookies",
                         "capture unchanged between attempts — the window cannot change these cookies; stopping at the subset stage",
@@ -491,10 +500,19 @@ class SessionManager(
                 "even though the sign-in page finished and the session " +
                 "cookies were all there. Nothing was saved. Try signing in again."
 
+        // Copy discipline (2026-10-27 cookie hunt): this card is
+        // shown when the app's own reads never found the session —
+        // including 0.6.4's run, where the page HAD finished loading,
+        // signed in, while the capture read empty and this card told
+        // the owner to let the page finish loading. The message now
+        // names what the APP did and what it found, never a page
+        // state the diagnostics themselves contradict.
         const val SUBSET_REASON =
-            "That sign-in didn't include a usable YouTube session. " +
-                "Sign in again and let the YouTube Music page finish loading, " +
-                "or paste a cookie from music.youtube.com."
+            "That sign-in didn't give the app a usable YouTube session. " +
+                "The app kept re-reading the sign-in window and never " +
+                "found YouTube's session cookies in it — nothing was " +
+                "stored. Sign in again, or paste a cookie from " +
+                "music.youtube.com."
 
         const val REACH_REASON =
             "Couldn't reach YouTube to verify the sign-in — " +
