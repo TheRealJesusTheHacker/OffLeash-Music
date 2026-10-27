@@ -40,9 +40,18 @@ class AutoDownloadLikedWorker(
         val app = applicationContext as? OffleashApp ?: return Result.success()
         val container = app.container
         if (!container.appPreferences.autoDownloadLiked) return Result.success()
-        val auth = container.sessionManager.currentAuthSession() ?: return Result.success()
         val liked = try {
-            withContext(Dispatchers.IO) { container.client.likedSongs(auth) }
+            val page = withContext(Dispatchers.IO) {
+                // The token road first (0.7.0), the cookie session
+                // as the fallback — the same order as every surface.
+                val bearer = container.currentBearerToken()
+                when {
+                    bearer != null -> container.client.likedSongsOAuth(bearer)
+                    else -> container.sessionManager.currentAuthSession()
+                        ?.let { container.client.likedSongs(it) }
+                }
+            }
+            page ?: return Result.success()
         } catch (e: Exception) {
             // A network-shaped failure gets WorkManager's backoff; the
             // manager's health handling owns anything session-shaped.

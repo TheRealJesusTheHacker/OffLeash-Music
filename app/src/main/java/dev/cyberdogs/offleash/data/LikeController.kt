@@ -37,6 +37,18 @@ class LikeController(
     private val client: YoutubeiClient,
     private val preferences: AppPreferences,
     private val sessionProvider: () -> AuthSession?,
+    /**
+     * The Google OAuth access token (0.7.0). IO THREADS ONLY — the
+     * provider may refresh the token, which is blocking network
+     * work. When it yields a token, that token is the account road
+     * for likes, ahead of the cookie session. [bearerSessionPresent]
+     * is its cheap companion (a stored Google session exists), safe
+     * on any thread, for the branch decisions that must not block.
+     * Both default to none so existing constructions (and the
+     * cookie road alone) behave exactly as before.
+     */
+    private val bearerProvider: () -> String? = { null },
+    private val bearerSessionPresent: () -> Boolean = { false },
     private val scope: CoroutineScope,
 ) {
 
@@ -79,7 +91,7 @@ class LikeController(
         if (optimistic == current) return // a write for this track is already in flight
         _states.value = _states.value + (track.videoId to optimistic)
         val auth = sessionProvider()
-        if (auth == null) {
+        if (auth == null && !bearerSessionPresent()) {
             // Device-only like: persist locally and finish — there is
             // no account write to confirm or roll back.
             persistLocal()
@@ -87,13 +99,33 @@ class LikeController(
             return
         }
         scope.launch {
+            // The bearer is read HERE, on the IO thread: obtaining it
+            // can mean a token refresh, and a UI-thread toggle must
+            // never block on the network.
+            var wroteToAccount = false
             val failure = try {
                 withContext(Dispatchers.IO) {
-                    client.setLike(track.videoId, auth, optimistic.liked)
+                    val bearer = bearerProvider()
+                    when {
+                        bearer != null -> {
+                            client.setLikeOAuth(track.videoId, bearer, optimistic.liked)
+                            wroteToAccount = true
+                        }
+                        auth != null -> {
+                            client.setLike(track.videoId, auth, optimistic.liked)
+                            wroteToAccount = true
+                        }
+                        else -> Unit // the session ended mid-toggle: device-only outcome
+                    }
                 }
                 null
             } catch (e: Exception) {
                 e
+            }
+            if (failure == null && !wroteToAccount) {
+                persistLocal()
+                update(track.videoId, likeToggleSucceeded(stateFor(track.videoId)))
+                return@launch
             }
             val latest = stateFor(track.videoId)
             if (failure == null) {
@@ -113,10 +145,19 @@ class LikeController(
      * likeStatus (an honest unknown), the current state stands.
      */
     fun refreshAccountStatus(track: Track) {
-        val auth = sessionProvider() ?: return
+        val auth = sessionProvider()
+        if (auth == null && !bearerSessionPresent()) return
         scope.launch {
             val status = try {
-                withContext(Dispatchers.IO) { client.likeStatus(track.videoId, auth) }
+                withContext(Dispatchers.IO) {
+                    // Bearer read on the IO thread, as in toggle().
+                    val bearer = bearerProvider()
+                    when {
+                        bearer != null -> client.likeStatusOAuth(track.videoId, bearer)
+                        auth != null -> client.likeStatus(track.videoId, auth)
+                        else -> null
+                    }
+                }
             } catch (e: Exception) {
                 null
             }

@@ -80,7 +80,7 @@ fun LibraryScreen(
     val autoDownloadLiked by container.appPreferences.autoDownloadLikedFlow.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val sessionState by container.sessionManager.uiState.collectAsState()
+    val sessionState by container.accountUiState.collectAsState()
 
     // Auto-download of Liked (preference-gated, default off): when the
     // Library is opened signed-in with the preference on, ask the
@@ -105,17 +105,25 @@ fun LibraryScreen(
     LaunchedEffect(sessionState.signedIn, ytReloadTick) {
         if (!sessionState.signedIn) return@LaunchedEffect
         ytPlaylists = UiState.Loading
-        val auth = container.sessionManager.currentAuthSession()
-        ytPlaylists = if (auth == null) {
-            UiState.Error("Sign in again to load your YouTube library.")
-        } else {
-            try {
-                UiState.Content(
-                    withContext(Dispatchers.IO) { container.client.libraryPlaylists(auth) },
-                )
-            } catch (e: Exception) {
-                UiState.Error(ErrorMessages.userMessage(e))
+        ytPlaylists = try {
+            val loaded = withContext(Dispatchers.IO) {
+                // The token road first (0.7.0): a Google session's
+                // library comes from its Bearer token; the cookie
+                // session is the fallback for a pre-0.7.0 sign-in.
+                val bearer = container.currentBearerToken()
+                when {
+                    bearer != null -> container.client.libraryPlaylistsOAuth(bearer)
+                    else -> container.sessionManager.currentAuthSession()
+                        ?.let { container.client.libraryPlaylists(it) }
+                }
             }
+            if (loaded == null) {
+                UiState.Error("Sign in again to load your YouTube library.")
+            } else {
+                UiState.Content(loaded)
+            }
+        } catch (e: Exception) {
+            UiState.Error(ErrorMessages.userMessage(e))
         }
     }
 

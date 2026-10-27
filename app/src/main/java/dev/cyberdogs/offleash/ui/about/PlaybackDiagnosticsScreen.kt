@@ -73,7 +73,7 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
 
     // Account & session block: identity display name + health label
     // only — never cookie values or anything derived from them.
-    val sessionState by container.sessionManager.uiState.collectAsState()
+    val sessionState by container.accountUiState.collectAsState()
     val accountIdentityLine = if (sessionState.signedIn) {
         sessionState.identityName ?: sessionState.identityEmail ?: "Signed in"
     } else {

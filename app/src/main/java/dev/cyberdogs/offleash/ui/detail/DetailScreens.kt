@@ -316,6 +316,13 @@ class PlaylistViewModel(
     private val browseId: String,
     private val params: String?,
     private val authProvider: () -> AuthSession? = { null },
+    /**
+     * The Google OAuth access token (0.7.0), read on the load's IO
+     * thread. When present, the playlist loads under the token
+     * session — this is the road the Library's playlists and Liked
+     * Songs take.
+     */
+    private val bearerProvider: () -> String? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<PlaylistPage>>(UiState.Loading)
@@ -329,7 +336,14 @@ class PlaylistViewModel(
         _state.value = UiState.Loading
         viewModelScope.launch(Dispatchers.IO) {
             _state.value = try {
-                UiState.Content(client.playlist(browseId, params, auth = authProvider()))
+                val bearer = bearerProvider()
+                UiState.Content(
+                    if (bearer != null) {
+                        client.playlistOAuth(bearer, browseId, params)
+                    } else {
+                        client.playlist(browseId, params, auth = authProvider())
+                    }
+                )
             } catch (e: Exception) {
                 UiState.Error(ErrorMessages.userMessage(e))
             }
@@ -346,12 +360,16 @@ fun PlaylistScreen(
     onArtistClick: (String) -> Unit = {},
 ) {
     val viewModel: PlaylistViewModel = viewModel(key = browseId + (params ?: "")) {
-        PlaylistViewModel(container.client, browseId, params) {
-            container.sessionManager.currentAuthSession()
-        }
+        PlaylistViewModel(
+            container.client,
+            browseId,
+            params,
+            authProvider = { container.sessionManager.currentAuthSession() },
+            bearerProvider = { container.currentBearerToken() },
+        )
     }
     val state by viewModel.state.collectAsState()
-    val sessionState by container.sessionManager.uiState.collectAsState()
+    val sessionState by container.accountUiState.collectAsState()
 
     // Reload when sign-in state flips after the initial load, so an
     // account playlist (e.g. Liked Songs) opened signed-out picks up the

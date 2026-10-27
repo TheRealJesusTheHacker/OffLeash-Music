@@ -245,6 +245,13 @@ class QueueController(
      */
     private val sessionProvider: () -> AuthSession? = { null },
     /**
+     * Supplies the current Google OAuth access token (0.7.0), or
+     * null when there is no Google session. Read fresh at every
+     * resolve, on the resolve's IO thread — the provider may refresh
+     * the token, which is blocking network work by design.
+     */
+    private val bearerProvider: () -> String? = { null },
+    /**
      * Revalidates the stored session (Lane B keep-alive) and returns the
      * refreshed session, or null when there is no live session. Invoked
      * at most once per track, only when the account road refused in a
@@ -968,7 +975,12 @@ class QueueController(
         while (true) {
             val resolved = try {
                 withContext(Dispatchers.IO) {
-                    resolver.resolve(track.videoId, auth, qualityProvider())
+                    resolver.resolve(
+                        track.videoId,
+                        auth,
+                        qualityProvider(),
+                        bearerProvider(),
+                    )
                 }
             } catch (e: AllRoadsRefused) {
                 diagnostics.recordRoadAttempt(

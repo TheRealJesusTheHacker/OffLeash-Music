@@ -14,20 +14,26 @@ import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
+import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
 import dev.cyberdogs.offleash.account.AutoDownloadLiked
+import dev.cyberdogs.offleash.account.GoogleSessionKeepAlive
 import dev.cyberdogs.offleash.account.SessionKeepAlive
 import dev.cyberdogs.offleash.data.AesGcmSecretBox
 import dev.cyberdogs.offleash.data.AppPreferences
 import dev.cyberdogs.offleash.data.DownloadManager
 import dev.cyberdogs.offleash.data.DownloadStore
 import dev.cyberdogs.offleash.data.FileSecretStorage
+import dev.cyberdogs.offleash.data.GoogleSessionManager
+import dev.cyberdogs.offleash.data.GoogleTokenStore
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
 import dev.cyberdogs.offleash.data.OkHttpTransport
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.data.SessionManager
 import dev.cyberdogs.offleash.data.SessionStore
+import dev.cyberdogs.offleash.data.SessionUiState
+import dev.cyberdogs.offleash.data.googleSessionFileIn
 import dev.cyberdogs.offleash.data.StreamWindowStore
 import dev.cyberdogs.offleash.data.OkHttpChunkFetcher
 import dev.cyberdogs.offleash.data.buildSharedClient
@@ -43,6 +49,9 @@ import dev.cyberdogs.offleash.playback.QueueController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.io.File
@@ -109,6 +118,17 @@ class AppContainer(app: OffleashApp) {
     )
 
     /**
+     * The Google sign-in's token store (0.7.0): the same Keystore
+     * seal and no-backup directory as the cookie session's store,
+     * but its own sealed file — the two sign-in generations never
+     * share bytes.
+     */
+    val googleTokenStore: GoogleTokenStore = GoogleTokenStore(
+        storage = FileSecretStorage(googleSessionFileIn(app)),
+        box = AesGcmSecretBox { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+    )
+
+    /**
      * The ONE OkHttp client for the whole app: youtubei API calls and
      * stream fetches go through the same stack (same connection pool,
      * same address-family choices), because googlevideo stream URLs are
@@ -154,12 +174,70 @@ class AppContainer(app: OffleashApp) {
         signInDiagnostics = signInDiagnostics,
     )
 
+    /**
+     * The Google OAuth client (device-code flow), riding its own
+     * transport instance over the shared OkHttp client — no cookie
+     * rotation callback: OAuth responses carry no session cookies
+     * to rotate, and token material never enters the cookie path.
+     */
+    val googleAuth: GoogleDeviceAuth = GoogleDeviceAuth(
+        OkHttpTransport(okHttpClient),
+    )
+
+    /**
+     * Owns the Google sign-in (0.7.0, the app's primary session):
+     * the device-code flow, the sealed token store, refresh, and
+     * revocation. Constructing it loads any stored Google session.
+     */
+    val googleSessionManager: GoogleSessionManager = GoogleSessionManager(
+        store = googleTokenStore,
+        auth = googleAuth,
+        client = client,
+        scope = sessionScope,
+        signInDiagnostics = signInDiagnostics,
+    )
+
+    /**
+     * The account state the UI presents: the Google session when one
+     * exists, otherwise the cookie session's state (a pre-0.7.0
+     * stored cookie session still names its account until the owner
+     * signs in with Google or signs out). Kept current by the
+     * collectors in the wiring init below.
+     */
+    private val _accountUiState = MutableStateFlow(accountUiStateSnapshot())
+    val accountUiState: StateFlow<SessionUiState> = _accountUiState.asStateFlow()
+
+    private fun accountUiStateSnapshot(): SessionUiState {
+        val google = googleSessionManager.uiState.value
+        return if (google.signedIn) google else sessionManager.uiState.value
+    }
+
+    /**
+     * Signs out of BOTH sign-in generations: the Google grant is
+     * revoked at Google and its tokens wiped; any stored cookie
+     * session is wiped too, so "signed out" is total.
+     */
+    suspend fun signOutOfAccount() {
+        googleSessionManager.signOut()
+        sessionManager.signOut()
+    }
+
+    /**
+     * A currently-valid Google access token, or null. BLOCKING
+     * (refreshes on the caller's thread when near expiry) — call
+     * from an IO dispatcher, like every core client call.
+     */
+    fun currentBearerToken(): String? = googleSessionManager.currentBearer()
+
     init {
         // Close the wiring cycle described on [sessionManagerRef].
         sessionManagerRef = sessionManager
         // Periodic validation (12h, connected) for as long as the app
         // is installed; the manager decides what each result means.
         SessionKeepAlive.enqueue(app)
+        // The same periodic care for the Google sign-in: identity
+        // re-read + proactive token refresh.
+        GoogleSessionKeepAlive.enqueue(app)
         // Auto-download of Liked (parity step 2): the worker itself
         // checks the preference and the session before doing anything.
         AutoDownloadLiked.enqueue(app)
@@ -174,6 +252,20 @@ class AppContainer(app: OffleashApp) {
                     // validateNow maps its own outcomes; anything that
                     // still escapes leaves the stored session in place
                     // for the next attempt rather than crashing startup.
+                }
+            }
+        }
+        // App-start identity refresh for a stored Google session:
+        // names the account fresh, and discovers a revoked grant at
+        // launch rather than mid-playlist.
+        if (googleSessionManager.hasStoredSession()) {
+            sessionScope.launch {
+                try {
+                    googleSessionManager.refreshIdentity()
+                } catch (e: Exception) {
+                    // refreshIdentity maps its own outcomes; anything
+                    // that still escapes leaves the stored tokens in
+                    // place for the next attempt.
                 }
             }
         }
@@ -212,6 +304,7 @@ class AppContainer(app: OffleashApp) {
                 track.videoId,
                 sessionManager.currentAuthSession(),
                 quality,
+                googleSessionManager.currentBearer(),
             ).info
         },
         fetcher = OkHttpChunkFetcher(okHttpClient),
@@ -230,15 +323,29 @@ class AppContainer(app: OffleashApp) {
             client = client,
             preferences = appPreferences,
             sessionProvider = { sessionManager.currentAuthSession() },
+            bearerProvider = { googleSessionManager.currentBearer() },
+            bearerSessionPresent = { googleSessionManager.hasStoredSession() },
             scope = sessionScope,
         )
 
     init {
+        // Keep the presented account state current: the Google
+        // session when one exists, else the cookie session's.
+        sessionScope.launch {
+            googleSessionManager.uiState.collect {
+                _accountUiState.value = accountUiStateSnapshot()
+            }
+        }
+        sessionScope.launch {
+            sessionManager.uiState.collect {
+                _accountUiState.value = accountUiStateSnapshot()
+            }
+        }
         // Keep the like controller's account-backed flag in step with
         // sign-in state, so menu labels never claim an account write
         // while signed out (or hide one while signed in).
         sessionScope.launch {
-            sessionManager.uiState.collect { state ->
+            accountUiState.collect { state ->
                 likeController.setAccountBacked(state.signedIn)
             }
         }
@@ -287,6 +394,10 @@ class AppContainer(app: OffleashApp) {
         // the lambdas read it at resolve time, never at construction
         // time.
         sessionProvider = { sessionManager.currentAuthSession() },
+        // The token road (0.7.0): read fresh at every resolve, like
+        // the cookie session — a sign-in or refresh takes effect on
+        // the next track without rebuilding the controller.
+        bearerProvider = { googleSessionManager.currentBearer() },
         revalidateSession = {
             sessionManager.validateNow()
             sessionManager.currentAuthSession()

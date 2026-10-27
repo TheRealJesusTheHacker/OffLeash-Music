@@ -82,10 +82,10 @@ fun downloadQualityCaption(quality: DownloadQualityPreference): String = when (q
  * `audio_version_in_radio`) through
  * [dev.cyberdogs.offleash.data.ParityPreferences] over the same
  * preferences file. The account block mirrors About's, driven by the
- * same SessionManager uiState: sign-in routes to the existing
- * sign-in screen, sign-out goes through the same existing
- * verified-wipe path (`sessionManager.signOut()`) About uses —
- * nothing here reimplements it.
+ * presented account state (the container's accountUiState):
+ * sign-in routes to the existing sign-in screen, sign-out goes
+ * through the same revoke-and-wipe path (`signOutOfAccount()`)
+ * About uses — nothing here reimplements it.
  */
 @Composable
 fun SettingsScreen(
@@ -96,7 +96,7 @@ fun SettingsScreen(
     val downloadQuality by container.parityPreferences.downloadQualityFlow.collectAsState()
     val autoDownloadLiked by container.parityPreferences.autoDownloadLikedFlow.collectAsState()
     val audioVersionInRadio by container.parityPreferences.audioVersionInRadioFlow.collectAsState()
-    val sessionState by container.sessionManager.uiState.collectAsState()
+    val sessionState by container.accountUiState.collectAsState()
     val scope = rememberCoroutineScope()
     var showSignOutConfirm by remember { mutableStateOf(false) }
 
@@ -263,16 +263,17 @@ fun SettingsScreen(
             title = { Text("Sign out?") },
             text = {
                 Text(
-                    "Your session cookie will be wiped from this device. " +
-                        "Your local playlists and history stay — they were " +
-                        "never tied to your account.",
+                    "Your sign-in will be removed from this device: " +
+                        "Google is told to revoke it, and the saved " +
+                        "sign-in is wiped. Your local playlists and " +
+                        "history stay — they were never tied to your account.",
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         showSignOutConfirm = false
-                        scope.launch { container.sessionManager.signOut() }
+                        scope.launch { container.signOutOfAccount() }
                     },
                 ) { Text("Sign out") }
             },

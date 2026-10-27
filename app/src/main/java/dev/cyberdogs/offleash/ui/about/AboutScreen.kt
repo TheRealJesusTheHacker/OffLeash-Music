@@ -70,7 +70,7 @@ fun AboutScreen(
 ) {
     val context = LocalContext.current
     val versionName = rememberVersionName(context)
-    val sessionState by container.sessionManager.uiState.collectAsState()
+    val sessionState by container.accountUiState.collectAsState()
     val scope = rememberCoroutineScope()
     var showSignOutConfirm by remember { mutableStateOf(false) }
     var showLicense by remember { mutableStateOf(false) }
@@ -308,16 +308,17 @@ fun AboutScreen(
             title = { Text("Sign out?") },
             text = {
                 Text(
-                    "Your session cookie will be wiped from this device. " +
-                        "Your local playlists and history stay — they were " +
-                        "never tied to your account.",
+                    "Your sign-in will be removed from this device: " +
+                        "Google is told to revoke it, and the saved " +
+                        "sign-in is wiped. Your local playlists and " +
+                        "history stay — they were never tied to your account.",
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         showSignOutConfirm = false
-                        scope.launch { container.sessionManager.signOut() }
+                        scope.launch { container.signOutOfAccount() }
                     },
                 ) { Text("Sign out") }
             },

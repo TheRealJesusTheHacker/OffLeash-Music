@@ -65,6 +65,12 @@ import kotlinx.coroutines.launch
 class HomeViewModel(
     private val client: YoutubeiClient,
     private val sessionProvider: () -> AuthSession? = { null },
+    /**
+     * The Google OAuth access token (0.7.0), read on the load's IO
+     * thread. When present, the feed is the token session's home —
+     * ahead of the cookie session's, matching the rest of the app.
+     */
+    private val bearerProvider: () -> String? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<HomeFeed>>(UiState.Loading)
@@ -96,7 +102,12 @@ class HomeViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val auth = sessionProvider()
             _state.value = try {
-                val feed = client.homeFeed(auth, chip)
+                val bearer = bearerProvider()
+                val feed = if (bearer != null) {
+                    client.homeFeedOAuth(bearer, chip)
+                } else {
+                    client.homeFeed(auth, chip)
+                }
                 UiState.Content(
                     if (feed.chips.isEmpty() && !keptChips.isNullOrEmpty()) {
                         feed.copy(chips = keptChips)
@@ -121,11 +132,15 @@ fun HomeScreen(
     onPlaylistClick: (String, String?) -> Unit,
 ) {
     val viewModel: HomeViewModel = viewModel {
-        HomeViewModel(container.client) { container.sessionManager.currentAuthSession() }
+        HomeViewModel(
+            container.client,
+            sessionProvider = { container.sessionManager.currentAuthSession() },
+            bearerProvider = { container.currentBearerToken() },
+        )
     }
     val state by viewModel.state.collectAsState()
     val selectedChip by viewModel.selectedChip.collectAsState()
-    val sessionState by container.sessionManager.uiState.collectAsState()
+    val sessionState by container.accountUiState.collectAsState()
 
     // Load on first composition and reload on every sign-in/out
     // transition, so the feed matches the current session.
