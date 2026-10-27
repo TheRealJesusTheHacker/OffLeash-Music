@@ -170,7 +170,14 @@ object SessionCookies {
      *  - one pair per line (a common export) — line breaks count
      *    as pair separators alongside `;`;
      *  - a JSON array of `{"name": ..., "value": ...}` objects, as
-     *    browser cookie tools export (extra fields are ignored).
+     *    browser cookie tools export (extra fields are ignored);
+     *  - a Netscape cookies.txt export (the Get-cookies.txt /
+     *    yt-dlp shape): one cookie per line, seven TAB-separated
+     *    fields — domain, flag, path, secure, expiry, name, value.
+     *    Comment lines (`#…`) carry no cookies and are ignored;
+     *    HttpOnly cookies wear a `#HttpOnly_` prefix on the domain
+     *    field, which is stripped so the line still reads as the
+     *    cookie it is. Only the name and value fields are taken.
      *
      * Total by construction: a paste that matches no shape is read
      * as a header string and judged by the subset stage like any
@@ -193,6 +200,15 @@ object SessionCookies {
             }
             // Not a JSON cookie export after all — fall through and
             // let the header reader judge what's there.
+        }
+        parseNetscapeCookieLines(trimmed)?.let { pairs ->
+            return NormalizedPaste(
+                cookieString = pairs.entries.joinToString("; ") { (name, value) ->
+                    "$name=$value"
+                },
+                shape = PastedCookieShape.NETSCAPE_COOKIE_FILE,
+                pairCount = pairs.size,
+            )
         }
         val cleaned = cleanPastedHeader(trimmed)
         return NormalizedPaste(
@@ -258,6 +274,45 @@ object SessionCookies {
         }
         return out.takeIf { it.isNotEmpty() }
     }
+
+    /** The domain-field prefix HttpOnly cookies wear in a cookies.txt file. */
+    private const val NETSCAPE_HTTP_ONLY_PREFIX = "#HttpOnly_"
+
+    /**
+     * The Netscape cookies.txt shape of [normalizePastedCookie]:
+     * one cookie per line, seven TAB-separated fields (domain,
+     * tail-match flag, path, secure flag, expiry, name, value).
+     * Comment lines (`#…`) are file furniture, not cookies, and are
+     * skipped — except that HttpOnly cookies are written with a
+     * `#HttpOnly_` prefix on the domain field, so that prefix is
+     * stripped BEFORE the comment check or every HttpOnly cookie in
+     * the file would be thrown away as a comment. A line counts as
+     * a cookie line only at exactly seven fields; any other line
+     * (headers, prose, a truncated row) is skipped like a malformed
+     * pair in the header reading, never glued onto a neighbor.
+     * The value is the seventh field whole — it may itself contain
+     * `=`. Later lines overwrite earlier ones, as in
+     * [parseCookieString].
+     *
+     * Returns null when NO line in the text is a cookie line, so
+     * the caller can fall back to the header reading and have the
+     * subset stage judge what is actually there.
+     */
+    private fun parseNetscapeCookieLines(text: String): Map<String, String>? {
+        val out = linkedMapOf<String, String>()
+        for (line in text.split('\n')) {
+            val raw = line.trimEnd('\r')
+            if (raw.isBlank()) continue
+            val stripped = raw.removePrefix(NETSCAPE_HTTP_ONLY_PREFIX)
+            if (stripped.startsWith("#")) continue
+            val fields = stripped.split('\t')
+            if (fields.size != 7) continue
+            val name = fields[5].trim()
+            if (name.isEmpty()) continue
+            out[name] = fields[6].trim()
+        }
+        return out.takeIf { it.isNotEmpty() }
+    }
 }
 
 /** The shapes a pasted cookie can arrive in (see [SessionCookies.normalizePastedCookie]). */
@@ -267,6 +322,9 @@ enum class PastedCookieShape {
 
     /** A JSON array of `{"name": ..., "value": ...}` objects (browser cookie-tool exports). */
     JSON_COOKIE_ARRAY,
+
+    /** A Netscape cookies.txt file: one cookie per line, seven TAB-separated fields. */
+    NETSCAPE_COOKIE_FILE,
 }
 
 /**
