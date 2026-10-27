@@ -1,5 +1,10 @@
 package dev.cyberdogs.offleash.core.auth
 
+import dev.cyberdogs.offleash.core.parse.asObj
+import dev.cyberdogs.offleash.core.parse.str
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+
 /**
  * The deliberate session-cookie subset, in canonical order.
  *
@@ -127,4 +132,152 @@ object SessionCookies {
         hashSource(cookies) != null &&
             (cookies["SID"]?.isNotBlank() == true ||
                 cookies["LOGIN_INFO"]?.isNotBlank() == true)
+
+    /**
+     * Which pieces the plausibility rule requires are ABSENT from
+     * [cookies], named for the sign-in diagnostics: rule labels and
+     * cookie names only — never values. Empty when the set is
+     * plausible. This is the one source of that wording; the
+     * diagnostics panel reads it from here so a failed paste (or
+     * capture) names exactly what it is missing.
+     */
+    fun missingSessionPieces(cookies: Map<String, String>): List<String> {
+        val missing = mutableListOf<String>()
+        if (hashSource(cookies) == null) {
+            missing += "hash source (SAPISID or __Secure-3PAPISID)"
+        }
+        if (cookies["SID"]?.isNotBlank() != true &&
+            cookies["LOGIN_INFO"]?.isNotBlank() != true
+        ) {
+            missing += "session id (SID or LOGIN_INFO)"
+        }
+        return missing
+    }
+
+    /**
+     * Reads a cookie the owner PASTED (the manual sign-in fallback)
+     * into the canonical header string the confirmation pipeline
+     * consumes. A paste arrives in whatever shape the owner's
+     * browser or cookie tool handed it over in; this is the tolerant
+     * reader for those shapes (2026-10-27 paste fix):
+     *
+     *  - the raw header string itself (`name=value; name=value`) —
+     *    the primary shape, read exactly as [parseCookieString]
+     *    reads any capture;
+     *  - the same string wearing its transport clothes: a leading
+     *    `Cookie:` label (a copied request header), one pair of
+     *    surrounding quotes, stray whitespace;
+     *  - one pair per line (a common export) — line breaks count
+     *    as pair separators alongside `;`;
+     *  - a JSON array of `{"name": ..., "value": ...}` objects, as
+     *    browser cookie tools export (extra fields are ignored).
+     *
+     * Total by construction: a paste that matches no shape is read
+     * as a header string and judged by the subset stage like any
+     * other capture — normalization never throws and never invents
+     * pairs. The result carries the shape and the pair count so the
+     * diagnostics can say what the paste was read as (counts and
+     * shape only — never values).
+     */
+    fun normalizePastedCookie(raw: String): NormalizedPaste {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("[")) {
+            parseJsonCookieArray(trimmed)?.let { pairs ->
+                return NormalizedPaste(
+                    cookieString = pairs.entries.joinToString("; ") { (name, value) ->
+                        "$name=$value"
+                    },
+                    shape = PastedCookieShape.JSON_COOKIE_ARRAY,
+                    pairCount = pairs.size,
+                )
+            }
+            // Not a JSON cookie export after all — fall through and
+            // let the header reader judge what's there.
+        }
+        val cleaned = cleanPastedHeader(trimmed)
+        return NormalizedPaste(
+            cookieString = cleaned,
+            shape = PastedCookieShape.COOKIE_HEADER,
+            pairCount = parseCookieString(cleaned).size,
+        )
+    }
+
+    /** The header-shape cleaning half of [normalizePastedCookie]. */
+    private fun cleanPastedHeader(text: String): String {
+        // One pair of surrounding quotes is packaging, not cookie —
+        // stripped before AND after the label, since a copied header
+        // can arrive as `Cookie: "a=1; b=2"` as well as `"Cookie: …"`.
+        fun unwrapQuotes(s: String): String {
+            val t = s.trim()
+            return if (t.length >= 2 &&
+                (t.first() == '"' && t.last() == '"' || t.first() == '\'' && t.last() == '\'')
+            ) {
+                t.substring(1, t.length - 1).trim()
+            } else {
+                t
+            }
+        }
+        var t = unwrapQuotes(text)
+        // A copied request header arrives with its label attached.
+        val label = "cookie:"
+        if (t.regionMatches(0, label, 0, label.length, ignoreCase = true)) {
+            t = unwrapQuotes(t.substring(label.length))
+        }
+        // One pair per line is a common export; a single line of
+        // pairs is the other. Both are the same string once line
+        // breaks count as pair separators alongside ';' — the
+        // parser then judges each segment exactly as it judges a
+        // captured one (a segment with no '=' is skipped, never
+        // glued onto a neighbor it might not belong to).
+        return t.split('\n')
+            .map { it.trim().trim(';').trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString("; ")
+    }
+
+    /**
+     * The JSON-export shape of [normalizePastedCookie]: an array of
+     * objects with string `name`/`value` members. Returns null when
+     * the text is not that shape at all (unparseable, not an array,
+     * or no usable pair in it) so the caller can fall back to the
+     * header reading.
+     */
+    private fun parseJsonCookieArray(text: String): Map<String, String>? {
+        val root = try {
+            Json.parseToJsonElement(text)
+        } catch (e: Exception) {
+            return null
+        }
+        val array = root as? JsonArray ?: return null
+        val out = linkedMapOf<String, String>()
+        for (element in array) {
+            val obj = element.asObj() ?: continue
+            val name = obj.str("name")?.takeIf { it.isNotBlank() } ?: continue
+            val value = obj.str("value") ?: continue
+            out[name] = value
+        }
+        return out.takeIf { it.isNotEmpty() }
+    }
 }
+
+/** The shapes a pasted cookie can arrive in (see [SessionCookies.normalizePastedCookie]). */
+enum class PastedCookieShape {
+    /** A `Cookie`-header style string: `name=value; name=value`. */
+    COOKIE_HEADER,
+
+    /** A JSON array of `{"name": ..., "value": ...}` objects (browser cookie-tool exports). */
+    JSON_COOKIE_ARRAY,
+}
+
+/**
+ * A paste, normalized (see [SessionCookies.normalizePastedCookie]):
+ * [cookieString] is the canonical header string the confirmation
+ * pipeline consumes; [shape] records what the paste was read as and
+ * [pairCount] how many cookie pairs it carried. Shape and count are
+ * diagnostics-safe — they are not credential material.
+ */
+data class NormalizedPaste(
+    val cookieString: String,
+    val shape: PastedCookieShape,
+    val pairCount: Int,
+)

@@ -178,4 +178,164 @@ class SessionCookiesTest {
         )
         assertEquals(merged, roundTripped)
     }
+
+    // ------------------------------------------------------------------
+    // Missing-pieces naming (2026-10-27 paste fix): the diagnostics
+    // read the plausibility rule's gaps from this one helper, so a
+    // failed paste names exactly what it lacks — names only, never
+    // values.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun missingPiecesNamesBothGapsOnAnEmptySet() {
+        assertEquals(
+            listOf(
+                "hash source (SAPISID or __Secure-3PAPISID)",
+                "session id (SID or LOGIN_INFO)",
+            ),
+            SessionCookies.missingSessionPieces(emptyMap()),
+        )
+    }
+
+    @Test
+    fun missingPiecesNamesOnlyTheAbsentPiece() {
+        assertEquals(
+            listOf("session id (SID or LOGIN_INFO)"),
+            SessionCookies.missingSessionPieces(mapOf("SAPISID" to "s")),
+        )
+        assertEquals(
+            listOf("hash source (SAPISID or __Secure-3PAPISID)"),
+            SessionCookies.missingSessionPieces(mapOf("LOGIN_INFO" to "li")),
+        )
+        // Blank values count as absent here too.
+        assertEquals(
+            listOf("session id (SID or LOGIN_INFO)"),
+            SessionCookies.missingSessionPieces(
+                mapOf("__Secure-3PAPISID" to "t", "SID" to "  "),
+            ),
+        )
+    }
+
+    @Test
+    fun missingPiecesIsEmptyOnAPlausibleSet() {
+        assertTrue(
+            SessionCookies.missingSessionPieces(
+                mapOf("SAPISID" to "s", "SID" to "sid"),
+            ).isEmpty(),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Pasted-cookie normalization (2026-10-27 paste fix): the manual
+    // fallback accepts what the owner can actually grab — the raw
+    // header string in its transport clothes, one pair per line,
+    // and the JSON export shape. All values here are synthetic.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun pasteRawHeaderReadsAsItself() {
+        val normalized = SessionCookies.normalizePastedCookie(
+            "SAPISID=sap; SID=sid; PREF=pref"
+        )
+        assertEquals(PastedCookieShape.COOKIE_HEADER, normalized.shape)
+        assertEquals(3, normalized.pairCount)
+        assertEquals(
+            mapOf("SAPISID" to "sap", "SID" to "sid"),
+            SessionCookies.extractSubset(normalized.cookieString),
+        )
+    }
+
+    @Test
+    fun pasteCookieLabelIsStripped() {
+        for (label in listOf("Cookie:", "cookie:", "COOKIE:")) {
+            val normalized = SessionCookies.normalizePastedCookie(
+                "$label SAPISID=sap; SID=sid"
+            )
+            assertEquals(
+                mapOf("SAPISID" to "sap", "SID" to "sid"),
+                SessionCookies.extractSubset(normalized.cookieString),
+            )
+        }
+    }
+
+    @Test
+    fun pasteSurroundingQuotesAreStripped() {
+        val doubleQuoted = SessionCookies.normalizePastedCookie(
+            "\"SAPISID=sap; SID=sid\""
+        )
+        assertEquals(
+            mapOf("SAPISID" to "sap", "SID" to "sid"),
+            SessionCookies.extractSubset(doubleQuoted.cookieString),
+        )
+        val labeledAndQuoted = SessionCookies.normalizePastedCookie(
+            "Cookie: 'SAPISID=sap; SID=sid'"
+        )
+        assertEquals(
+            mapOf("SAPISID" to "sap", "SID" to "sid"),
+            SessionCookies.extractSubset(labeledAndQuoted.cookieString),
+        )
+    }
+
+    @Test
+    fun pasteOnePairPerLineReadsAsOneString() {
+        val normalized = SessionCookies.normalizePastedCookie(
+            "SAPISID=sap\nSID=sid;\nLOGIN_INFO=login"
+        )
+        assertEquals(3, normalized.pairCount)
+        assertEquals(
+            mapOf("SAPISID" to "sap", "SID" to "sid", "LOGIN_INFO" to "login"),
+            SessionCookies.extractSubset(normalized.cookieString),
+        )
+    }
+
+    @Test
+    fun pasteLinesAndSemicolonsMixFreely() {
+        // Line breaks and ';' are interchangeable separators, and a
+        // segment with no '=' is skipped by the parser rather than
+        // glued onto a neighbor it might not belong to.
+        val normalized = SessionCookies.normalizePastedCookie(
+            "SAPISID=sap; stray-token\nSID=sid; LOGIN_INFO=login"
+        )
+        assertEquals(
+            mapOf("SAPISID" to "sap", "SID" to "sid", "LOGIN_INFO" to "login"),
+            SessionCookies.extractSubset(normalized.cookieString),
+        )
+    }
+
+    @Test
+    fun pasteJsonCookieArrayReadsItsPairs() {
+        val json = """
+            [
+              {"name": "SAPISID", "value": "sap", "domain": ".youtube.com", "path": "/"},
+              {"name": "SID", "value": "sid", "expirationDate": 1893456000},
+              {"name": "PREF", "value": "pref"}
+            ]
+        """.trimIndent()
+        val normalized = SessionCookies.normalizePastedCookie(json)
+        assertEquals(PastedCookieShape.JSON_COOKIE_ARRAY, normalized.shape)
+        assertEquals(3, normalized.pairCount)
+        assertEquals(
+            mapOf("SAPISID" to "sap", "SID" to "sid"),
+            SessionCookies.extractSubset(normalized.cookieString),
+        )
+    }
+
+    @Test
+    fun pasteMalformedJsonFallsBackToTheHeaderReading() {
+        val normalized = SessionCookies.normalizePastedCookie("[not a cookie export")
+        assertEquals(PastedCookieShape.COOKIE_HEADER, normalized.shape)
+        assertEquals(0, normalized.pairCount)
+        assertTrue(
+            SessionCookies.extractSubset(normalized.cookieString).isEmpty()
+        )
+    }
+
+    @Test
+    fun pasteJsonWithoutUsablePairsFallsBackToo() {
+        val normalized = SessionCookies.normalizePastedCookie(
+            "[{\"domain\": \".youtube.com\"}]"
+        )
+        assertEquals(PastedCookieShape.COOKIE_HEADER, normalized.shape)
+        assertEquals(0, normalized.pairCount)
+    }
 }
