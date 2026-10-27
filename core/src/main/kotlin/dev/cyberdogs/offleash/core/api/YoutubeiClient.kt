@@ -38,8 +38,10 @@ import dev.cyberdogs.offleash.core.playback.QualityPreference
 import dev.cyberdogs.offleash.core.playback.StreamResolver
 import java.net.URLEncoder
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -373,7 +375,20 @@ class YoutubeiClient(
      * 401/403 → [IdentityLookup.Rejected]; transport failure, an
      * unexpected status, or an unparseable body → [IdentityLookup.Failed];
      * a 200 answer → [IdentityLookup.Found], with an empty list when the
-     * response carries no accounts (a signed-out session).
+     * response lists no identity (a signed-out session).
+     *
+     * The request is built exactly the way the endpoint's own web
+     * surface builds it: a GET on `www.youtube.com` with the session
+     * cookies and a SAPISIDHASH minted for the `www.youtube.com`
+     * origin (see [AuthSession.authorizationHeader]). Until the
+     * 2026-10-27 sign-in hunt this call went to the music host with
+     * a music-origin hash, and — the actual defect — its answer was
+     * parsed as a flat `{"accounts": [...]}` list, a shape this
+     * endpoint has never returned. The real answer is the account
+     * menu structure parsed by [parseSwitcherIdentities]; the flat
+     * shape existed only in a hand-derived test fixture, so the
+     * suite certified a response that never occurs while the real
+     * one parsed to zero identities on every attempt.
      */
     fun accountIdentities(auth: AuthSession): IdentityLookup {
         // The switcher endpoint is a YouTube web-app XHR: it is built
@@ -383,7 +398,7 @@ class YoutubeiClient(
         // endpoint is ever legitimately consumed, and Google's
         // session checks treat unknown presentations inconsistently
         // (2026-10-24 sign-in hunt).
-        val switcherHeaders = auth.headers(nowEpochSeconds()) + mapOf(
+        val switcherHeaders = auth.headers(nowEpochSeconds(), ACCOUNT_SWITCHER_ORIGIN) + mapOf(
             "User-Agent" to YoutubeiContexts.WEB_REMIX.userAgent,
             "Accept" to "application/json",
         )
@@ -403,37 +418,92 @@ class YoutubeiClient(
         } catch (e: Exception) {
             return IdentityLookup.Failed("account response was not valid JSON (${e.message})")
         }
-        val accounts = root.asArr() ?: findFirst(root, "accounts").asArr()
-            ?: return IdentityLookup.Found(emptyList())
+        return IdentityLookup.Found(parseSwitcherIdentities(root))
+    }
+
+    /**
+     * Parses the switcher's real response shape: the account menu.
+     *
+     * The body nests, under
+     * `data.actions[].getMultiPageMenuAction.menu.multiPageMenuRenderer`,
+     * one `accountSectionListRenderer` section per signed-in Google
+     * account. A section's `googleAccountHeaderRenderer` header
+     * carries that account's name and email; every `accountItem`
+     * inside it is one selectable YouTube identity of the account —
+     * the personal identity and any brand channels. Per identity:
+     *
+     * - name / avatar: `accountName` and `accountPhoto.thumbnails`;
+     * - selected: the BOOLEAN `isSelected` (not a string);
+     * - pageId: the `pageIdToken` among the item's
+     *   `serviceEndpoint.selectActiveIdentityEndpoint.supportedTokens`
+     *   — present for brand identities, absent for the personal one;
+     * - authUser: the `authuser=` parameter of the item's
+     *   `accountSigninToken` sign-in URL — the Google account's index
+     *   in the session, SHARED by all its identities (the pageId is
+     *   what distinguishes them, never the index). Items whose token
+     *   carries no readable index fall back to their section's
+     *   position, which enumerates the same accounts in the same
+     *   order;
+     * - email: the section header's — brand identities have no
+     *   email of their own.
+     *
+     * The shape follows, field for field, the paths two independent
+     * production parsers of this endpoint read (Rehike's
+     * `Switcher::parseResponse` and `SignInV2\Parser\SwitcherParser`);
+     * the test fixture derived from them is the regression pin. The
+     * walk is by key search rather than by the full literal path, so
+     * menu sections the app doesn't model can't break it.
+     */
+    private fun parseSwitcherIdentities(root: JsonElement): List<AccountIdentity> {
         val identities = mutableListOf<AccountIdentity>()
-        for ((index, element) in accounts.withIndex()) {
-            val account = element.asObj() ?: continue
-            val name = account.str("accountName") ?: textOf(account["accountName"])
-                ?: account.str("name") ?: textOf(account["name"])
-            val email = account.str("email") ?: textOf(account["email"])
-            if (name == null && email == null) continue
-            val avatar = largestThumbnailUrl(account.obj("accountPhoto").arr("thumbnails"))
-                ?: largestThumbnailUrl(findFirst(account.obj("accountPhoto"), "thumbnails"))
-                ?: account.str("photoUrl")
-            val selected = account.str("isSelected") == "true" ||
-                account.str("selected") == "true"
-            identities.add(
-                AccountIdentity(
-                    name = name ?: email!!,
-                    email = email,
-                    avatarUrl = avatar,
-                    authUser = account.int("accountNo") ?: index,
-                    pageId = account.str("pageId") ?: account.str("channelId"),
-                    isSelected = selected,
+        val sections = findAll(root, "accountSectionListRenderer")
+        for ((sectionIndex, sectionElement) in sections.withIndex()) {
+            val section = sectionElement.asObj() ?: continue
+            val header = section.obj("header").obj("googleAccountHeaderRenderer")
+            val email = textOf(header?.get("email"))
+                ?: textOf(
+                    findFirst(section, "accountItemSectionHeaderRenderer")
+                        .asObj()?.get("title")
                 )
-            )
+            for (itemElement in findAll(section, "accountItem")) {
+                val item = itemElement.asObj() ?: continue
+                val name = textOf(item["accountName"]) ?: continue
+                val avatar = largestThumbnailUrl(item.obj("accountPhoto").arr("thumbnails"))
+                val selected = (item["isSelected"] as? JsonPrimitive)?.booleanOrNull == true
+                var pageId: String? = null
+                var authUser: Int? = null
+                val tokens = item.obj("serviceEndpoint")
+                    .obj("selectActiveIdentityEndpoint")
+                    .arr("supportedTokens")
+                if (tokens != null) {
+                    for (tokenElement in tokens) {
+                        val token = tokenElement.asObj() ?: continue
+                        token.obj("pageIdToken").str("pageId")?.let { pageId = it }
+                        token.obj("accountSigninToken").str("signinUrl")?.let { url ->
+                            AUTHUSER_PARAM_REGEX.find(url)
+                                ?.groupValues?.get(1)?.toIntOrNull()
+                                ?.let { authUser = it }
+                        }
+                    }
+                }
+                identities.add(
+                    AccountIdentity(
+                        name = name,
+                        email = email,
+                        avatarUrl = avatar,
+                        authUser = authUser ?: sectionIndex,
+                        pageId = pageId,
+                        isSelected = selected,
+                    )
+                )
+            }
         }
         // The endpoint flags the active identity; when it flags none,
-        // the first account is the session's default.
+        // the first identity is the session's default.
         if (identities.isNotEmpty() && identities.none { it.isSelected }) {
             identities[0] = identities[0].copy(isSelected = true)
         }
-        return IdentityLookup.Found(identities)
+        return identities
     }
 
     /**
@@ -581,7 +651,9 @@ class YoutubeiClient(
 
     private companion object {
         const val ACCOUNT_SWITCHER_URL =
-            "https://music.youtube.com/getAccountSwitcherEndpoint"
+            "https://www.youtube.com/getAccountSwitcherEndpoint"
+        const val ACCOUNT_SWITCHER_ORIGIN = "https://www.youtube.com"
+        val AUTHUSER_PARAM_REGEX = Regex("""[?&]authuser=(\d+)""")
         const val VISITOR_DATA_URL = "https://music.youtube.com/sw.js_data"
         const val LRCLIB_GET_URL = "https://lrclib.net/api/get"
         const val NO_LYRICS_REASON = "YouTube offers no lyrics for this track"

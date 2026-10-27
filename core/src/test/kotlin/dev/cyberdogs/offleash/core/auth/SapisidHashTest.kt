@@ -44,6 +44,25 @@ class SapisidHashTest {
     }
 
     @Test
+    fun knownVectorWwwOrigin() {
+        // python3 -c "import hashlib; print(hashlib.sha1(
+        //   b'1700000000 TestSapisidValue123 https://www.youtube.com'
+        // ).hexdigest())" -> 54c129c6535bc481b3b18ae261a47031c5366ff1
+        // The account-switcher call is minted for the www origin; the
+        // digest MUST differ from the music-origin value for the same
+        // inputs, or the origin term is not really in the recipe.
+        val session = AuthSession(cookies = mapOf("SAPISID" to "TestSapisidValue123"))
+        assertEquals(
+            "SAPISIDHASH 1700000000_54c129c6535bc481b3b18ae261a47031c5366ff1",
+            session.authorizationHeader(ts, "https://www.youtube.com")
+        )
+        assertEquals(
+            session.authorizationHeader(ts, "https://www.youtube.com"),
+            session.headers(ts, "https://www.youtube.com")["Authorization"]
+        )
+    }
+
+    @Test
     fun sapisidWinsWhenBothPresent() {
         val session = AuthSession(
             cookies = mapOf(

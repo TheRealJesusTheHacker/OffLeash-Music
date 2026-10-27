@@ -13,9 +13,22 @@ import org.junit.Test
 /**
  * Account-switcher parsing and outcome mapping (Phase 2).
  *
- * The `derived_*.json` fixtures are DERIVED-SYNTHETIC: they were built
- * by hand to the documented switcher shape — this project holds no real
- * account capture, and no real cookie or identity appears in them.
+ * The `derived_*.json` fixtures are DERIVED-SYNTHETIC: no real account
+ * capture exists in this project, and no real cookie or identity
+ * appears in them. Their SHAPE, however, is not invented: it follows,
+ * field for field, the paths two independent production parsers of
+ * this endpoint read — Rehike's `Switcher::parseResponse` and
+ * `SignInV2\Parser\SwitcherParser`, which consume the live
+ * `getAccountSwitcherEndpoint` response: a menu structure under
+ * `data.actions[0].getMultiPageMenuAction`, NOT a flat
+ * `{"accounts": [...]}` list.
+ *
+ * History (2026-10-27 sign-in hunt): the pre-hunt fixture encoded a
+ * hand-guessed flat shape, the parser was written to it, and every
+ * test passed — while on the owner's phone the real menu-shaped
+ * response parsed to zero identities on every attempt and sign-in
+ * could never confirm. The endpoint had been answering correctly
+ * all along; the parser was reading a shape that never occurs.
  */
 class AccountIdentitiesTest {
 
@@ -36,17 +49,21 @@ class AccountIdentitiesTest {
         assertEquals("skyler@example.com", personal.email)
         // Largest accountPhoto thumbnail wins.
         assertEquals("https://example.com/avatar176.jpg", personal.avatarUrl)
-        assertEquals(0, personal.authUser) // from accountNo
-        assertNull(personal.pageId)
-        assertTrue(personal.isSelected)
+        assertEquals(0, personal.authUser) // from the signin token's authuser
+        assertNull(personal.pageId) // the personal identity carries no page token
+        assertFalse(personal.isSelected)
 
         val brand = lookup.identities[1]
         assertEquals("Sentinel Brand Channel", brand.name)
-        assertEquals("brand@example.com", brand.email)
+        // The email is the section's Google account email; brand
+        // identities of one Google account share it.
+        assertEquals("skyler@example.com", brand.email)
         assertEquals("https://example.com/brand88.jpg", brand.avatarUrl)
-        assertEquals(1, brand.authUser)
-        assertEquals("UCbrandPageId00000001", brand.pageId)
-        assertFalse(brand.isSelected)
+        // Same Google account: the SAME authuser as the personal
+        // identity. The pageId token is what distinguishes it.
+        assertEquals(0, brand.authUser)
+        assertEquals("987654321098765432109", brand.pageId)
+        assertTrue(brand.isSelected)
     }
 
     @Test
@@ -54,11 +71,26 @@ class AccountIdentitiesTest {
         val transport = GetTransport(body = Fixtures.load("derived_account_switcher.json"))
         YoutubeiClient(transport).accountIdentities(session)
         assertEquals(
-            "https://music.youtube.com/getAccountSwitcherEndpoint",
+            "https://www.youtube.com/getAccountSwitcherEndpoint",
             transport.lastGetUrl
         )
         assertEquals(session.cookieHeader(), transport.lastGetHeaders!!["Cookie"])
-        assertTrue(transport.lastGetHeaders!!.containsKey("Authorization"))
+        // The SAPISIDHASH origin must name the host the request is
+        // actually sent to (www.youtube.com for the switcher — the
+        // construction the endpoint's own web surface uses), NOT the
+        // music.youtube.com origin the youtubei calls use. Pin the
+        // full header value: recover the timestamp the client used
+        // from the recorded header and recompute the digest for the
+        // www origin.
+        val authorization = transport.lastGetHeaders!!["Authorization"]!!
+        val timestamp = authorization
+            .removePrefix("SAPISIDHASH ")
+            .substringBefore('_')
+            .toLong()
+        assertEquals(
+            session.authorizationHeader(timestamp, "https://www.youtube.com"),
+            authorization,
+        )
         assertEquals("0", transport.lastGetHeaders!!["X-Goog-Authuser"])
         // The switcher endpoint is a web-app XHR: it is called with
         // the web client's presentation, not a bare library UA
@@ -71,7 +103,7 @@ class AccountIdentitiesTest {
     }
 
     @Test
-    fun emptyAccountsArrayIsFoundEmpty() {
+    fun emptySwitcherResponseIsFoundEmpty() {
         val client = YoutubeiClient(
             GetTransport(body = Fixtures.load("derived_account_switcher_empty.json"))
         )
@@ -89,9 +121,13 @@ class AccountIdentitiesTest {
 
     @Test
     fun unflaggedSelectionDefaultsToFirstIdentity() {
-        val body = "{\"accounts\":[" +
-            "{\"accountName\":\"First\",\"accountNo\":0}," +
-            "{\"accountName\":\"Second\",\"accountNo\":1}]}"
+        // The derived fixture with every isSelected flag stripped:
+        // the endpoint's no-flag answer must still yield a selected
+        // default (the first identity), or SessionManager would have
+        // nothing to adopt.
+        val body = Fixtures.load("derived_account_switcher.json")
+            .replace("\"isSelected\": true, ", "")
+            .replace("\"isSelected\": false, ", "")
         val lookup = YoutubeiClient(GetTransport(body = body)).accountIdentities(session)
             as IdentityLookup.Found
         assertEquals(2, lookup.identities.size)

@@ -29,10 +29,19 @@ data class AuthSession(
      * The complete `Authorization` header value in the classic
      * SAPISIDHASH form, `"SAPISIDHASH <epochSeconds>_<sha1hex>"`, where
      * the digest is SHA-1 over
-     * `"<epochSeconds> <hashValue> https://music.youtube.com"` and
+     * `"<epochSeconds> <hashValue> <origin>"` and
      * hashValue is [SessionCookies.hashSource]. The timestamp term is
      * the raw epoch SECONDS — the study flagged a `/1000` variant in the
      * wild as off-recipe; it is deliberately not inherited here.
+     *
+     * The origin term names the host the request is actually sent
+     * to: the digest is checked against the receiving surface, so a
+     * hash minted for one host is not valid presentation on another.
+     * The single-argument form keeps [DEFAULT_ORIGIN] (the youtubei
+     * account road's host); a caller sending to a different host
+     * MUST pass that host's origin — the account-switcher lookup
+     * passes `https://www.youtube.com`, the surface that endpoint is
+     * consumed from (2026-10-27 sign-in hunt).
      *
      * Returns null when the session has no hash source, so callers send
      * Cookie-only rather than a malformed Authorization.
@@ -42,9 +51,13 @@ data class AuthSession(
      * string verbatim into the `Authorization` header, and the wire
      * protocol is `Authorization: SAPISIDHASH <ts>_<hex>`.
      */
-    fun authorizationHeader(epochSeconds: Long): String? {
+    fun authorizationHeader(epochSeconds: Long): String? =
+        authorizationHeader(epochSeconds, DEFAULT_ORIGIN)
+
+    /** As [authorizationHeader], for a request sent to [origin]'s host. */
+    fun authorizationHeader(epochSeconds: Long, origin: String): String? {
         val hashValue = SessionCookies.hashSource(cookies) ?: return null
-        val digest = sha1Hex("$epochSeconds $hashValue https://music.youtube.com")
+        val digest = sha1Hex("$epochSeconds $hashValue $origin")
         return "SAPISIDHASH ${epochSeconds}_$digest"
     }
 
@@ -54,15 +67,25 @@ data class AuthSession(
      * (always, from [authUser]), X-Goog-Pageid (when [pageId] is set),
      * and X-Goog-Visitor-Id (when [visitorData] is set).
      */
-    fun headers(epochSeconds: Long): Map<String, String> {
+    fun headers(epochSeconds: Long): Map<String, String> =
+        headers(epochSeconds, DEFAULT_ORIGIN)
+
+    /** As [headers], with the Authorization minted for [origin]. */
+    fun headers(epochSeconds: Long, origin: String): Map<String, String> {
         val out = linkedMapOf<String, String>()
         out["Cookie"] = cookieHeader()
-        authorizationHeader(epochSeconds)?.let { out["Authorization"] = it }
+        authorizationHeader(epochSeconds, origin)?.let { out["Authorization"] = it }
         out["X-Goog-Authuser"] = authUser.toString()
         pageId?.let { out["X-Goog-Pageid"] = it }
         visitorData?.let { out["X-Goog-Visitor-Id"] = it }
         return out
     }
+
+    companion object {
+        /** The origin youtubei account-road requests are minted for. */
+        const val DEFAULT_ORIGIN: String = "https://music.youtube.com"
+    }
+
 
     private fun sha1Hex(input: String): String {
         val bytes = MessageDigest.getInstance("SHA-1")
