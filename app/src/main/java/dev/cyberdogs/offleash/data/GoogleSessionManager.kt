@@ -11,12 +11,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the Google sign-in flow currently stands, for the sign-in screen. */
 sealed interface GoogleSignInPhase {
@@ -54,12 +56,22 @@ sealed interface GoogleSignInPhase {
  * on the caller's thread) — call it from an IO dispatcher, exactly
  * like the core client's calls. Everything else is suspend or
  * state-flow reads.
+ *
+ * Grant durability (0.7.1): an issued device grant is persisted
+ * (sealed, [GooglePendingGrantStore]) the moment it exists, owned
+ * by this manager rather than the sign-in screen or the poll job.
+ * Leaving the app — even process death — no longer orphans it: a
+ * new manager restores a live grant in `init` and resumes polling
+ * it, an expired one is cleared with the plain expired ending,
+ * and a new grant is issued only on an explicit start with none
+ * live (or after the live one resolves).
  */
 class GoogleSessionManager(
     private val store: GoogleTokenStore,
     private val auth: GoogleDeviceAuth,
     private val client: YoutubeiClient,
     private val scope: CoroutineScope,
+    private val pendingGrantStore: GooglePendingGrantStore? = null,
     private val signInDiagnostics: SignInDiagnostics = SignInDiagnostics(),
     private val nowMs: () -> Long = { System.currentTimeMillis() },
 ) {
@@ -68,6 +80,24 @@ class GoogleSessionManager(
 
     @Volatile
     private var stored: StoredGoogleSession? = null
+
+    /**
+     * The issued-but-unapproved device grant (0.7.1), mirrored in
+     * [pendingGrantStore] the moment it exists. This record — not
+     * the screen, not the poll job — is the grant's owner: the
+     * screen only renders it, the poll loop only serves it, and a
+     * fresh manager after process death re-adopts it from the
+     * sealed store and resumes polling it.
+     */
+    @Volatile
+    private var pendingGrant: StoredPendingGrant? = null
+
+    /**
+     * "Check now" wake-ups for the poll loop: a conflated signal the
+     * waiting screen's button and [checkNow] fire so a parked poll
+     * runs immediately against the CURRENT grant (never a new one).
+     */
+    private val checkNowSignal = Channel<Unit>(Channel.CONFLATED)
 
     private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))
     val uiState: StateFlow<SessionUiState> = _uiState.asStateFlow()
@@ -90,6 +120,48 @@ class GoogleSessionManager(
                 health = SessionHealth.UNKNOWN,
             )
         }
+        restorePendingGrant()
+    }
+
+    /**
+     * Re-adopts a persisted pending grant after a restart (0.7.1):
+     * a LIVE grant is republished and its polling resumes on this
+     * manager's scope — the owner comes back to the same code he
+     * left with, and an approval he already gave is collected. An
+     * EXPIRED grant is cleared and lands on the plain expired
+     * ending, so no zombie polling ever runs. When a session is
+     * already stored, a leftover grant is simply stale and wiped.
+     */
+    private fun restorePendingGrant() {
+        val persisted = try {
+            pendingGrantStore?.load()
+        } catch (t: Throwable) {
+            signInDiagnostics.log(
+                "google-sign-in",
+                "the saved sign-in code couldn't be read (${t.javaClass.simpleName}) — ignoring it",
+            )
+            null
+        } ?: return
+        if (stored != null) {
+            clearPendingGrant()
+            return
+        }
+        if (!persisted.isLiveAt(nowMs())) {
+            clearPendingGrant()
+            signInDiagnostics.log(
+                "google-sign-in",
+                "a saved sign-in code had expired while the app was away — cleared",
+            )
+            _phase.value = GoogleSignInPhase.Failed(EXPIRED_REASON)
+            return
+        }
+        pendingGrant = persisted
+        signInDiagnostics.log(
+            "google-sign-in",
+            "a sign-in code from before the restart is still live — resuming its check",
+        )
+        publishAwaiting(persisted)
+        signInJob = scope.launch { pollPendingGrant() }
     }
 
     fun hasStoredSession(): Boolean = stored != null
@@ -99,13 +171,26 @@ class GoogleSessionManager(
     // ------------------------------------------------------------------
 
     /**
-     * Starts (or restarts) a sign-in attempt: asks Google for a
-     * device code, publishes it in [phase], and polls until the
-     * owner approves, declines, or the code expires. Runs on the
+     * Starts a sign-in attempt — or RESUMES the one already live.
+     * A grant is issued only when no live grant exists: while a
+     * persisted grant is unexpired, this republishes its code and
+     * makes sure its polling is running, so re-entering the screen
+     * (or tapping again after a failed check) can never burn the
+     * code the owner may already be approving. Runs on the
      * manager's scope; the screen only renders [phase] + [uiState].
      */
     fun startSignIn() {
         if (_uiState.value.signedIn) return
+        val live = livePendingGrant()
+        if (live != null) {
+            signInDiagnostics.log(
+                "google-sign-in",
+                "a code is already live — resuming it instead of issuing a new one",
+            )
+            publishAwaiting(live)
+            ensurePolling()
+            return
+        }
         signInJob?.cancel()
         _phase.value = GoogleSignInPhase.Idle
         signInJob = scope.launch {
@@ -113,15 +198,100 @@ class GoogleSessionManager(
         }
     }
 
-    /** Stops a running attempt; nothing was or will be stored for it. */
+    /**
+     * Polls the CURRENT persisted grant once, right now — the
+     * waiting screen's "I've approved — check now" button, for
+     * devices that throttle background work. Never issues a grant:
+     * with no live grant this is a no-op, and when the poll loop
+     * is parked it simply wakes it early.
+     */
+    fun checkNow() {
+        if (_uiState.value.signedIn) return
+        val live = livePendingGrant() ?: return
+        publishAwaiting(live)
+        val job = signInJob
+        if (job != null && job.isActive) {
+            checkNowSignal.trySend(Unit)
+        } else {
+            ensurePolling()
+        }
+    }
+
+    /**
+     * Stops a running attempt AND abandons its grant: the
+     * persisted record is wiped, so a cancelled code is never
+     * resumed later. Nothing was or will be stored for it.
+     */
     fun cancelSignIn() {
         signInJob?.cancel()
         signInJob = null
+        clearPendingGrant()
         if (!_uiState.value.signedIn) {
             _phase.value = GoogleSignInPhase.Idle
         }
     }
 
+    /** The live pending grant, from memory or the sealed store. */
+    private fun livePendingGrant(): StoredPendingGrant? {
+        val inMemory = pendingGrant
+        val candidate = inMemory ?: try {
+            pendingGrantStore?.load()
+        } catch (t: Throwable) {
+            null
+        }
+        if (candidate == null) return null
+        if (!candidate.isLiveAt(nowMs())) {
+            clearPendingGrant()
+            signInDiagnostics.log(
+                "google-sign-in",
+                "the saved sign-in code has expired — cleared",
+            )
+            return null
+        }
+        if (inMemory == null) pendingGrant = candidate
+        return candidate
+    }
+
+    /** Starts the poll loop for [pendingGrant] unless one is running. */
+    private fun ensurePolling() {
+        val job = signInJob
+        if (job != null && job.isActive) return
+        signInJob = scope.launch { pollPendingGrant() }
+    }
+
+    /** Publishes the waiting state for [grant] — the screen renders this. */
+    private fun publishAwaiting(grant: StoredPendingGrant) {
+        _phase.value = GoogleSignInPhase.AwaitingApproval(
+            userCode = grant.userCode,
+            verificationUrl = grant.verificationUrl,
+            expiresAtEpochMs = grant.expiresAtEpochMs,
+        )
+    }
+
+    /**
+     * Drops the pending grant everywhere (memory + sealed store).
+     * Called at every terminal outcome — adopted, declined,
+     * expired, cancelled, signed out — so a resolved grant can
+     * never be polled or resumed again.
+     */
+    private fun clearPendingGrant() {
+        pendingGrant = null
+        try {
+            pendingGrantStore?.wipe()
+        } catch (t: Throwable) {
+            signInDiagnostics.log(
+                "google-sign-in",
+                "the saved sign-in code couldn't be cleared (${t.javaClass.simpleName})",
+            )
+        }
+    }
+
+    /**
+     * Issues a NEW grant (only reached when none is live),
+     * persists it BEFORE the first poll — the persistence is what
+     * lets the attempt survive the owner leaving for the browser —
+     * and hands it to the poll loop.
+     */
     private suspend fun runSignIn() {
         signInDiagnostics.startAttempt()
         signInDiagnostics.log("google-sign-in", "device-code flow started")
@@ -148,28 +318,75 @@ class GoogleSessionManager(
                 }
                 is DeviceCodeResult.Issued -> issued.code
             }
+            val now = nowMs()
+            val grant = StoredPendingGrant(
+                deviceCode = code.deviceCode,
+                userCode = code.userCode,
+                verificationUrl = code.verificationUrl,
+                issuedAtEpochMs = now,
+                expiresAtEpochMs = now + code.expiresInSeconds * 1000L,
+                intervalSeconds = code.intervalSeconds,
+            )
+            pendingGrant = grant
+            try {
+                pendingGrantStore?.save(grant)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                // The attempt still works while this process lives;
+                // only the survive-a-restart guarantee is lost, and
+                // the diagnostics say so rather than hiding it.
+                signInDiagnostics.log(
+                    "google-sign-in",
+                    "the sign-in code couldn't be saved for resume " +
+                        "(${t.javaClass.simpleName}) — this attempt still " +
+                        "works while the app stays open",
+                )
+            }
             signInDiagnostics.log(
                 "google-sign-in",
                 "code issued — polling every ${code.intervalSeconds}s, " +
                     "expires in ${code.expiresInSeconds}s",
             )
-            _phase.value = GoogleSignInPhase.AwaitingApproval(
-                userCode = code.userCode,
-                verificationUrl = code.verificationUrl,
-                expiresAtEpochMs = nowMs() + code.expiresInSeconds * 1000L,
+            publishAwaiting(grant)
+            pollPendingGrant()
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            signInDiagnostics.log(
+                "google-sign-in",
+                "the attempt failed unexpectedly (${t.javaClass.simpleName}) — nothing was stored",
             )
-            var intervalSeconds = code.intervalSeconds.coerceAtLeast(1L)
-            val deadlineMs = nowMs() + code.expiresInSeconds * 1000L
+            _phase.value = GoogleSignInPhase.Failed(UNEXPECTED_REASON)
+        }
+    }
+
+    /**
+     * The poll loop for the CURRENT [pendingGrant], owned by the
+     * manager's (app) scope — never by the screen. It runs while
+     * the app is backgrounded, and a fresh manager resumes it from
+     * the persisted grant after process death (see
+     * [restorePendingGrant]). Each terminal outcome clears the
+     * persisted grant before landing; a mere transport failure
+     * keeps it, so checking can resume against the same code.
+     */
+    private suspend fun pollPendingGrant() {
+        val grant = pendingGrant ?: return
+        try {
+            var intervalSeconds = grant.intervalSeconds.coerceAtLeast(1L)
             while (true) {
-                delay(intervalSeconds * 1000L)
-                if (nowMs() >= deadlineMs) {
+                // Park until the next due poll — or wake at once on
+                // a "check now" signal, coalesced by the channel.
+                withTimeoutOrNull(intervalSeconds * 1000L) {
+                    checkNowSignal.receive()
+                }
+                if (nowMs() >= grant.expiresAtEpochMs) {
                     signInDiagnostics.log("google-sign-in", "the code expired unapproved")
+                    clearPendingGrant()
                     _phase.value = GoogleSignInPhase.Failed(EXPIRED_REASON)
                     return
                 }
                 val poll = withContext(Dispatchers.IO) {
                     try {
-                        auth.pollForToken(code.deviceCode)
+                        auth.pollForToken(grant.deviceCode)
                     } catch (t: Throwable) {
                         if (t is CancellationException) throw t
                         TokenPollResult.Failed("transport: ${t.javaClass.simpleName}")
@@ -182,6 +399,10 @@ class GoogleSessionManager(
                             "approved — token granted (expires in " +
                                 "${poll.tokens.expiresInSeconds}s), adopting",
                         )
+                        // The grant is spent the moment Google
+                        // issues tokens; clear it before adopting
+                        // so no path can ever poll it again.
+                        clearPendingGrant()
                         adopt(poll.tokens)
                         return
                     }
@@ -197,22 +418,30 @@ class GoogleSessionManager(
                     }
                     TokenPollResult.Denied -> {
                         signInDiagnostics.log("google-sign-in", "poll: declined by the owner")
+                        clearPendingGrant()
                         _phase.value = GoogleSignInPhase.Failed(DENIED_REASON)
                         return
                     }
                     TokenPollResult.Expired -> {
                         signInDiagnostics.log("google-sign-in", "poll: the code expired")
+                        clearPendingGrant()
                         _phase.value = GoogleSignInPhase.Failed(EXPIRED_REASON)
                         return
                     }
                     is TokenPollResult.Failed -> {
+                        // Transient by assumption: the code itself
+                        // is still good, so the persisted grant is
+                        // KEPT — "try again" / "check now" resume
+                        // checking this same code, and a restart
+                        // resumes it too.
                         signInDiagnostics.log(
                             "google-sign-in",
-                            "poll failed (${poll.detail})",
+                            "poll failed (${poll.detail}) — the code is kept",
                         )
                         _phase.value = GoogleSignInPhase.Failed(
                             "Couldn't finish checking with Google (${poll.detail}). " +
-                                "Nothing was stored. Check your connection and try again."
+                                "Nothing was stored, but your code is still good " +
+                                "until it expires — try again to keep checking for it."
                         )
                         return
                     }
@@ -222,7 +451,7 @@ class GoogleSessionManager(
             if (t is CancellationException) throw t
             signInDiagnostics.log(
                 "google-sign-in",
-                "the attempt failed unexpectedly (${t.javaClass.simpleName}) — nothing was stored",
+                "polling failed unexpectedly (${t.javaClass.simpleName}) — the code is kept",
             )
             _phase.value = GoogleSignInPhase.Failed(UNEXPECTED_REASON)
         }
@@ -485,6 +714,7 @@ class GoogleSessionManager(
     suspend fun signOut() {
         signInJob?.cancel()
         signInJob = null
+        clearPendingGrant()
         val session = stored
         if (session != null) {
             val toRevoke = session.refreshToken ?: session.accessToken

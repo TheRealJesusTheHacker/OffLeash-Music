@@ -24,6 +24,7 @@ import dev.cyberdogs.offleash.data.AppPreferences
 import dev.cyberdogs.offleash.data.DownloadManager
 import dev.cyberdogs.offleash.data.DownloadStore
 import dev.cyberdogs.offleash.data.FileSecretStorage
+import dev.cyberdogs.offleash.data.GooglePendingGrantStore
 import dev.cyberdogs.offleash.data.GoogleSessionManager
 import dev.cyberdogs.offleash.data.GoogleTokenStore
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
@@ -33,6 +34,7 @@ import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.data.SessionManager
 import dev.cyberdogs.offleash.data.SessionStore
 import dev.cyberdogs.offleash.data.SessionUiState
+import dev.cyberdogs.offleash.data.googlePendingGrantFileIn
 import dev.cyberdogs.offleash.data.googleSessionFileIn
 import dev.cyberdogs.offleash.data.StreamWindowStore
 import dev.cyberdogs.offleash.data.OkHttpChunkFetcher
@@ -129,6 +131,20 @@ class AppContainer(app: OffleashApp) {
     )
 
     /**
+     * The pending device-grant store (0.7.1): an issued-but-not-
+     * yet-approved sign-in code, sealed with the same box into its
+     * own file, so the grant survives the app being killed while
+     * the owner is in the browser approving it.
+     */
+    val googlePendingGrantStore: GooglePendingGrantStore =
+        GooglePendingGrantStore(
+            storage = FileSecretStorage(googlePendingGrantFileIn(app)),
+            box = AesGcmSecretBox {
+                KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS)
+            },
+        )
+
+    /**
      * The ONE OkHttp client for the whole app: youtubei API calls and
      * stream fetches go through the same stack (same connection pool,
      * same address-family choices), because googlevideo stream URLs are
@@ -194,6 +210,7 @@ class AppContainer(app: OffleashApp) {
         auth = googleAuth,
         client = client,
         scope = sessionScope,
+        pendingGrantStore = googlePendingGrantStore,
         signInDiagnostics = signInDiagnostics,
     )
 
