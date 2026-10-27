@@ -3,6 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
+import dev.cyberdogs.offleash.core.auth.SessionCookies
 import dev.cyberdogs.offleash.data.FakeAccountTransport.Behavior
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
@@ -278,6 +279,68 @@ class SignInConfirmationTest {
         assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
         assertTrue(
             (result as SignInAttempt.Failed).reason.contains("couldn't save the session"),
+        )
+        assertNull(store.load())
+    }
+
+    // ------------------------------------------------------------------
+    // Paste fix (2026-10-27): the manual fallback runs the pasted
+    // text through core's tolerant normalizer and then the SAME
+    // pipeline as the WebView capture. A paste wearing its transport
+    // clothes (a `Cookie:` label, one pair per line, an extra
+    // non-session cookie riding along) confirms and adopts like any
+    // capture; a paste that parses but lacks a session piece fails
+    // at the subset stage with the missing piece NAMED in the
+    // diagnostics (names only, never values).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun messyPasteNormalizesAndAdopts() = runBlocking {
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
+        val paste = "Cookie: SAPISID=test-sapisid-value\n" +
+            "__Secure-3PAPISID=test-3p-value; SID=test-sid-value\n" +
+            "LOGIN_INFO=test-login-info; CONSENT=YES+1"
+        val normalized = SessionCookies.normalizePastedCookie(paste)
+
+        val result = manager.completeSignIn(normalized.cookieString)
+
+        assertTrue("expected Success, was $result", result is SignInAttempt.Success)
+        assertEquals(1, transport.accountCallCount)
+        val persisted = store.load()
+        assertNotNull(persisted)
+        assertEquals(FakeAccountTransport.IDENTITY_EMAIL, persisted!!.identityEmail)
+    }
+
+    @Test
+    fun pasteMissingASessionPieceNamesItInTheDiagnostics() = runBlocking {
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val diagnostics = SignInDiagnostics()
+        val manager = testSessionManager(
+            store,
+            transport,
+            confirmationDelaysMs = delays,
+            signInDiagnostics = diagnostics,
+        )
+        // A hash source but no session id anywhere in the paste.
+        val normalized = SessionCookies.normalizePastedCookie(
+            "SAPISID=test-sapisid-value; PREF=f1=50000000"
+        )
+
+        val result = manager.completeSignIn(normalized.cookieString)
+
+        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
+        assertTrue(
+            (result as SignInAttempt.Failed).reason.contains("didn't give the app a usable"),
+        )
+        // The identity check is never reached, and the card's
+        // diagnostics name the missing piece.
+        assertEquals(0, transport.accountCallCount)
+        assertTrue(
+            "expected the missing session id named, was: ${diagnostics.lines()}",
+            diagnostics.lines().any { it.contains("session id (SID or LOGIN_INFO)") },
         )
         assertNull(store.load())
     }

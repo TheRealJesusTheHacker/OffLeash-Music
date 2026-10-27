@@ -51,13 +51,9 @@ class SignInDiagnostics {
      */
     fun recordCookieStage(cookies: Map<String, String>) {
         val present = SESSION_COOKIE_NAMES.filter { name -> cookies[name]?.isNotBlank() == true }
-        val missing = mutableListOf<String>()
-        if (SessionCookies.hashSource(cookies) == null) {
-            missing += "hash source (SAPISID or __Secure-3PAPISID)"
-        }
-        if (cookies["SID"]?.isNotBlank() != true && cookies["LOGIN_INFO"]?.isNotBlank() != true) {
-            missing += "session id (SID or LOGIN_INFO)"
-        }
+        // The wording of the gaps lives in core (one source of
+        // truth for every surface that names them).
+        val missing = SessionCookies.missingSessionPieces(cookies)
         val detail = buildString {
             append("${present.size} of ${SESSION_COOKIE_NAMES.size} session cookies present")
             if (present.isNotEmpty()) {
