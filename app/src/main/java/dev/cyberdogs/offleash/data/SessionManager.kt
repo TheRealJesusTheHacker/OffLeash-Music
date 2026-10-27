@@ -400,9 +400,17 @@ class SessionManager(
     )
 
     private companion object {
+        // Copy discipline (2026-10-27 sign-in hunt): when confirmation
+        // exhausts its window, the diagnostics have already shown the
+        // cookies complete and the sign-in page finished — the old
+        // text blamed an unloaded page, which sent the owner to fix
+        // a thing that was never broken. The message names the class
+        // that actually failed: YouTube would not confirm the session
+        // to the app.
         const val NOT_CONFIRMED_REASON =
-            "YouTube didn't confirm a signed-in account for that session. " +
-                "Sign in again, and make sure the YouTube Music page fully loads first."
+            "YouTube didn't confirm a signed-in account for that session, " +
+                "even though the sign-in page finished and the session " +
+                "cookies were all there. Nothing was saved. Try signing in again."
 
         const val SUBSET_REASON =
             "That sign-in didn't include a usable YouTube session. " +

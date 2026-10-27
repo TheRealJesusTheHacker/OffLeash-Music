@@ -17,10 +17,9 @@ import javax.crypto.SecretKey
  * only the wire is faked.
  *
  * Behavior switch:
- * - [Behavior.IDENTITIES]: account calls answer 200 with a body that
- *   carries the test identity in several redundant shapes (a plain
- *   accounts array AND the renderer shapes the account menu uses),
- *   enumerating [authUser] / [pageId] for it.
+ * - [Behavior.IDENTITIES]: account calls answer 200 with the account
+ *   switcher's real menu-shaped body (see [identitiesBody]),
+ *   enumerating [authUser] / [pageId] for the test identity.
  * - [Behavior.REJECTED]: account calls answer 401.
  * - [Behavior.THROW]: every call throws, like a dead network.
  * Visitor-data calls answer 200 (except under THROW, which they
@@ -76,7 +75,7 @@ class FakeAccountTransport(
                 401,
                 """{"error":{"code":401,"message":"Unauthorized","status":"UNAUTHENTICATED"}}""",
             )
-            Behavior.EMPTY -> HttpResponse(200, """{"accounts":[]}""")
+            Behavior.EMPTY -> HttpResponse(200, """{"data":{"actions":[],"responseContext":{}}}""")
             Behavior.THROW -> throw RuntimeException("connection reset by peer")
         }
     }
@@ -90,74 +89,70 @@ class FakeAccountTransport(
         """{"visitorData":"$VISITOR_DATA","responseContext":{"visitorData":"$VISITOR_DATA"}}"""
 
     private fun identitiesBody(): String {
-        val account = """
-            {
-              "name": "$IDENTITY_NAME",
-              "email": "$IDENTITY_EMAIL",
-              "avatarUrl": "$IDENTITY_AVATAR_URL",
-              "accountName": "$IDENTITY_NAME",
-              "accountEmail": "$IDENTITY_EMAIL",
-              "photoUrl": "$IDENTITY_AVATAR_URL",
-              "accountPhotoUrl": "$IDENTITY_AVATAR_URL",
-              "accountNo": $enumeratedAuthUser,
-              "authUser": $enumeratedAuthUser,
-              "accountIndex": $enumeratedAuthUser,
-              "pageId": "$enumeratedPageId",
-              "delegatedSessionId": "$enumeratedPageId",
-              "channelId": "UCfakechannel123",
-              "isSelected": true,
-              "selected": true
-            }
-        """.trimIndent()
+        // The switcher's real response shape (2026-10-27 sign-in
+        // hunt): the account menu under data.actions, one
+        // accountSectionListRenderer per Google account, identities
+        // as accountItems carrying their routing in the
+        // selectActiveIdentityEndpoint tokens. The pre-hunt fake
+        // answered in a spray of guessed shapes (a flat accounts
+        // array among them) that the old parser happened to read —
+        // the end-to-end tests certified the guess, not the wire.
+        val pageToken = enumeratedPageId?.let {
+            """{"pageIdToken":{"pageId":"$it"}},"""
+        } ?: ""
         return """
             {
-              "responseContext": {"visitorData": "$VISITOR_DATA"},
-              "authUser": $enumeratedAuthUser,
-              "pageId": "$enumeratedPageId",
-              "accounts": [$account],
-              "identities": [$account],
-              "account": $account,
-              "data": {"accounts": [$account]},
-              "actions": [
-                {
-                  "openPopupAction": {
-                    "popup": {
-                      "multiPageMenuRenderer": {
-                        "header": {
-                          "accountHeaderRenderer": {
-                            "email": {"simpleText": "$IDENTITY_EMAIL"},
-                            "name": {"simpleText": "$IDENTITY_NAME"},
-                            "channelThumbnail": {
-                              "thumbnails": [{"url": "$IDENTITY_AVATAR_URL", "width": 64, "height": 64}]
-                            }
-                          }
-                        },
-                        "sections": [
-                          {
-                            "multiPageMenuSectionRenderer": {
-                              "items": [
-                                {
-                                  "accountItemRenderer": {
-                                    "accountName": {"simpleText": "$IDENTITY_NAME"},
-                                    "accountEmail": {"simpleText": "$IDENTITY_EMAIL"},
+              "data": {
+                "responseContext": {"visitorData": "$VISITOR_DATA"},
+                "actions": [
+                  {
+                    "getMultiPageMenuAction": {
+                      "menu": {
+                        "multiPageMenuRenderer": {
+                          "sections": [
+                            {
+                              "accountSectionListRenderer": {
+                                "header": {
+                                  "googleAccountHeaderRenderer": {
                                     "email": {"simpleText": "$IDENTITY_EMAIL"},
-                                    "accountPhoto": {
-                                      "thumbnails": [{"url": "$IDENTITY_AVATAR_URL", "width": 64, "height": 64}]
-                                    },
-                                    "isSelected": true,
-                                    "authUser": $enumeratedAuthUser,
-                                    "pageId": "$enumeratedPageId"
+                                    "name": {"simpleText": "$IDENTITY_NAME"}
                                   }
-                                }
-                              ]
+                                },
+                                "contents": [
+                                  {
+                                    "accountItemSectionRenderer": {
+                                      "contents": [
+                                        {
+                                          "accountItem": {
+                                            "accountName": {"simpleText": "$IDENTITY_NAME"},
+                                            "accountPhoto": {
+                                              "thumbnails": [{"url": "$IDENTITY_AVATAR_URL", "width": 64, "height": 64}]
+                                            },
+                                            "isSelected": true,
+                                            "hasChannel": true,
+                                            "serviceEndpoint": {
+                                              "selectActiveIdentityEndpoint": {
+                                                "supportedTokens": [
+                                                  $pageToken
+                                                  {"accountSigninToken": {"signinUrl": "https://www.youtube.com/signin?action_handle_signin=true&authuser=$enumeratedAuthUser&feature=switcher"}}
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ]
+                              }
                             }
-                          }
-                        ]
+                          ]
+                        }
                       }
                     }
                   }
-                }
-              ]
+                ]
+              }
             }
         """.trimIndent()
     }
