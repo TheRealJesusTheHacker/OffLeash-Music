@@ -102,14 +102,16 @@ class SignInConfirmationTest {
     }
 
     @Test
-    fun unchangedImplausibleCaptureStopsAtTheSubsetStage() = runBlocking {
+    fun subsetPresentUnchangedCaptureStopsAtTheSubsetStage() = runBlocking {
         val store = testSessionStore()
         val transport = FakeAccountTransport()
         val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
         var reads = 0
         val provider: suspend () -> String = {
             reads++
-            "PREF=not-a-session"
+            // Session MATERIAL is present (a hash source landed)
+            // but the set never completes — and it is not changing.
+            "SAPISID=landed-but-alone"
         }
 
         val result = manager.completeSignIn(provider)
@@ -130,10 +132,73 @@ class SignInConfirmationTest {
     // sealed it — "capture unchanged between attempts" — while the
     // WebView showed the signed-in page. Two identical EMPTY reads
     // prove only that nothing had landed yet; the sign-in flow can
-    // plant the session cookies after them. The unchanged exemption
-    // now applies only to a NON-BLANK capture (the pasted-garbage
-    // case above, which keeps its early stop).
+    // plant the session cookies after them.
+    //
+    // 0.6.7 window-gate fix (same day): the exemption's first form —
+    // "any non-blank capture" — still fired on the owner's 14:22
+    // panel: the raw string was non-blank and byte-stable while the
+    // session subset inside it was entirely MISSING (the raw held
+    // no session cookie with a value; the subset stage read 0 of
+    // 15). Raw content is not session presence. The exemption now
+    // requires the capture to contain session MATERIAL — at least
+    // one session cookie carrying a value (the test above) — and a
+    // subset-missing capture always runs the full window, whatever
+    // pads its raw string (the two tests below).
     // ------------------------------------------------------------------
+
+    @Test
+    fun subsetMissingUnchangedCaptureRunsTheFullWindow() = runBlocking {
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val diagnostics = SignInDiagnostics()
+        val manager = testSessionManager(
+            store, transport,
+            confirmationDelaysMs = delays,
+            signInDiagnostics = diagnostics,
+        )
+        var reads = 0
+        val provider: suspend () -> String = {
+            reads++
+            // Non-blank, byte-stable — and not one session cookie
+            // in it. The pre-0.6.7 gate stopped this at read two.
+            "PREF=not-a-session"
+        }
+
+        val result = manager.completeSignIn(provider)
+
+        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
+        assertTrue(
+            (result as SignInAttempt.Failed).reason.contains("didn't give the app a usable"),
+        )
+        assertEquals(delays.size + 1, reads)
+        assertEquals(0, transport.accountCallCount)
+        assertTrue(
+            "expected NO unchanged-abort line, was: ${diagnostics.lines()}",
+            diagnostics.lines().none { it.contains("capture unchanged") },
+        )
+    }
+
+    @Test
+    fun blankValuedPlaceholdersDoNotStopTheWindow() = runBlocking {
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
+        var reads = 0
+        val provider: suspend () -> String = {
+            reads++
+            // The synthesized shape of a store holding only
+            // blank-valued placeholders for the session names:
+            // the raw string is non-blank and identical across
+            // reads, the subset carries no value at all.
+            if (reads <= 2) "SAPISID=; SID=; LOGIN_INFO=" else FakeAccountTransport.RAW_COOKIE
+        }
+
+        val result = manager.completeSignIn(provider)
+
+        assertTrue("expected Success, was $result", result is SignInAttempt.Success)
+        assertEquals(3, reads)
+        assertEquals(1, transport.accountCallCount)
+    }
 
     @Test
     fun blankCapturesDoNotStopTheWindow() = runBlocking {
@@ -302,6 +367,31 @@ class SignInConfirmationTest {
         val paste = "Cookie: SAPISID=test-sapisid-value\n" +
             "__Secure-3PAPISID=test-3p-value; SID=test-sid-value\n" +
             "LOGIN_INFO=test-login-info; CONSENT=YES+1"
+        val normalized = SessionCookies.normalizePastedCookie(paste)
+
+        val result = manager.completeSignIn(normalized.cookieString)
+
+        assertTrue("expected Success, was $result", result is SignInAttempt.Success)
+        assertEquals(1, transport.accountCallCount)
+        val persisted = store.load()
+        assertNotNull(persisted)
+        assertEquals(FakeAccountTransport.IDENTITY_EMAIL, persisted!!.identityEmail)
+    }
+
+    @Test
+    fun netscapePasteNormalizesAndAdopts() = runBlocking {
+        // The owner's own export shape (2026-10-27 0.6.7 hunt): a
+        // Netscape cookies.txt file — comment lines, an HttpOnly-
+        // prefixed row, TAB-separated fields — normalizes and runs
+        // the same pipeline to adoption as any capture.
+        val store = testSessionStore()
+        val transport = FakeAccountTransport()
+        val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
+        val paste = "# Netscape HTTP Cookie File\n" +
+            "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1827681797\tSAPISID\ttest-sapisid-value\n" +
+            ".youtube.com\tTRUE\t/\tTRUE\t1824657800\tSID\ttest-sid-value\n" +
+            ".youtube.com\tTRUE\t/\tTRUE\t1824657800\tLOGIN_INFO\ttest-login-info\n" +
+            ".youtube.com\tTRUE\t/\tFALSE\t1824657800\tPREF\ttest-pref-value"
         val normalized = SessionCookies.normalizePastedCookie(paste)
 
         val result = manager.completeSignIn(normalized.cookieString)

@@ -129,19 +129,26 @@ class SessionManager(
      * is adopted (rollback intact — nothing is persisted before
      * confirmation, so an exhausted window leaves any previously
      * stored session byte-for-byte untouched). One stage is exempt
-     * from patience: if the captured cookies are implausible AND the
-     * re-read string is byte-identical to the previous attempt's,
-     * waiting cannot change them, so the attempt fails at the subset
-     * stage immediately rather than spinning the window out. The
-     * exemption never applies to a BLANK capture (2026-10-27 cookie
-     * hunt): an empty read proves only that nothing had landed in
-     * the store at that instant — the sign-in page may still be
-     * mid-redirect, planting the session cookies after the read —
-     * so identical empty reads are not evidence of impossibility
-     * and the window always runs its full course on them. On the
-     * owner's phone, 0.6.4 read empty twice inside the first two
-     * seconds, called the capture "unchanged", and gave up while
-     * the WebView below showed the signed-in page.
+     * from patience: if the capture CONTAINS session material — at
+     * least one session cookie carrying a value — yet is still
+     * implausible, AND the re-read string is byte-identical to the
+     * previous attempt's, waiting cannot change it, so the attempt
+     * fails at the subset stage immediately rather than spinning
+     * the window out. The exemption requires that material
+     * (2026-10-27 0.6.7 hunt, refining the cookie hunt's rule): a
+     * capture whose session subset is entirely MISSING is a
+     * not-yet-landed capture, not an impossible one, and always
+     * runs the full window — however the raw string looks. The raw
+     * string can be non-blank and byte-stable while no session
+     * cookie in it carries a value: blank-valued placeholders the
+     * store holds mid-landing, non-session cookies riding along,
+     * or a pasted text the subset stage cannot read at all. The
+     * pre-0.6.7 gate keyed on the raw string being non-blank, and
+     * fired in ~2s on exactly those shapes — 0.6.4's empty reads
+     * first, then the owner's 14:22 panel, where a subset-less
+     * capture was sealed as "unchanged" while the session was
+     * still landing (or still unread). Identical reads of NOTHING
+     * are not evidence of impossibility.
      *
      * Every stage of every attempt is recorded in [signInDiagnostics]
      * (cookie names and outcome classes only — never values), so a
@@ -169,7 +176,13 @@ class SessionManager(
             signInDiagnostics.recordCookieStage(cookies)
             if (!SessionCookies.isPlausibleSession(cookies)) {
                 lastFailure = SignInAttempt.Failed(SUBSET_REASON)
-                if (raw.isNotBlank() && raw == previousRaw) {
+                // The early stop requires session MATERIAL in the
+                // capture (see the window KDoc above): a subset-less
+                // capture — blank, placeholder-only, or unreadable —
+                // always runs the full window, whatever the raw
+                // string's shape or stability.
+                val subsetPresent = cookies.values.any { it.isNotBlank() }
+                if (subsetPresent && raw == previousRaw) {
                     signInDiagnostics.log(
                         "cookies",
                         "capture unchanged between attempts — the window cannot change these cookies; stopping at the subset stage",
