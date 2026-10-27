@@ -55,6 +55,68 @@ private const val SIGNED_IN_URL = "https://music.youtube.com/"
 private const val MUSIC_URL = "https://music.youtube.com"
 
 /**
+ * Every host the cookie harvest reads, in merge order (YouTube's own
+ * hosts first — their values are the ones the session replays, and
+ * when several hosts hold the same cookie the first non-blank wins).
+ *
+ * Why more than one host (2026-10-27 cookie hunt): the session
+ * cookies are planted across domains. YouTube plants its copies on
+ * `.youtube.com` when its pages respond; Google plants the
+ * authoritative set on `.google.com` during the sign-in flow. Which
+ * domain's copy a given read can see depends on how the flow's
+ * redirect chain landed on this device, in this process, this time —
+ * 0.6.4 read ONLY music.youtube.com and got 0 of 15 while the
+ * WebView below the failure card showed the signed-in page. Reading
+ * every host that can hold the session, and merging, makes the
+ * capture independent of the landing's shape.
+ */
+private val CAPTURE_HOSTS: List<Pair<String, String>> = listOf(
+    "music.youtube.com" to MUSIC_URL,
+    "www.youtube.com" to "https://www.youtube.com",
+    "accounts.google.com" to "https://accounts.google.com",
+    "www.google.com" to "https://www.google.com",
+)
+
+/**
+ * One harvest of the sign-in window's session cookies: flushes the
+ * cookie store first (a fresh process can otherwise read a store
+ * whose writes have not been committed), reads every host in
+ * [CAPTURE_HOSTS], logs the per-host session-cookie counts to the
+ * sign-in diagnostics (host names and counts only — never values,
+ * per the diagnostics privacy contract), and returns the merged
+ * capture as a raw cookie string for confirmation.
+ */
+private fun harvestSessionCookies(
+    diagnostics: dev.cyberdogs.offleash.data.SignInDiagnostics,
+): String {
+    val cookieManager = CookieManager.getInstance()
+    try {
+        cookieManager.flush()
+    } catch (e: Exception) {
+        // Best effort: an unflushed read is still a read.
+    }
+    val subsets = CAPTURE_HOSTS.map { (host, url) ->
+        val raw = try {
+            cookieManager.getCookie(url)
+        } catch (e: Exception) {
+            null
+        } ?: ""
+        host to dev.cyberdogs.offleash.core.auth.SessionCookies.extractSubset(raw)
+    }
+    diagnostics.log(
+        "cookies",
+        "per-host session-cookie counts — " + subsets.joinToString("; ") { (host, subset) ->
+            "$host: ${subset.count { it.value.isNotBlank() }}"
+        },
+    )
+    return dev.cyberdogs.offleash.core.auth.SessionCookies.synthesizeCookieString(
+        dev.cyberdogs.offleash.core.auth.SessionCookies.mergeSubsets(
+            subsets.map { it.second },
+        ),
+    )
+}
+
+/**
  * The only hosts the sign-in view may ever visit: Google's sign-in
  * family and YouTube's. Subdomains OF a listed host are allowed;
  * lookalike hosts that merely end in similar text are not in the
@@ -341,10 +403,15 @@ fun SignInScreen(
                                     // not a one-shot capture: the jar
                                     // keeps filling after this first
                                     // landing, and confirmation re-reads
-                                    // it across its window.
+                                    // it across its window. The source
+                                    // is the multi-host harvest below —
+                                    // a single-host read came back
+                                    // empty on a signed-in page in
+                                    // 0.6.4 (2026-10-27 cookie hunt).
                                     attemptSignIn {
-                                        CookieManager.getInstance()
-                                            .getCookie(MUSIC_URL) ?: ""
+                                        harvestSessionCookies(
+                                            container.signInDiagnostics,
+                                        )
                                     }
                                 }
                             }
