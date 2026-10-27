@@ -109,4 +109,73 @@ class SessionCookiesTest {
         )
         assertFalse(SessionCookies.isPlausibleSession(emptyMap()))
     }
+
+    // ------------------------------------------------------------------
+    // Multi-host capture merge (2026-10-27 cookie hunt): the WebView
+    // harvest reads every host that can hold the session and merges
+    // the subsets. The 0.6.4 device failure was a single-host read
+    // returning empty while the session sat in the same cookie store
+    // under sibling hosts — these tests pin the merge that makes the
+    // capture independent of which host planted what.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun mergeTakesTheFirstHostsValueForANames() {
+        val merged = SessionCookies.mergeSubsets(
+            listOf(
+                mapOf("SAPISID" to "from-music", "SID" to "sid-music"),
+                mapOf("SAPISID" to "from-google", "SID" to "sid-google"),
+            )
+        )
+        assertEquals("from-music", merged["SAPISID"])
+        assertEquals("sid-music", merged["SID"])
+    }
+
+    @Test
+    fun mergeFillsGapsFromLaterHosts() {
+        val merged = SessionCookies.mergeSubsets(
+            listOf(
+                emptyMap(),
+                mapOf("SAPISID" to "s"),
+                mapOf("SID" to "sid", "LOGIN_INFO" to "li"),
+            )
+        )
+        assertEquals("s", merged["SAPISID"])
+        assertEquals("sid", merged["SID"])
+        assertEquals("li", merged["LOGIN_INFO"])
+        assertTrue(SessionCookies.isPlausibleSession(merged))
+    }
+
+    @Test
+    fun mergeBlankValueNeverShadowsARealOne() {
+        val merged = SessionCookies.mergeSubsets(
+            listOf(
+                mapOf("SID" to "  "),
+                mapOf("SID" to "real-sid"),
+            )
+        )
+        assertEquals("real-sid", merged["SID"])
+    }
+
+    @Test
+    fun mergeOutputIsInCanonicalOrderAndSubsetOnly() {
+        val merged = SessionCookies.mergeSubsets(
+            listOf(mapOf("SIDCC" to "c", "PREF" to "p", "SAPISID" to "s"))
+        )
+        assertEquals(listOf("SAPISID", "SIDCC"), merged.keys.toList())
+    }
+
+    @Test
+    fun synthesizedStringRoundTripsThroughExtractSubset() {
+        val merged = SessionCookies.mergeSubsets(
+            listOf(
+                mapOf("SAPISID" to "s=with=equals"),
+                mapOf("SID" to "sid"),
+            )
+        )
+        val roundTripped = SessionCookies.extractSubset(
+            SessionCookies.synthesizeCookieString(merged)
+        )
+        assertEquals(merged, roundTripped)
+    }
 }

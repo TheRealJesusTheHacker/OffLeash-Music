@@ -73,6 +73,40 @@ object SessionCookies {
     }
 
     /**
+     * Merges per-host subsets into one capture, in the order the
+     * hosts were read: the first NON-BLANK value for a name wins, so
+     * a host holding only a blank placeholder for a name never
+     * shadows another host's real value (and if every host's value
+     * for a name is blank, the first blank stands — it carries no
+     * credential material either way). Output is in canonical
+     * [SESSION_COOKIE_NAMES] order.
+     *
+     * Why this exists (2026-10-27 cookie hunt): the session cookies
+     * are planted across several domains — YouTube plants its own
+     * copies on `.youtube.com`, Google plants the authoritative set
+     * on `.google.com` — and which domain's copy a given read can see
+     * depends on how the sign-in flow's redirects landed. A capture
+     * that reads ONE host can therefore come back empty while the
+     * session demonstrably exists in the same cookie store under a
+     * sibling host. Merging every host that can hold the session
+     * makes the capture independent of the landing's shape.
+     */
+    fun mergeSubsets(subsets: List<Map<String, String>>): Map<String, String> {
+        val out = linkedMapOf<String, String>()
+        for (name in SESSION_COOKIE_NAMES) {
+            val winner = subsets.firstNotNullOfOrNull { subset ->
+                subset[name]?.takeIf { it.isNotBlank() }
+            } ?: subsets.firstNotNullOfOrNull { it[name] }
+            if (winner != null) out[name] = winner
+        }
+        return out
+    }
+
+    /** Renders a cookie map back into a raw `Cookie`-style string. */
+    fun synthesizeCookieString(cookies: Map<String, String>): String =
+        cookies.entries.joinToString("; ") { (name, value) -> "$name=$value" }
+
+    /**
      * The cookie value the SAPISIDHASH is computed over: SAPISID when
      * present and non-blank, else __Secure-3PAPISID when present and
      * non-blank, else null. This presence rule is deliberate (the study
