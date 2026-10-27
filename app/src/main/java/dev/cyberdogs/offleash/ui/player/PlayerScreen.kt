@@ -6,10 +6,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -178,6 +181,14 @@ fun PlayerScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                // The player is a full-window overlay (no Scaffold
+                // insets reach it) running under transient system
+                // bars: safeDrawing sizes the content inside the
+                // bars whenever they are shown or revealed, and is
+                // zero while they are hidden, so the player is
+                // full-bleed immersive AND no control ever sits
+                // under a bar (2026-10-27 bars pass).
+                .windowInsetsPadding(WindowInsets.safeDrawing)
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -684,7 +695,15 @@ fun QueueScreen(
         onShowPlayer = onBack,
     )
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            // Same overlay discipline as the player it lives in:
+            // content sized inside the system bars whenever they
+            // are shown or transiently revealed (2026-10-27 bars
+            // pass).
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

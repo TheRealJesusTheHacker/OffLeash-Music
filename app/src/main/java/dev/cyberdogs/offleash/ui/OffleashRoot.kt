@@ -1,5 +1,8 @@
 package dev.cyberdogs.offleash.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +41,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,8 +51,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -150,18 +159,40 @@ fun OffleashRoot(container: AppContainer) {
         }
     }
 
+    // Immersive surfaces (2026-10-27 bars pass, owner directive):
+    // while the splash or the expanded player is up, the system bars
+    // hide and return on a swipe from the screen edge, fading again
+    // on their own (transient behavior). Everywhere else the bars
+    // stay and the layout sizes around them via insets.
+    TransientSystemBars(active = showSplash || playerExpanded)
+
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                Column {
+                val showTabs = currentRoute in TOP_LEVEL_ROUTES
+                Column(
+                    // When the tabs bar is hidden (every non-top-level
+                    // route — sign-in included), the mini-player is
+                    // the bottom-most element on the screen and must
+                    // carry the navigation-bar inset itself; the
+                    // Material NavigationBar applies its own inset
+                    // when shown. Without this the mini-player sat in
+                    // the system navigation zone on Android 15's
+                    // enforced edge-to-edge (2026-10-27 bars pass).
+                    modifier = if (showTabs) {
+                        Modifier
+                    } else {
+                        Modifier.navigationBarsPadding()
+                    },
+                ) {
                     if (queueState.currentTrack != null && !playerExpanded) {
                         MiniPlayer(
                             container = container,
                             onExpand = { playerExpanded = true },
                         )
                     }
-                    if (currentRoute in TOP_LEVEL_ROUTES) {
+                    if (showTabs) {
                         NavigationBar {
                             NavigationBarItem(
                                 selected = currentRoute == "home",
@@ -478,6 +509,58 @@ private fun MiniPlayer(
             }
         }
     }
+}
+
+/**
+ * Transient system bars for the immersive surfaces (2026-10-27
+ * bars pass, owner directive: "make them disappear unless I swipe
+ * up"). While [active], the status and navigation bars hide; a
+ * swipe from a screen edge reveals them and they fade again on
+ * their own ([WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE]).
+ * The reveal is the system's own gesture — it never consumes the
+ * app's taps, so the splash's tap-to-skip and the player's controls
+ * are undisturbed, and the splash's 3.8-second timer (a root
+ * effect, independent of the bars) is untouched. When [active]
+ * turns false — and again if this leaves composition — the bars
+ * are restored, so the app can never strand the user without them.
+ *
+ * The behavior is identical under 3-button and gesture navigation:
+ * the controller hides/shows the same system-bar types either way,
+ * and the revealed bar's height is the system's, which the inset
+ * handling elsewhere already sizes around per mode.
+ */
+@Composable
+private fun TransientSystemBars(active: Boolean) {
+    val context = LocalContext.current
+    DisposableEffect(context, active) {
+        val window = context.findActivity()?.window
+        if (window != null) {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (active) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        onDispose {
+            if (!active && window != null) {
+                WindowCompat.getInsetsController(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+}
+
+/** The hosting activity behind a (possibly wrapped) context. */
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
 /** Route-change motion duration (polish pass, 2026-10-27). */
