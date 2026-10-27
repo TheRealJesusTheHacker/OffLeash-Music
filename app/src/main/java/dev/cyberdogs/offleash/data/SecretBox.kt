@@ -71,6 +71,27 @@ object KeystoreSecretKey {
         val existing = keyStore.getKey(alias, null) as? SecretKey
         if (existing != null) return existing
 
+        return try {
+            generate(keyStore, alias)
+        } catch (e: Exception) {
+            // First-generation faults are a known device class: a
+            // half-created entry or a transient provider failure on
+            // the very first key this app has ever asked for. At this
+            // point the alias has never sealed anything — no stored
+            // session can depend on a key that does not exist yet —
+            // so clearing any partial entry and generating once more
+            // cannot orphan data. A second failure propagates: the
+            // caller (session adoption) now degrades to the sign-in
+            // diagnostics card naming the store stage instead of
+            // crashing (2026-10-27 crash hunt — the first confirmed
+            // sign-in reaches this code for the first time, and
+            // before the hunt nothing caught its failure).
+            runCatching { keyStore.deleteEntry(alias) }
+            generate(keyStore, alias)
+        }
+    }
+
+    private fun generate(keyStore: KeyStore, alias: String): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(
             alias,

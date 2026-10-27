@@ -1,9 +1,17 @@
 package dev.cyberdogs.offleash.data
 
+import dev.cyberdogs.offleash.core.api.HttpResponse
+import dev.cyberdogs.offleash.core.api.HttpTransport
+import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.data.FakeAccountTransport.Behavior
+import java.io.IOException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -156,6 +164,112 @@ class SignInConfirmationTest {
         assertTrue(
             "expected the window-exhausted line, was: $lines",
             lines.any { it.contains("window exhausted") },
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Crash-hunt adoption corridor (2026-10-27): 0.6.3 crashed the
+    // whole app ~1s into the owner's first real sign-in. The parse
+    // was proven innocent (23 structural variants, zero escapes);
+    // the corridor downstream of a confirmed identity was not —
+    // adoption's save is the first Keystore seal and first session
+    // write of the app's life, and nothing caught its failure, so it
+    // escaped into the sign-in screen's handler-less launch. These
+    // tests pin the corridor shut: a device-side save failure is a
+    // polite Failed naming the store stage, with nothing stored.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun sealFailureDuringAdoptionFailsPolitelyAndStoresNothing() = runBlocking {
+        val store = SessionStore(
+            InMemorySecretStorage(),
+            AesGcmSecretBox { throw RuntimeException("keystore unavailable in test") },
+        )
+        val transport = FakeAccountTransport()
+        val diagnostics = SignInDiagnostics()
+        val manager = testSessionManager(
+            store, transport,
+            confirmationDelaysMs = delays,
+            signInDiagnostics = diagnostics,
+        )
+
+        val result = manager.completeSignIn(FakeAccountTransport.RAW_COOKIE)
+
+        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
+        assertTrue(
+            (result as SignInAttempt.Failed).reason.contains("couldn't save the session"),
+        )
+        // The identity WAS confirmed (the account call happened);
+        // only the save failed, and nothing was stored.
+        assertEquals(1, transport.accountCallCount)
+        assertNull(store.load())
+        assertTrue(
+            "expected a store stage line, was: ${diagnostics.lines()}",
+            diagnostics.lines().any { it.contains("store:") && it.contains("couldn't be saved") },
+        )
+    }
+
+    @Test
+    fun writeFailureDuringAdoptionFailsPolitelyAndStoresNothing() = runBlocking {
+        val storage = object : SecretStorage {
+            override fun read(): ByteArray? = null
+            override fun write(bytes: ByteArray) {
+                throw IOException("simulated storage failure")
+            }
+            override fun clear() {}
+        }
+        val store = SessionStore(storage, testSecretBox())
+        val transport = FakeAccountTransport()
+        val manager = testSessionManager(store, transport, confirmationDelaysMs = delays)
+
+        val result = manager.completeSignIn(FakeAccountTransport.RAW_COOKIE)
+
+        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
+        assertTrue(
+            (result as SignInAttempt.Failed).reason.contains("couldn't save the session"),
+        )
+        assertNull(store.load())
+    }
+
+    @Test
+    fun errorEscapingTheIdentityCheckFailsPolitely() = runBlocking {
+        // The core contract says the identity lookup never throws —
+        // but an Error (not an Exception) is outside every catch the
+        // client makes. The manager is the last line: it must turn
+        // even that into the failure card, immediately.
+        val transport = object : HttpTransport {
+            override fun post(
+                url: String,
+                headers: Map<String, String>,
+                body: String,
+            ): HttpResponse = HttpResponse(200, "")
+
+            override fun get(url: String, headers: Map<String, String>): HttpResponse {
+                throw AssertionError("simulated error escape")
+            }
+        }
+        val store = testSessionStore()
+        val diagnostics = SignInDiagnostics()
+        val manager = SessionManager(
+            store = store,
+            client = YoutubeiClient(transport),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            signInDiagnostics = diagnostics,
+            confirmationDelaysMs = delays,
+        )
+
+        val result = manager.completeSignIn(FakeAccountTransport.RAW_COOKIE)
+
+        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
+        assertTrue(
+            (result as SignInAttempt.Failed).reason.contains("Something went wrong"),
+        )
+        assertNull(store.load())
+        assertTrue(
+            "expected an identity stage line naming the escape, was: ${diagnostics.lines()}",
+            diagnostics.lines().any {
+                it.contains("identity:") && it.contains("failed unexpectedly")
+            },
         )
     }
 }

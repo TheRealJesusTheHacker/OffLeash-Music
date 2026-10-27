@@ -10,6 +10,7 @@ import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.auth.SESSION_COOKIE_NAMES
 import dev.cyberdogs.offleash.core.auth.SessionCookies
 import dev.cyberdogs.offleash.core.model.AccountIdentity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -179,25 +180,58 @@ class SessionManager(
                 pageId = null,
                 visitorData = null,
             )
-            val lookup = withContext(Dispatchers.IO) { client.accountIdentities(tentative) }
+            // The confirmation corridor is TOTAL (2026-10-27 crash
+            // hunt): the client contract says the lookup never
+            // throws, and adoption below is wrapped the same way —
+            // but this flow runs inside the sign-in screen's launch,
+            // which has no exception handler, so anything that still
+            // escapes from here kills the process. That is exactly
+            // what 0.6.3 did on the owner's phone: the first real
+            // identity answer reached adoption, the on-device seal
+            // threw, and the app vanished ~1s after Google's prompt.
+            // An unexpected throw is not a settling problem, so it
+            // fails the attempt at once, naming its stage — it does
+            // not spin the patience window.
+            val lookup = try {
+                withContext(Dispatchers.IO) { client.accountIdentities(tentative) }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                signInDiagnostics.log(
+                    "identity",
+                    "attempt $attempt: the identity check failed unexpectedly " +
+                        "(${t.javaClass.simpleName})",
+                )
+                return@withLock SignInAttempt.Failed(UNEXPECTED_REASON)
+            }
             when (lookup) {
                 is IdentityLookup.Found -> {
                     val identities = lookup.identities
+                    val shape = lookup.shapeSummary?.let { " — shape: $it" } ?: ""
                     if (identities.isEmpty()) {
                         signInDiagnostics.log(
                             "identity",
                             "attempt $attempt: YouTube answered but listed no account — " +
-                                "the session is not recognized yet",
+                                "the session is not recognized yet$shape",
                         )
                         lastFailure = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
                     } else {
                         signInDiagnostics.log(
                             "identity",
-                            "attempt $attempt: YouTube confirmed ${identities.size} account(s)",
+                            "attempt $attempt: YouTube confirmed ${identities.size} account(s)$shape",
                         )
                         val selected = identities.firstOrNull { it.isSelected == true }
                             ?: identities.first()
-                        return@withLock adoptIdentifiedSession(cookies, selected)
+                        return@withLock try {
+                            adoptIdentifiedSession(cookies, selected)
+                        } catch (t: Throwable) {
+                            if (t is CancellationException) throw t
+                            signInDiagnostics.log(
+                                "sign-in",
+                                "adopting the confirmed session failed unexpectedly " +
+                                    "(${t.javaClass.simpleName}) — nothing was stored",
+                            )
+                            SignInAttempt.Failed(UNEXPECTED_REASON)
+                        }
                     }
                 }
                 is IdentityLookup.Rejected -> {
@@ -245,7 +279,27 @@ class SessionManager(
             capturedAtEpochMs = now,
             lastValidatedEpochMs = now,
         )
-        store.save(toStore)
+        // The first save of the app's life happens HERE, on the
+        // first confirmed sign-in — which makes the Keystore seal
+        // and the file write first-time operations at exactly this
+        // moment (before any session exists, startup's load never
+        // reaches the seal at all). Their failures are device
+        // failures, not sign-in failures: name the store stage and
+        // fail the attempt politely, with rollback intact — an
+        // unstored confirmation is not a sign-in (2026-10-27 crash
+        // hunt: unwrapped, this throw escaped into the screen's
+        // handler-less launch and crashed the app).
+        try {
+            store.save(toStore)
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            signInDiagnostics.log(
+                "store",
+                "the confirmed session couldn't be saved on this device " +
+                    "(${t.javaClass.simpleName}) — nothing was stored",
+            )
+            return SignInAttempt.Failed(STORE_REASON)
+        }
         stored = toStore
         snapshot = toStore.toAuthSession()
         val displayName = selected.name?.takeIf { it.isNotBlank() } ?: "Your account"
@@ -291,7 +345,21 @@ class SessionManager(
                         capturedAtEpochMs = previous?.capturedAtEpochMs ?: now,
                         lastValidatedEpochMs = now,
                     )
-                    store.save(updated)
+                    // Persisting the refreshed identity is the same
+                    // seal corridor as adoption (2026-10-27 crash
+                    // hunt): a device-side seal failure must not
+                    // escape validation — the in-memory state below
+                    // still updates, and the next launch re-reads
+                    // the stored copy and re-validates.
+                    try {
+                        store.save(updated)
+                    } catch (e: Exception) {
+                        signInDiagnostics.log(
+                            "store",
+                            "the refreshed session couldn't be saved (${e.javaClass.simpleName}) — " +
+                                "the stored copy stands",
+                        )
+                    }
                     stored = updated
                     snapshot = updated.toAuthSession()
                     _uiState.value = SessionUiState(
@@ -360,15 +428,26 @@ class SessionManager(
         val filtered = rotated.filterKeys { name -> name in SESSION_COOKIE_NAMES }
         if (filtered.isEmpty()) return
         scope.launch(Dispatchers.IO) {
-            mutex.withLock {
-                val current = snapshot ?: return@withLock
-                val previous = stored ?: return@withLock
-                val merged = current.cookies + filtered
-                if (merged == current.cookies) return@withLock
-                val updated = previous.copy(cookies = merged)
-                store.save(updated)
-                stored = updated
-                snapshot = updated.toAuthSession()
+            // Rotation is best-effort bookkeeping riding on the
+            // transport: a seal failure here (the same corridor as
+            // adoption, 2026-10-27 crash hunt) must never take down
+            // the browsing that carried the cookies in. The in-memory
+            // session keeps the pre-rotation values; the next
+            // response offers them again.
+            try {
+                mutex.withLock {
+                    val current = snapshot ?: return@withLock
+                    val previous = stored ?: return@withLock
+                    val merged = current.cookies + filtered
+                    if (merged == current.cookies) return@withLock
+                    val updated = previous.copy(cookies = merged)
+                    store.save(updated)
+                    stored = updated
+                    snapshot = updated.toAuthSession()
+                }
+            } catch (e: Exception) {
+                // Deliberately silent: rotation retries itself on
+                // the next response by construction.
             }
         }
     }
@@ -420,6 +499,20 @@ class SessionManager(
         const val REACH_REASON =
             "Couldn't reach YouTube to verify the sign-in — " +
                 "check your connection and try again."
+
+        // Copy discipline (2026-10-27 crash hunt): a confirmed
+        // sign-in whose save failed on the device is its own class —
+        // YouTube said yes; the phone couldn't keep it. The message
+        // says exactly that, and the diagnostics name the store
+        // stage with the failure's class.
+        const val STORE_REASON =
+            "YouTube confirmed your account, but the app couldn't " +
+                "save the session on this device, so nothing was " +
+                "stored. Try signing in again."
+
+        const val UNEXPECTED_REASON =
+            "Something went wrong while confirming the sign-in. " +
+                "Nothing was saved. Try signing in again."
 
         /**
          * The production confirmation window: five attempts across
