@@ -79,6 +79,29 @@ class OkHttpTransport(
         return execute(requestBuilder.build())
     }
 
+    /**
+     * Form-encoded POST for the OAuth endpoints (device code,
+     * token, revocation). Same contract as [post]: any HTTP status
+     * is data in an [HttpResponse]; only transport failures throw.
+     * These calls carry no session material of the cookie kind, and
+     * the token values in their bodies are never logged (there is
+     * no logging interceptor on this client, by design — see the
+     * class documentation).
+     */
+    override fun postForm(
+        url: String,
+        headers: Map<String, String>,
+        formBody: String,
+    ): HttpResponse {
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(formBody.toRequestBody(FORM_MEDIA_TYPE))
+        for ((name, value) in headers) {
+            requestBuilder.header(name, value)
+        }
+        return execute(requestBuilder.build())
+    }
+
     private fun execute(request: Request): HttpResponse {
         httpClient.newCall(request).execute().use { response ->
             notifyResponseCookies(request, response.headers("Set-Cookie"))
@@ -132,5 +155,7 @@ class OkHttpTransport(
         }
 
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
     }
 }
