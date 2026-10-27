@@ -12,8 +12,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -24,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +42,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.cyberdogs.offleash.AppContainer
+import dev.cyberdogs.offleash.core.auth.PastedCookieShape
+import dev.cyberdogs.offleash.core.auth.SessionCookies
 import dev.cyberdogs.offleash.data.SignInAttempt
 import dev.cyberdogs.offleash.data.wipeWebViewData
 import kotlinx.coroutines.Dispatchers
@@ -223,147 +230,224 @@ fun SignInScreen(
         }
     }
 
+    // The paste path (2026-10-27 paste fix): the pasted text is read
+    // by core's tolerant normalizer (a header string, a `Cookie:`
+    // label, quotes, one pair per line, or a JSON cookie list), the
+    // reading is logged — shape and pair count only, never values —
+    // and the normalized string enters the SAME pipeline as the
+    // WebView capture: subset validation, identity confirmation,
+    // adoption, sync. A paste that parses but lacks the session
+    // subset fails at the subset stage, whose diagnostics name the
+    // missing pieces.
+    fun submitPaste() {
+        if (validating) return
+        val normalized = SessionCookies.normalizePastedCookie(pasteText)
+        val shapeLabel = when (normalized.shape) {
+            PastedCookieShape.COOKIE_HEADER -> "a cookie header string"
+            PastedCookieShape.JSON_COOKIE_ARRAY -> "a JSON cookie list"
+        }
+        container.signInDiagnostics.log(
+            "paste",
+            "pasted cookie read as $shapeLabel — " +
+                "${normalized.pairCount} cookie pair(s) in the paste",
+        )
+        val cookieString = normalized.cookieString
+        attemptSignIn { cookieString }
+    }
+
+    val headerScroll = rememberScrollState()
+    val pasteScroll = rememberScrollState()
+    // When a failure card lands, bring it (and the paste switch
+    // below it) into view inside the header's scroll region.
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null) headerScroll.animateScrollTo(headerScroll.maxValue)
+    }
+    // The header region's height cap: the plain header (back, title,
+    // explanation, paste switch) always fits whole; with a crash or
+    // failure card showing, the cap grows and the region scrolls —
+    // the cards are tall, and an unbounded header is what pushed
+    // this screen's controls off the bottom in the first place.
+    val headerMaxHeight =
+        if (errorMessage != null || savedCrash != null) 430.dp else 330.dp
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .imePadding()
+            .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
-        TextButton(onClick = onBack) { Text("Back") }
-        Text(
-            text = "Sign in with Google",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = "Sign-in happens on Google's own page, inside this view. " +
-                "This app never sees your password — Google handles that part alone. " +
-                "When you finish, only the session cookie is kept, encrypted on " +
-                "this device, so the app can show your library and playlists. " +
-                "Nothing about your account is sent anywhere else.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-
-        savedCrash?.let { trace ->
-            Spacer(Modifier.height(12.dp))
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        text = "The app stopped during the last sign-in attempt. " +
-                            "Here's what it recorded:",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = trace,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(
-                        onClick = {
-                            dev.cyberdogs.offleash.data.CrashReporter.clear(
-                                dev.cyberdogs.offleash.data.CrashReporter.fileIn(context)
-                            )
-                            savedCrash = null
-                        },
-                    ) { Text("Clear") }
-                }
-            }
-        }
-
-        blockedNote?.let { note ->
+        // Everything that can GROW lives in this bounded, scrollable
+        // header (2026-10-27 paste fix). The pre-fix screen was one
+        // non-scrolling column: a tall failure card collapsed the
+        // WebView to a sliver and laid the paste button out past the
+        // column's bottom edge — into the mini-player / system-bar
+        // zone, visible at the screen's very bottom and untappable.
+        // Nothing below this region can be pushed off-screen now:
+        // the region takes at most its cap, and its content scrolls.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = headerMaxHeight)
+                .verticalScroll(headerScroll),
+        ) {
+            TextButton(onClick = onBack) { Text("Back") }
+            Text(
+                text = "Sign in with Google",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
             Spacer(Modifier.height(12.dp))
             Text(
-                text = note,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
+                text = "Sign-in happens on Google's own page, inside this view. " +
+                    "This app never sees your password — Google handles that part alone. " +
+                    "When you finish, only the session cookie is kept, encrypted on " +
+                    "this device, so the app can show your library and playlists. " +
+                    "Nothing about your account is sent anywhere else.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-        }
 
-        errorMessage?.let { message ->
-            Spacer(Modifier.height(12.dp))
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    val signInLines = container.signInDiagnostics.lines()
-                    if (signInLines.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
+            savedCrash?.let { trace ->
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
                         Text(
-                            text = "What happened",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "The app stopped during the last sign-in attempt. " +
+                                "Here's what it recorded:",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            text = signInLines.joinToString("\n"),
+                            text = trace,
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(
+                            onClick = {
+                                dev.cyberdogs.offleash.data.CrashReporter.clear(
+                                    dev.cyberdogs.offleash.data.CrashReporter.fileIn(context)
+                                )
+                                savedCrash = null
+                            },
+                        ) { Text("Clear") }
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = {
-                            errorMessage = null
-                            validating = false
-                            if (mode == SignInMode.WEB) {
-                                // Start the flow over from Google's page.
-                                CookieManager.getInstance().removeAllCookies(null)
-                                CookieManager.getInstance().flush()
-                                webView?.loadUrl(LOGIN_URL)
-                            }
-                        },
-                    ) { Text("Try again") }
                 }
+            }
+
+            blockedNote?.let { note ->
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            errorMessage?.let { message ->
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        val signInLines = container.signInDiagnostics.lines()
+                        if (signInLines.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = "What happened",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = signInLines.joinToString("\n"),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                errorMessage = null
+                                validating = false
+                                if (mode == SignInMode.WEB) {
+                                    // Start the flow over from Google's page.
+                                    CookieManager.getInstance().removeAllCookies(null)
+                                    CookieManager.getInstance().flush()
+                                    webView?.loadUrl(LOGIN_URL)
+                                }
+                            },
+                        ) { Text("Try again") }
+                    }
+                }
+            }
+
+            if (mode == SignInMode.WEB) {
+                // The paste switch lives INSIDE the scrollable header,
+                // directly under the explanation — and under the failure
+                // card when one is showing — never pinned to the screen's
+                // bottom edge, where the pre-fix layout left it inside
+                // the mini-player / system-bar zone (2026-10-27 paste
+                // fix).
+                Spacer(Modifier.height(16.dp))
+                OutlinedButton(
+                    onClick = {
+                        errorMessage = null
+                        blockedNote = null
+                        mode = SignInMode.PASTE
+                    },
+                    enabled = !validating,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Paste a cookie instead") }
+                Spacer(Modifier.height(4.dp))
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        if (mode == SignInMode.WEB) {
-            if (validating) {
-                // The WebView stays composed below while confirmation
-                // runs: the page keeps settling — and Google keeps
-                // minting the session's cookies — while the manager
-                // re-reads the jar across its window. The pre-hunt
-                // shape replaced the view with this spinner, which
-                // destroyed the view mid-settle (2026-10-24 hunt).
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Text(
-                        text = "Checking your sign-in with YouTube — this can take " +
-                            "a moment while YouTube finishes setting up your session…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
+        if (validating) {
+            // In WEB mode the WebView stays composed below while
+            // confirmation runs: the page keeps settling — and Google
+            // keeps minting the session's cookies — while the manager
+            // re-reads the jar across its window. The pre-hunt shape
+            // replaced the view with this spinner, which destroyed
+            // the view mid-settle (2026-10-24 hunt).
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = "Checking your sign-in with YouTube — this can take " +
+                        "a moment while YouTube finishes setting up your session…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (mode == SignInMode.WEB) {
             AndroidView(
                 factory = { viewContext ->
                     WebView(viewContext).apply {
@@ -432,27 +516,30 @@ fun SignInScreen(
                     .fillMaxWidth()
                     .weight(1f),
             )
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = {
-                    errorMessage = null
-                    blockedNote = null
-                    mode = SignInMode.PASTE
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Paste a cookie instead") }
         } else {
+            // The paste form is its own scroll region, and the
+            // screen root carries imePadding: with the keyboard
+            // open, the field and "Use this cookie" stay reachable
+            // by scroll instead of hiding behind the keyboard in a
+            // fixed column (2026-10-27 paste fix).
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .verticalScroll(pasteScroll),
             ) {
                 Text(
                     text = "For when Google's page keeps looping: sign in at " +
                         "music.youtube.com in your browser, copy the cookie for " +
-                        "music.youtube.com, and paste it here. It goes through " +
-                        "the same check — YouTube confirms the account before " +
-                        "anything is stored, encrypted on this device.",
+                        "music.youtube.com, and paste it here. A line of " +
+                        "name=value; name=value pairs works — with or without " +
+                        "a leading \"Cookie:\" — and so does a JSON list of " +
+                        "cookies exported from a browser cookie tool. It goes " +
+                        "through the same check as the Google page — YouTube " +
+                        "confirms the account before anything is stored, " +
+                        "encrypted on this device. Only YouTube's session " +
+                        "cookies are kept; anything else in the paste is " +
+                        "discarded.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -462,12 +549,13 @@ fun SignInScreen(
                     onValueChange = { pasteText = it },
                     label = { Text("YouTube session cookie") },
                     minLines = 6,
+                    enabled = !validating,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(16.dp))
                 Button(
-                    onClick = { attemptSignIn { pasteText } },
-                    enabled = pasteText.isNotBlank(),
+                    onClick = { submitPaste() },
+                    enabled = pasteText.isNotBlank() && !validating,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Use this cookie") }
                 Spacer(Modifier.height(8.dp))
@@ -478,6 +566,7 @@ fun SignInScreen(
                         mode = SignInMode.WEB
                     },
                 ) { Text("Back to Google sign-in") }
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
