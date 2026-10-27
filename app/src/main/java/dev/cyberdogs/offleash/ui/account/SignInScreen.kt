@@ -55,9 +55,11 @@ import dev.cyberdogs.offleash.data.GoogleSignInPhase
  * navigation).
  *
  * The screen is a pure rendering of the Google session manager's
- * phase + sign-in state: the manager owns the poll loop and every
- * outcome, so leaving this screen mid-approval loses nothing —
- * coming back shows the attempt exactly where it stands.
+ * phase + sign-in state: the manager owns the issued grant (it is
+ * persisted, sealed, the moment Google issues it) and the poll
+ * loop, so leaving this screen — or the app being killed while
+ * the owner is in the browser — loses nothing: coming back shows
+ * the same code, still being checked, exactly where it stands.
  */
 @Composable
 fun SignInScreen(
@@ -200,6 +202,11 @@ fun SignInScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Open google.com/device") }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { manager.checkNow() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("I've approved — check now") }
                 Spacer(Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
