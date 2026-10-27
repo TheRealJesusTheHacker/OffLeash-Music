@@ -1,6 +1,7 @@
 package dev.cyberdogs.offleash.core.api
 
 import dev.cyberdogs.offleash.core.auth.AuthSession
+import dev.cyberdogs.offleash.core.auth.GoogleOAuth
 import dev.cyberdogs.offleash.core.auth.IdentityLookup
 import dev.cyberdogs.offleash.core.auth.SessionValidation
 import dev.cyberdogs.offleash.core.error.ContextRejected
@@ -578,6 +579,244 @@ class YoutubeiClient(
             is IdentityLookup.Rejected -> SessionValidation.NeedsSignIn
             is IdentityLookup.Failed -> SessionValidation.Unreachable(lookup.detail)
         }
+
+    // ------------------------------------------------------------------
+    // Google OAuth session (0.7.0): the token road
+    //
+    // Every call in this section authenticates the way the official
+    // YouTube Music app does: the ANDROID_MUSIC context plus an
+    // `Authorization: Bearer <token>` header. No cookies, no
+    // SAPISIDHASH, no visitor data — the token IS the session.
+    // Failures map onto the same error taxonomy as the cookie road
+    // (4xx → ContextRejected with the server's message, 5xx and
+    // transport trouble → NetworkFailure), so callers handle both
+    // roads identically.
+    // ------------------------------------------------------------------
+
+    /**
+     * Who a Google OAuth Bearer token belongs to, through the
+     * OpenID Connect userinfo endpoint — the token road's answer to
+     * [accountIdentities], with the same never-throws
+     * [IdentityLookup] contract: 401/403 → Rejected (the token is
+     * dead or revoked), transport/other failures → Failed, a 200
+     * with no name and no email → Found with an empty list.
+     */
+    fun oauthIdentity(bearerToken: String): IdentityLookup {
+        val response = try {
+            transport.get(
+                GoogleOAuth.USERINFO_URL,
+                mapOf(
+                    "Authorization" to "Bearer $bearerToken",
+                    "Accept" to "application/json",
+                ),
+            )
+        } catch (e: Exception) {
+            return IdentityLookup.Failed(e.message ?: e.javaClass.simpleName)
+        }
+        if (response.status == 401 || response.status == 403) {
+            return IdentityLookup.Rejected(response.status)
+        }
+        if (response.status != 200) {
+            return IdentityLookup.Failed("HTTP ${response.status}")
+        }
+        val root = try {
+            Json.parseToJsonElement(stripXssiPrefix(response.body)).asObj()
+        } catch (e: Exception) {
+            return IdentityLookup.Failed("userinfo response was not valid JSON (${e.message})")
+        } ?: return IdentityLookup.Failed("userinfo response was not a JSON object")
+        val name = root.str("name")
+        val email = root.str("email")
+        if (name.isNullOrBlank() && email.isNullOrBlank()) {
+            return IdentityLookup.Found(emptyList(), userinfoShapeSummary(root))
+        }
+        return IdentityLookup.Found(
+            listOf(
+                AccountIdentity(
+                    name = name ?: "",
+                    email = email,
+                    avatarUrl = root.str("picture"),
+                    authUser = 0,
+                    pageId = null,
+                    isSelected = true,
+                )
+            ),
+            userinfoShapeSummary(root),
+        )
+    }
+
+    /** Key names only — a userinfo value never enters diagnostics. */
+    private fun userinfoShapeSummary(root: JsonObject): String =
+        "userinfo keys [${root.keys.joinToString(", ")}]"
+
+    /** The personalized home feed under the token session. */
+    fun homeFeedOAuth(bearerToken: String, chip: HomeChip? = null): HomeFeed {
+        val root = postJsonOAuth(
+            "browse", YoutubeiContexts.ANDROID_MUSIC,
+            browseBodyFor(
+                YoutubeiContexts.ANDROID_MUSIC,
+                chip?.browseId ?: "FEmusic_home",
+                chip?.params,
+            ),
+            bearerToken,
+        )
+        return YoutubeiParsers.parseHome(root)
+    }
+
+    /** The token session's library playlists, in shelf order. */
+    fun libraryPlaylistsOAuth(bearerToken: String): List<PlaylistSummary> =
+        browseSectionsOAuth("FEmusic_liked_playlists", bearerToken)
+            .flatMap { it.items }
+            .filterIsInstance<FeedItem.OfPlaylist>()
+            .map { it.playlist }
+
+    /** The token session's Liked Songs (browse id `VLLM`, the "LM" list). */
+    fun likedSongsOAuth(bearerToken: String): PlaylistPage =
+        playlistOAuth(bearerToken, "VLLM")
+
+    /** One playlist page under the token session. */
+    fun playlistOAuth(
+        bearerToken: String,
+        browseId: String,
+        params: String? = null,
+    ): PlaylistPage {
+        val root = postJsonOAuth(
+            "browse", YoutubeiContexts.ANDROID_MUSIC,
+            browseBodyFor(YoutubeiContexts.ANDROID_MUSIC, browseId, params),
+            bearerToken,
+        )
+        return YoutubeiParsers.parsePlaylist(root, browseId)
+    }
+
+    /**
+     * Playback resolution under the token session: a player POST on
+     * ANDROID_MUSIC carrying the Bearer token. Structural probe
+     * (2026-10-27): the surface enforces OAuth Bearer — a bad token
+     * is refused 401 with Google's standard OAuth error — so this is
+     * the music app's own playback road, not a hoped-for one. Where
+     * it refuses a given track, [dev.cyberdogs.offleash.core.playback.PlaybackResolver]
+     * falls back to the proven anonymous road for the stream; the
+     * token still provides identity and library.
+     */
+    fun streamInfoOAuth(
+        videoId: String,
+        bearerToken: String,
+        quality: QualityPreference = QualityPreference.HIGH,
+    ): StreamInfo {
+        val body = buildJsonObject {
+            put("context", YoutubeiContexts.ANDROID_MUSIC.toJson())
+            put("videoId", videoId)
+            put("contentCheckOk", true)
+            put("racyCheckOk", true)
+        }
+        val raw = postRawOAuth("player", YoutubeiContexts.ANDROID_MUSIC, body, bearerToken)
+        return StreamResolver.resolve(raw, quality)
+    }
+
+    /** Likes or un-likes a track on the account, under the token session. */
+    fun setLikeOAuth(videoId: String, bearerToken: String, liked: Boolean) {
+        val body = buildJsonObject {
+            put("context", YoutubeiContexts.ANDROID_MUSIC.toJson())
+            putJsonObject("target") {
+                put("videoId", videoId)
+            }
+        }
+        postJsonOAuth(
+            if (liked) "like/like" else "like/removelike",
+            YoutubeiContexts.ANDROID_MUSIC,
+            body,
+            bearerToken,
+        )
+    }
+
+    /**
+     * The token session's like state for a track, from the
+     * ANDROID_MUSIC player response's `likeStatus` — the same field
+     * the cookie road reads. Absent/unrecognized reads as null.
+     */
+    fun likeStatusOAuth(videoId: String, bearerToken: String): LikeStatus? {
+        val body = buildJsonObject {
+            put("context", YoutubeiContexts.ANDROID_MUSIC.toJson())
+            put("videoId", videoId)
+            put("contentCheckOk", true)
+            put("racyCheckOk", true)
+        }
+        val root = postJsonOAuth("player", YoutubeiContexts.ANDROID_MUSIC, body, bearerToken)
+        val raw = root.str("likeStatus") ?: root.obj("videoDetails").str("likeStatus")
+        return when (raw) {
+            "LIKE" -> LikeStatus.LIKED
+            "DISLIKE" -> LikeStatus.DISLIKED
+            "INDIFFERENT" -> LikeStatus.INDIFFERENT
+            else -> null
+        }
+    }
+
+    private fun browseSectionsOAuth(
+        browseId: String,
+        bearerToken: String,
+        params: String? = null,
+    ): List<Section> {
+        val root = postJsonOAuth(
+            "browse", YoutubeiContexts.ANDROID_MUSIC,
+            browseBodyFor(YoutubeiContexts.ANDROID_MUSIC, browseId, params),
+            bearerToken,
+        )
+        return YoutubeiParsers.parseSections(root)
+    }
+
+    /** A browse body on an explicit context (no visitor injection, ever). */
+    private fun browseBodyFor(
+        context: YoutubeiContext,
+        browseId: String,
+        params: String?,
+    ): JsonObject = buildJsonObject {
+        put("context", context.toJson())
+        put("browseId", browseId)
+        params?.let { put("params", it) }
+    }
+
+    private fun postJsonOAuth(
+        path: String,
+        context: YoutubeiContext,
+        body: JsonObject,
+        bearerToken: String,
+    ): JsonObject {
+        val raw = postRawOAuth(path, context, body, bearerToken)
+        return try {
+            Json.parseToJsonElement(raw).asObj()
+        } catch (e: Exception) {
+            throw ParseFailure("response for '$path' was not valid JSON (${e.message})")
+        } ?: throw ParseFailure("response for '$path' was not a JSON object")
+    }
+
+    /**
+     * [postRaw]'s twin for the token road: identical failure mapping,
+     * but the headers are the context's own plus the Bearer token,
+     * and no session visitor data is ever injected.
+     */
+    private fun postRawOAuth(
+        path: String,
+        context: YoutubeiContext,
+        body: JsonObject,
+        bearerToken: String,
+    ): String {
+        val headers = context.headers() + ("Authorization" to "Bearer $bearerToken")
+        val response = try {
+            transport.post(context.endpointUrl(path), headers, body.toString())
+        } catch (e: OffleashException) {
+            throw e
+        } catch (e: Exception) {
+            throw NetworkFailure(e.message ?: e.javaClass.simpleName)
+        }
+        if (response.status != 200) {
+            val serverMessage = extractErrorMessage(response.body)
+                ?: "HTTP ${response.status}"
+            if (response.status in 400..499) {
+                throw ContextRejected(serverMessage)
+            }
+            throw NetworkFailure(serverMessage)
+        }
+        return response.body
+    }
 
     // ------------------------------------------------------------------
 

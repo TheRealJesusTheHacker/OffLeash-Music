@@ -52,6 +52,47 @@ class PlaybackResolver(
     private val client: YoutubeiClient,
 ) {
 
+    /**
+     * Resolution with a Google OAuth Bearer token (0.7.0): the
+     * token road — the ANDROID_MUSIC player under the owner's Google
+     * session — goes FIRST, ahead of both the cookie account road
+     * and the anonymous cascade. Where the token road refuses a
+     * track, the proven roads still apply exactly as below (cookie
+     * account road when a cookie session also exists, then the
+     * anonymous cascade), with the token attempt kept on the record:
+     * a stream the token can't serve is still served, while the
+     * token provides identity and library.
+     */
+    fun resolve(
+        videoId: String,
+        auth: AuthSession?,
+        quality: QualityPreference = QualityPreference.HIGH,
+        bearerToken: String?,
+    ): ResolvedStream {
+        if (bearerToken == null) {
+            return resolve(videoId, auth, quality)
+        }
+        val tokenError = try {
+            val info = client.streamInfoOAuth(videoId, bearerToken, quality)
+            return ResolvedStream(
+                info = info,
+                servedByRoad = "account",
+                attempts = listOf(RoadAttempt("account", "served:ANDROID_MUSIC")),
+            )
+        } catch (e: OffleashException) {
+            e
+        }
+        val base = resolve(videoId, auth, quality)
+        return base.copy(
+            attempts = listOf(
+                RoadAttempt(
+                    "account",
+                    "${tokenError.javaClass.simpleName}:ANDROID_MUSIC",
+                )
+            ) + base.attempts,
+        )
+    }
+
     fun resolve(
         videoId: String,
         auth: AuthSession?,

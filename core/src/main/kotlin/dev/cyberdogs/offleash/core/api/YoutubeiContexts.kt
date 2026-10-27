@@ -111,6 +111,28 @@ object YoutubeiContexts {
     )
 
     /**
+     * The official YouTube Music Android app's context. This is the
+     * context the OAuth Bearer session rides (0.7.0 Google sign-in):
+     * Google's own music app authenticates its youtubei calls exactly
+     * this way — this context plus an `Authorization: Bearer` header.
+     * It shares the ANDROID client's API key (the key belongs to the
+     * youtubei surface, not to one client name). Proven live
+     * 2026-10-27 from the sandbox: `FEmusic_home` answered 200 with
+     * this context, and a deliberately bad Bearer was refused 401 —
+     * the surface enforces OAuth Bearer as its auth mechanism.
+     */
+    val ANDROID_MUSIC = YoutubeiContext(
+        clientName = "ANDROID_MUSIC",
+        clientVersion = "5.26.1",
+        apiKey = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+        host = "music.youtube.com",
+        userAgent = "com.google.android.apps.youtube.music/5.26.1 (Linux; U; Android 14; en_US)",
+        osName = "Android",
+        osVersion = "14",
+        androidSdkVersion = 34,
+    )
+
+    /**
      * The anonymous playback road, in order: contexts are tried one by
      * one at resolution level and the first that serves wins.
      */

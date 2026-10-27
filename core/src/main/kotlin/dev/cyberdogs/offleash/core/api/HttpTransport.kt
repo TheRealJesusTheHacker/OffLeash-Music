@@ -32,4 +32,17 @@ fun interface HttpTransport {
             "this HttpTransport does not implement GET (url=$url)"
         )
     }
+
+    /**
+     * HTTP POST with an `application/x-www-form-urlencoded` body —
+     * the shape OAuth 2.0 endpoints (device code, token, revocation)
+     * speak, as opposed to [post]'s JSON body. Same default-throws
+     * arrangement as [get]: real transports override it, and callers
+     * that require it treat the throw as a named failure.
+     */
+    fun postForm(url: String, headers: Map<String, String>, formBody: String): HttpResponse {
+        throw UnsupportedOperationException(
+            "this HttpTransport does not implement form POST (url=$url)"
+        )
+    }
 }
