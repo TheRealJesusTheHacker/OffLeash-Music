@@ -4,8 +4,8 @@ name: OffLeash — Release
 # upload release assets (uploads.github.com rejects it), so the asset
 # attach happens here, inside CI, with this workflow's GITHUB_TOKEN.
 #
-# Trigger: push a tag matching v* (the tag must point at a commit that
-# contains this workflow), or run it manually with an existing tag.
+# Trigger: manual dispatch only, with an existing tag (dispatch-only
+# since 2026-10-27 — tag pushes no longer trigger this workflow).
 #
 # The hunt APK is built exactly as android.yml builds it — same cached
 # CI debug keystore (cache key offleash-debug-keystore-v2), same
@@ -19,8 +19,6 @@ name: OffLeash — Release
 # any upload — an APK signed by a different key is never attached.
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -105,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --title "OffLeash Music $RELEASE_TAG" --notes "First GitHub release. Personal hunt build signed with the project's CI debug key (not a store release key). Full notes were published with the release; see the repository README and docs."
+            gh release create "$RELEASE_TAG" --title "OffLeash Music $RELEASE_TAG" --notes "OffLeash Music hunt build, signed with the project's CI debug key (not a store release key). See the repository README and docs."
           fi
           gh release upload "$RELEASE_TAG" release-assets/*.apk release-assets/SHA256SUMS.txt --clobber
           gh release view "$RELEASE_TAG" --json tagName,isDraft,assets --jq '{tag: .tagName, draft: .isDraft, assets: [.assets[].name]}'
