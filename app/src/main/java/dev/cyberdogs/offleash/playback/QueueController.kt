@@ -372,6 +372,10 @@ class QueueController(
                     if (player.playWhenReady) {
                         retriedCurrentTrack = false
                         consecutiveAutoplayFailures = 0
+                        // The app has played: the splash gate
+                        // suppresses the splash for the rest of this
+                        // process, background returns included.
+                        SplashGate.markPlaybackHappened()
                         diagnostics.recordReady()
                     }
                 }

@@ -55,7 +55,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.cyberdogs.offleash.AppContainer
+import kotlinx.coroutines.delay
 import dev.cyberdogs.offleash.playback.showLoadingIndicator
+import dev.cyberdogs.offleash.playback.SplashGate
 import dev.cyberdogs.offleash.ui.about.AboutScreen
 import dev.cyberdogs.offleash.ui.about.PlaybackDiagnosticsScreen
 import dev.cyberdogs.offleash.ui.account.SignInScreen
@@ -87,6 +89,22 @@ fun OffleashRoot(container: AppContainer) {
 
     var playerExpanded by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Cold-launch splash (2026-10-27, owner's spec): 3.8 seconds,
+    // tap anywhere skips, and it never returns once this process has
+    // shown it or played anything — the gate's process-lifetime
+    // flags decide, this state only drives the exit.
+    var splashDismissed by remember { mutableStateOf(false) }
+    val showSplash = !splashDismissed && SplashGate.shouldShow(
+        playerHasMedia = container.player.currentMediaItem != null,
+    )
+    LaunchedEffect(showSplash) {
+        if (showSplash) {
+            SplashGate.markShown()
+            delay(SplashGate.SPLASH_DURATION_MS)
+            splashDismissed = true
+        }
+    }
 
     // Lane G: track-menu items that live on the player (sleep timer,
     // playback speed & pitch) deep-link here — a menu tap anywhere in
@@ -369,6 +387,13 @@ fun OffleashRoot(container: AppContainer) {
             }
         }
 
+        AnimatedVisibility(
+            visible = showSplash,
+            exit = fadeOut(tween(SPLASH_EXIT_MS)),
+        ) {
+            SplashScreen(onSkip = { splashDismissed = true })
+        }
+
         if (playerExpanded) {
             PlayerScreen(
                 container = container,
@@ -457,3 +482,6 @@ private fun MiniPlayer(
 
 /** Route-change motion duration (polish pass, 2026-10-27). */
 private const val NAV_TRANSITION_MS = 220
+
+/** Splash exit fade duration (the splash itself is [SplashGate]'s spec). */
+private const val SPLASH_EXIT_MS = 250
