@@ -245,14 +245,26 @@ fun SignInScreen(
         val shapeLabel = when (normalized.shape) {
             PastedCookieShape.COOKIE_HEADER -> "a cookie header string"
             PastedCookieShape.JSON_COOKIE_ARRAY -> "a JSON cookie list"
+            PastedCookieShape.NETSCAPE_COOKIE_FILE -> "a Netscape cookies.txt export"
         }
-        container.signInDiagnostics.log(
-            "paste",
-            "pasted cookie read as $shapeLabel — " +
-                "${normalized.pairCount} cookie pair(s) in the paste",
-        )
         val cookieString = normalized.cookieString
-        attemptSignIn { cookieString }
+        attemptSignIn {
+            // The reading is logged from INSIDE the attempt
+            // (2026-10-27 0.6.7 hunt): completeSignIn opens with
+            // startAttempt(), which CLEARS the recorder — a reading
+            // logged before the call was erased before the panel
+            // could ever show it (the owner's panels never carried
+            // it). Inside the provider, the line belongs to the
+            // attempt's record on every read, ahead of every stage
+            // decision — the paste path's counterpart of the WebView
+            // harvest's per-host counts.
+            container.signInDiagnostics.log(
+                "paste",
+                "pasted cookie read as $shapeLabel — " +
+                    "${normalized.pairCount} cookie pair(s) in the paste",
+            )
+            cookieString
+        }
     }
 
     val headerScroll = rememberScrollState()
@@ -533,8 +545,8 @@ fun SignInScreen(
                         "music.youtube.com in your browser, copy the cookie for " +
                         "music.youtube.com, and paste it here. A line of " +
                         "name=value; name=value pairs works — with or without " +
-                        "a leading \"Cookie:\" — and so does a JSON list of " +
-                        "cookies exported from a browser cookie tool. It goes " +
+                        "a leading \"Cookie:\" — and so does a JSON list or a " +
+                        "cookies.txt file exported from a browser cookie tool. It goes " +
                         "through the same check as the Google page — YouTube " +
                         "confirms the account before anything is stored, " +
                         "encrypted on this device. Only YouTube's session " +
