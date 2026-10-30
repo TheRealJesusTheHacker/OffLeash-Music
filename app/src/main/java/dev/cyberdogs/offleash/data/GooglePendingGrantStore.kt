@@ -75,13 +75,24 @@ class GooglePendingGrantStore(
 
     private val lock = Any()
 
+    /**
+     * Total by contract, like [GoogleTokenStore.load] (H3, 0.7.2
+     * sweep): any read/seal/decode failure reads as "no pending
+     * grant", never a throw. [save] may still throw — its caller
+     * (the session manager) must know, because it publishes the
+     * code only with the durability caveat recorded.
+     */
     fun load(): StoredPendingGrant? = synchronized(lock) {
-        val blob = storage.read() ?: return null
-        val plain = box.decrypt(blob) ?: return null
         try {
-            pendingGrantJson.decodeFromString<StoredPendingGrant>(
-                plain.toString(Charsets.UTF_8)
-            )
+            val blob = storage.read() ?: return null
+            val plain = box.decrypt(blob) ?: return null
+            try {
+                pendingGrantJson.decodeFromString<StoredPendingGrant>(
+                    plain.toString(Charsets.UTF_8)
+                )
+            } catch (e: Exception) {
+                null
+            }
         } catch (e: Exception) {
             null
         }
@@ -97,15 +108,24 @@ class GooglePendingGrantStore(
 
     /**
      * Destroys the stored grant and VERIFIES the destruction:
-     * returns true only when a read-back finds nothing left.
+     * returns true only when a read-back finds nothing left. Total
+     * like [load]: a storage failure reports false, never a throw.
      */
     fun wipe(): Boolean = synchronized(lock) {
-        storage.clear()
-        storage.read() == null
+        try {
+            storage.clear()
+        } catch (e: Exception) {
+            // The read-back below is the verdict either way.
+        }
+        isWipedClean()
     }
 
     /** True when nothing is stored. */
     fun isWipedClean(): Boolean = synchronized(lock) {
-        storage.read() == null
+        try {
+            storage.read() == null
+        } catch (e: Exception) {
+            false
+        }
     }
 }

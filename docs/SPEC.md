@@ -176,12 +176,20 @@ copy. Spinners always have a timeout and an error state behind them.
 
 | Error (`:core`) | Trigger | User copy (shape) |
 |---|---|---|
-| `ContextRejected` | HTTP 4xx from youtubei with an error body (e.g. 400 "Precondition check failed.") | "YouTube refused the app's request — the API has likely changed. (server said: …)" |
-| `PlayerRefused` | `playabilityStatus` ≠ OK (UNPLAYABLE / LOGIN_REQUIRED / ERROR) | "YouTube won't play this track: <reason from the server>" |
+| `ContextRejected` | HTTP 4xx from youtubei with an error body (e.g. 400 "Precondition check failed.") | "YouTube refused the app's request — the app may need an update." |
+| `PlayerRefused` | `playabilityStatus` ≠ OK (UNPLAYABLE / LOGIN_REQUIRED / ERROR) | "YouTube won't play this track." — or, when the server's reason is LOGIN_REQUIRED, "YouTube won't play this track without a sign-in." The server's reason token itself is never shown. |
 | `NoPlayableStream` | OK status but no direct (unciphered) audio URL | "No playable stream for this track — YouTube served only locked formats." |
 | `NetworkFailure` | transport throws / HTTP 5xx | "Couldn't reach YouTube Music — check your connection." |
-| `ParseFailure` | response shape unrecognizable | "YouTube Music answered in a shape this app doesn't understand yet — the API has likely changed." |
-| `AllRoadsRefused` (Phase 2) | signed in, and the account road AND every anonymous context refused the track | "YouTube refused this track on both paths. Signed-in path: <account road's named error> Anonymous path: <anonymous road's named error>" — both roads are always named; a track may surface an error only when every road has refused it (§10) |
+| `ParseFailure` | response shape unrecognizable | "YouTube Music answered in a shape this app doesn't understand yet — the app may need an update." |
+| `AllRoadsRefused` (Phase 2) | signed in, and the account road AND every anonymous context refused the track | "YouTube refused this track both ways. Signed in: <account road's plain-language reason> Anonymous: <anonymous road's plain-language reason>" — both roads are always named; a track may surface an error only when every road has refused it (§10) |
+
+User copy is built from the failure's TYPE only (plus the one
+playability token above that changes the user's next step). Raw
+server wording, status tokens and exception text are diagnostics —
+they are recorded in About → Playback diagnostics, never in a
+message the user reads. (This rule replaced the earlier
+"server said: …" shapes after the owner's 2026-10-27 screenshot
+showed raw server text in a user-facing card.)
 
 Player-stage failures (Media3 `PlaybackException`, mapped by
 `ErrorMessages.playerMessage(errorCode, httpStatus)`) have their own rows —
@@ -194,7 +202,7 @@ the player stage is part of this taxonomy, not a catch-all:
 | HTTP other | `ERROR_CODE_IO_BAD_HTTP_STATUS` + any other status | "YouTube's stream server answered HTTP \<status\>. Try again." |
 | Network / content-type / read-position | `ERROR_CODE_IO_NETWORK_CONNECTION_FAILED` / `_TIMEOUT` / `ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE` / `ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE` | "Couldn't load this track's audio — the connection failed. Check your connection and try again." |
 | Format / decoder | `ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED` / `ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED` / `ERROR_CODE_DECODER_INIT_FAILED` / `ERROR_CODE_DECODING_FAILED` | "This track's audio format can't be played on this device." |
-| Anything else | any other player error code | "Something went wrong playing this track (player error \<code\>). Try again." — the code is always named, so a screenshot is actionable. |
+| Anything else | any other player error code | "Something went wrong playing this track. Try again; if it keeps happening, open About → Playback diagnostics and send a screenshot." — the code itself is never shown to the user; it is recorded in playback diagnostics, which is what makes a screenshot actionable. |
 
 Browse/search/detail failures reuse the same taxonomy and render as an
 error panel with a Retry button — never a blank screen, never an endless
@@ -233,12 +241,25 @@ Phase 1 contract, and §10 is the Phase 2 contract.
 
 ## 10. Phase 2 — account access (landed 2026-10-23)
 
+> **Superseded in part (0.7.0; noted by the round-4 sweep).** The sign-in described below — the embedded WebView flow
+> and its cookie-paste fallback — was REPLACED as the app's sign-in
+> by the Google device-code flow: the app shows a code, the owner
+> approves it on Google's own device page, and the app stores only
+> the OAuth token Google issues (sealed in an encrypted store,
+> refreshed automatically, revoked on sign-out). No WebView sign-in
+> screen ships anymore, and no password or cookie is ever typed
+> into or pasted into the app. The cookie session machinery below
+> remains in the tree only as a dormant fallback for sessions
+> stored by pre-0.7.0 installs; it is never offered as a sign-in.
+> The rest of this section (validation, health, sign-out, security
+> posture) stands as the record of the Phase 2 build.
+
 The owner's product definition: "YouTube but ad free and able to play in
 the background," with his liked videos, his playlists, and YouTube's
 recommendations for him. Signed-out behavior is Phase 1, unchanged;
 signing in only adds.
 
-- **Sign-in.** An embedded WebView runs Google's ServiceLogin music
+- **Sign-in (0.6.x design — replaced in 0.7.0, see the note above).** An embedded WebView runs Google's ServiceLogin music
   flow; the app never sees the password — the WebView talks to Google
   only. Navigation is scope-enforced in code: an allowlist of
   Google/YouTube auth hosts (plus their subdomains); any other

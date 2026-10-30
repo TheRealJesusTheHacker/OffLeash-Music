@@ -11,12 +11,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -172,7 +175,16 @@ fun PlaylistPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add to playlist") },
         text = {
-            Column {
+            // The list is height-bounded and scrolls: a dialog's text
+            // area does not scroll on its own, so a long playlist
+            // list pushed its lower rows past the dialog's edge —
+            // visible in the layout, unreachable by tap (the same
+            // overflow class as the 0.6.6 sign-in fix).
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 if (playlists.isEmpty()) {
                     Text("No playlists yet. Create one from the Library tab.")
                 } else {
@@ -310,9 +322,15 @@ fun SectionRow(
 
 @Composable
 fun ErrorPanel(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    // Scrollable: a long message (the both-roads refusal is three
+    // sentences) in a short viewport — landscape, or a large font
+    // scale — overflowed this centered, non-scrolling column and
+    // clipped the Try again button it exists to offer. The scroll
+    // keeps every part of the panel reachable (the 0.6.6 standard).
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

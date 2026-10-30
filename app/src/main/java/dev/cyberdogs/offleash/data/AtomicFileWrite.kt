@@ -19,22 +19,57 @@ import java.io.File
  * the target. A rename within one directory is atomic on the
  * filesystems Android uses, so a reader (including a post-crash
  * next launch) sees either the whole old contents or the whole new
- * contents, never a torn mix. If the rename cannot be made to work
- * (an exotic filesystem), it falls back to the old direct write —
- * a completed write is still better than none, and the fallback is
- * the pre-fix behavior, never worse.
+ * contents, never a torn mix. The temp file's bytes are synced to
+ * storage (and the directory too, where the platform allows)
+ * BEFORE the rename: atomicity alone orders the rename after the
+ * write in the page cache, but only the sync makes the new
+ * contents survive a power loss that lands between them. If the
+ * rename cannot be made to work (an exotic filesystem), it falls
+ * back to the old direct write — a completed write is still
+ * better than none, and the fallback is the pre-fix behavior,
+ * never worse.
  */
 fun writeFileAtomically(file: File, bytes: ByteArray) {
     val parent = file.parentFile
     parent?.mkdirs()
     val tmp = File(parent, file.name + ".tmp")
-    tmp.writeBytes(bytes)
-    if (renameReplacing(tmp, file)) return
+    writeAndSync(tmp, bytes)
+    syncDirectory(parent)
+    if (renameReplacing(tmp, file)) {
+        syncDirectory(parent)
+        return
+    }
     // Fallback: direct write, exactly the pre-fix behavior.
     try {
         file.writeBytes(bytes)
     } finally {
         deleteQuietly(tmp)
+    }
+}
+
+/** Writes [bytes] to [file] completely, then syncs them to storage. */
+private fun writeAndSync(file: File, bytes: ByteArray) {
+    java.io.FileOutputStream(file).use { out ->
+        out.write(bytes)
+        out.flush()
+        try {
+            out.fd.sync()
+        } catch (e: Exception) {
+            // Best effort: some filesystems refuse a sync; the
+            // rename ordering above still holds.
+        }
+    }
+}
+
+/** Best-effort sync of a directory so a rename inside it is durable. */
+private fun syncDirectory(dir: File?) {
+    if (dir == null) return
+    try {
+        java.nio.channels.FileChannel.open(dir.toPath(), java.nio.file.StandardOpenOption.READ)
+            .use { channel -> channel.force(true) }
+    } catch (e: Exception) {
+        // Not every platform lets a directory be opened; the file
+        // sync above is the load-bearing half.
     }
 }
 

@@ -15,21 +15,32 @@ package dev.cyberdogs.offleash.playback
 val SLEEP_TIMER_MINUTE_OPTIONS: List<Int> = listOf(5, 10, 15, 30, 45, 60)
 
 data class SleepTimerState(
-    /** Epoch-ms deadline for a timed timer; null when not timed. */
-    val deadlineEpochMs: Long? = null,
+    /**
+     * Deadline for a timed timer, in milliseconds on the MONOTONIC
+     * clock the controller feeds these functions
+     * (`SystemClock.elapsedRealtime()`); null when not timed. Bug
+     * sweep round 2: the deadline used to be a wall-clock epoch
+     * while the controller's scheduled pause ran on a monotonic
+     * delay — a wall-clock jump backward left the pause fired but
+     * the expiry check saying "not yet" (the timer never fired),
+     * and a jump forward zeroed the displayed remaining while
+     * playback ran on. One clock, everywhere: the deadline, the
+     * delay, the expiry check, and the countdown all read it.
+     */
+    val deadlineMs: Long? = null,
     /** True when playback should stop at the end of the current track. */
     val endOfTrack: Boolean = false,
     /** The requested minutes for a timed timer (0 for end-of-track/off). */
     val requestedMinutes: Int = 0,
 ) {
-    val isArmed: Boolean get() = deadlineEpochMs != null || endOfTrack
+    val isArmed: Boolean get() = deadlineMs != null || endOfTrack
 }
 
-/** Arms a timed timer [minutes] from [nowEpochMs]. */
-fun sleepTimerTimed(minutes: Int, nowEpochMs: Long): SleepTimerState {
+/** Arms a timed timer [minutes] from [nowMs] (monotonic clock). */
+fun sleepTimerTimed(minutes: Int, nowMs: Long): SleepTimerState {
     val safeMinutes = minutes.coerceAtLeast(1)
     return SleepTimerState(
-        deadlineEpochMs = nowEpochMs + safeMinutes * 60_000L,
+        deadlineMs = nowMs + safeMinutes * 60_000L,
         endOfTrack = false,
         requestedMinutes = safeMinutes,
     )
@@ -37,18 +48,18 @@ fun sleepTimerTimed(minutes: Int, nowEpochMs: Long): SleepTimerState {
 
 /** Arms the end-of-track timer. */
 fun sleepTimerEndOfTrack(): SleepTimerState =
-    SleepTimerState(deadlineEpochMs = null, endOfTrack = true, requestedMinutes = 0)
+    SleepTimerState(deadlineMs = null, endOfTrack = true, requestedMinutes = 0)
 
 /** Remaining milliseconds for a timed timer; null when not timed. Never negative. */
-fun sleepTimerRemainingMs(state: SleepTimerState, nowEpochMs: Long): Long? {
-    val deadline = state.deadlineEpochMs ?: return null
-    return (deadline - nowEpochMs).coerceAtLeast(0L)
+fun sleepTimerRemainingMs(state: SleepTimerState, nowMs: Long): Long? {
+    val deadline = state.deadlineMs ?: return null
+    return (deadline - nowMs).coerceAtLeast(0L)
 }
 
 /** The expiry decision: a timed timer pauses playback once now reaches its deadline. */
-fun sleepTimerShouldPause(state: SleepTimerState, nowEpochMs: Long): Boolean {
-    val deadline = state.deadlineEpochMs ?: return false
-    return nowEpochMs >= deadline
+fun sleepTimerShouldPause(state: SleepTimerState, nowMs: Long): Boolean {
+    val deadline = state.deadlineMs ?: return false
+    return nowMs >= deadline
 }
 
 /** The track-end decision: an end-of-track timer stops instead of advancing. */

@@ -89,11 +89,17 @@ class SharedPreferencesParityStore(
     }
 }
 
-/** In-memory [ParityKeyValueStore] for tests — no disk, no Android. */
+/**
+ * In-memory [ParityKeyValueStore] for tests — no disk, no Android.
+ * Booleans are stored as the strings "true"/"false" in the SAME
+ * map as strings, matching [SharedPreferencesParityStore]'s
+ * production encoding exactly: a fake that kept booleans in a
+ * separate native map would let a test pass while the real store's
+ * string read of the same key (AppPreferences' seam) saw nothing.
+ */
 class InMemoryParityKeyValueStore : ParityKeyValueStore {
 
     private val strings = mutableMapOf<String, String>()
-    private val booleans = mutableMapOf<String, Boolean>()
 
     override fun getString(key: String): String? = strings[key]
 
@@ -102,10 +108,14 @@ class InMemoryParityKeyValueStore : ParityKeyValueStore {
     }
 
     override fun getBoolean(key: String, defaultValue: Boolean): Boolean =
-        booleans[key] ?: defaultValue
+        when (strings[key]?.trim()?.lowercase()) {
+            "true" -> true
+            "false" -> false
+            else -> defaultValue
+        }
 
     override fun putBoolean(key: String, value: Boolean) {
-        booleans[key] = value
+        strings[key] = value.toString()
     }
 }
 
@@ -131,7 +141,12 @@ class InMemoryParityKeyValueStore : ParityKeyValueStore {
  *
  * Every value is published on a [StateFlow] and visible through its
  * plain getter immediately after a set, so consumers (downloads,
- * radio) read the current value at use time with no restart.
+ * radio) read the current value at use time with no restart. The
+ * plain getters read the persisted value FRESH on every access
+ * (and refresh the cached flow to match): [AppPreferences] holds
+ * its own cache over the same file, and a getter that served only
+ * its own cache would let the two accessors disagree — a write
+ * through one invisible to readers of the other — until a restart.
  */
 class ParityPreferences(private val store: ParityKeyValueStore) {
 
@@ -140,19 +155,31 @@ class ParityPreferences(private val store: ParityKeyValueStore) {
     val downloadQualityFlow: StateFlow<DownloadQualityPreference> =
         _downloadQualityFlow.asStateFlow()
     val downloadQuality: DownloadQualityPreference
-        get() = _downloadQualityFlow.value
+        get() {
+            val fresh = readDownloadQuality()
+            if (_downloadQualityFlow.value != fresh) _downloadQualityFlow.value = fresh
+            return fresh
+        }
 
     private val _autoDownloadLikedFlow =
         MutableStateFlow(readBoolean(KEY_AUTO_DOWNLOAD_LIKED, DEFAULT_AUTO_DOWNLOAD_LIKED))
     val autoDownloadLikedFlow: StateFlow<Boolean> = _autoDownloadLikedFlow.asStateFlow()
     val autoDownloadLiked: Boolean
-        get() = _autoDownloadLikedFlow.value
+        get() {
+            val fresh = readBoolean(KEY_AUTO_DOWNLOAD_LIKED, DEFAULT_AUTO_DOWNLOAD_LIKED)
+            if (_autoDownloadLikedFlow.value != fresh) _autoDownloadLikedFlow.value = fresh
+            return fresh
+        }
 
     private val _audioVersionInRadioFlow =
         MutableStateFlow(readBoolean(KEY_AUDIO_VERSION_IN_RADIO, DEFAULT_AUDIO_VERSION_IN_RADIO))
     val audioVersionInRadioFlow: StateFlow<Boolean> = _audioVersionInRadioFlow.asStateFlow()
     val audioVersionInRadio: Boolean
-        get() = _audioVersionInRadioFlow.value
+        get() {
+            val fresh = readBoolean(KEY_AUDIO_VERSION_IN_RADIO, DEFAULT_AUDIO_VERSION_IN_RADIO)
+            if (_audioVersionInRadioFlow.value != fresh) _audioVersionInRadioFlow.value = fresh
+            return fresh
+        }
 
     fun setDownloadQuality(quality: DownloadQualityPreference) {
         store.putString(KEY_DOWNLOAD_QUALITY, quality.name)

@@ -96,6 +96,20 @@ data class PlaylistPage(
     val author: String?,
     val thumbnailUrl: String?,
     val tracks: List<Track>,
+    /**
+     * The token for the next page of tracks, when the response
+     * offered one; null is the honest end of the playlist. Until bug
+     * sweep round 1 this was dropped by the parser and long
+     * playlists (Liked Songs included) silently truncated at the
+     * first page while presenting as complete.
+     */
+    val continuation: String? = null,
+)
+
+/** One continuation chunk of a playlist: more tracks, and the next token (null = end). */
+data class TrackContinuation(
+    val tracks: List<Track>,
+    val continuation: String?,
 )
 
 /** A search filter chip. The "All" filter is represented by `params == null`. */
@@ -107,6 +121,8 @@ data class SearchFilter(
 data class SearchResults(
     val sections: List<Section>,
     val filters: List<SearchFilter>,
+    /** The token for the next page of results, or null at the true end. */
+    val continuation: String? = null,
 )
 
 data class MoodCategory(

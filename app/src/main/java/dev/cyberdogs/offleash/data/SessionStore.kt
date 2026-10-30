@@ -144,11 +144,22 @@ class SessionStore(
 
     private val lock = Any()
 
+    /**
+     * Total by contract, like the Google stores (H3, 0.7.2 sweep):
+     * any read/seal/decode failure reads as "no session", never a
+     * throw. [save] may still throw — its callers must know,
+     * because a save that silently failed would leave the UI
+     * claiming a sign-in nothing persisted.
+     */
     fun load(): StoredSession? = synchronized(lock) {
-        val blob = storage.read() ?: return null
-        val plain = box.decrypt(blob) ?: return null
         try {
-            sessionJson.decodeFromString<StoredSession>(plain.toString(Charsets.UTF_8))
+            val blob = storage.read() ?: return null
+            val plain = box.decrypt(blob) ?: return null
+            try {
+                sessionJson.decodeFromString<StoredSession>(plain.toString(Charsets.UTF_8))
+            } catch (e: Exception) {
+                null
+            }
         } catch (e: Exception) {
             null
         }
@@ -163,15 +174,25 @@ class SessionStore(
 
     /**
      * Destroys the stored session and VERIFIES the destruction:
-     * returns true only when a read-back finds nothing left.
+     * returns true only when a read-back finds nothing left. Total
+     * like [load]: a storage failure reports false, never a throw
+     * into sign-out or session ending.
      */
     fun wipe(): Boolean = synchronized(lock) {
-        storage.clear()
-        storage.read() == null
+        try {
+            storage.clear()
+        } catch (e: Exception) {
+            // The read-back below is the verdict either way.
+        }
+        isWipedClean()
     }
 
     /** True when nothing is stored — the post-sign-out ground truth. */
     fun isWipedClean(): Boolean = synchronized(lock) {
-        storage.read() == null
+        try {
+            storage.read() == null
+        } catch (e: Exception) {
+            false
+        }
     }
 }

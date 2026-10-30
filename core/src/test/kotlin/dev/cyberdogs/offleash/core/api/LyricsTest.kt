@@ -8,6 +8,7 @@ import dev.cyberdogs.offleash.core.ThrowingTransport
 import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.model.LyricsResult
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -102,13 +103,38 @@ class LyricsTest {
 
     @Test
     fun youtubeLyricsUnavailableWhenTransportFails() {
-        // A dead network reads as Unavailable with the plain failure
-        // message — lyrics failure must never throw, and never break
-        // the playback path waiting on it.
+        // A dead network reads as Unavailable with the one plain
+        // fixed reason — lyrics failure must never throw, and never
+        // break the playback path waiting on it. Round 6: the reason
+        // is the FIXED string, not the failure's message — the old
+        // assertion only checked the "Couldn't reach…" prefix and
+        // let the transport detail ride along in the parentheses
+        // after it, into user copy the player renders verbatim.
         val result = YoutubeiClient(ThrowingTransport()).lyrics("derivedVideoId")
         val unavailable = result as? LyricsResult.Unavailable
             ?: throw AssertionError("expected Unavailable, was $result")
-        assertTrue(unavailable.reason.startsWith("Couldn't reach YouTube Music"))
+        assertEquals("Lyrics are unavailable for this track.", unavailable.reason)
+    }
+
+    @Test
+    fun youtubeLyricsUnavailableReasonCarriesNoServerText() {
+        // Round 6 pin: a refusal whose server message itself carries
+        // a link must still read back as the plain fixed reason —
+        // ContextRejected embeds the server's own words in its
+        // exception message, and the lyrics reason is user copy (the
+        // player renders it and caches it for the process).
+        val transport = RoutingTransport { _, _, _ ->
+            HttpResponse(
+                403,
+                """{"error":{"code":403,"message":"see https://example.com/secret-link for details","status":"PERMISSION_DENIED"}}""",
+            )
+        }
+        val result = YoutubeiClient(transport).lyrics("derivedVideoId")
+        val unavailable = result as? LyricsResult.Unavailable
+            ?: throw AssertionError("expected Unavailable, was $result")
+        assertEquals("Lyrics are unavailable for this track.", unavailable.reason)
+        assertFalse(unavailable.reason.contains("http"))
+        assertFalse(unavailable.reason.contains("secret-link"))
     }
 
     @Test
@@ -131,6 +157,31 @@ class LyricsTest {
         // The third-party call carries no headers at all — no session
         // material ever leaves for LRCLIB.
         assertEquals(emptyMap<String, String>(), transport.lastGetHeaders)
+    }
+
+    @Test
+    fun syncedLyricsAppliesTheLrcOffsetTagToEveryLine() {
+        // [offset:+250] shifts every line 250 ms later; before the
+        // sweep the tag was dropped and offset tracks drifted by
+        // exactly the tag value for their whole length.
+        val body = """{"syncedLyrics":"[offset:+250]\n[00:12.34]First timed line\n[01:05.250]Second timed line"}"""
+        val lines = YoutubeiClient(GetTransport(body = body)).syncedLyrics(
+            "Midnight Wire", "The Test Patterns", 213
+        )!!
+        assertEquals(2, lines.size)
+        assertEquals(12590L, lines[0].startMs)
+        assertEquals(65500L, lines[1].startMs)
+    }
+
+    @Test
+    fun syncedLyricsNegativeOffsetNeverPushesAStartBelowZero() {
+        val body = """{"syncedLyrics":"[offset:-20000]\n[00:12.34]First timed line\n[01:05.250]Second timed line"}"""
+        val lines = YoutubeiClient(GetTransport(body = body)).syncedLyrics(
+            "Midnight Wire", "The Test Patterns", 213
+        )!!
+        assertEquals(2, lines.size)
+        assertEquals(0L, lines[0].startMs) // 12340 - 20000 clamps to 0
+        assertEquals(45250L, lines[1].startMs)
     }
 
     @Test

@@ -158,7 +158,27 @@ fun PlayerScreen(
                     }
                 }
                 playerLyricsCache.put(track.videoId, result)
-                lyricsState = result.toLyricsUiState()
+                // Publish only if this track is still the current
+                // one (bug sweep round 9; premise settled round 11):
+                // the fetch above sits inside this effect's single
+                // withContext(IO), so when a skip cancels the effect
+                // the withContext throws CancellationException at
+                // its boundary and a stale effect's cache put and
+                // publish never execute at all — as constructed,
+                // the stale overwrite cannot occur, and this guard
+                // is defence-in-depth, not the load-bearing half.
+                // It earns its place against the day the fetch is
+                // moved out of the cancellable boundary or the
+                // publish is reached from a path cancellation
+                // cannot see. The cache put above is keyed by
+                // videoId and stays either way. The read is the
+                // controller's LIVE queue state, not this effect's
+                // captured snapshot.
+                if (container.queueController.queueState.value
+                        .currentTrack?.videoId == track.videoId
+                ) {
+                    lyricsState = result.toLyricsUiState()
+                }
             }
         }
     }
@@ -261,6 +281,9 @@ fun PlayerScreen(
                         color = MaterialTheme.colorScheme.onError,
                         modifier = Modifier.weight(1f),
                     )
+                    TextButton(onClick = { container.queueController.retryCurrent() }) {
+                        Text("Try again", color = MaterialTheme.colorScheme.onError)
+                    }
                     TextButton(onClick = { container.queueController.clearError() }) {
                         Text("Dismiss", color = MaterialTheme.colorScheme.onError)
                     }
@@ -462,7 +485,7 @@ fun PlayerScreen(
                 SLEEP_TIMER_MINUTE_OPTIONS.take(3).forEach { minutes ->
                     FilterChip(
                         selected = sleepTimerState.requestedMinutes == minutes &&
-                            sleepTimerState.deadlineEpochMs != null,
+                            sleepTimerState.deadlineMs != null,
                         onClick = { container.queueController.setSleepTimerMinutes(minutes) },
                         label = { Text("$minutes min") },
                     )
@@ -475,7 +498,7 @@ fun PlayerScreen(
                 SLEEP_TIMER_MINUTE_OPTIONS.drop(3).forEach { minutes ->
                     FilterChip(
                         selected = sleepTimerState.requestedMinutes == minutes &&
-                            sleepTimerState.deadlineEpochMs != null,
+                            sleepTimerState.deadlineMs != null,
                         onClick = { container.queueController.setSleepTimerMinutes(minutes) },
                         label = { Text("$minutes min") },
                     )
@@ -617,7 +640,19 @@ private fun LyricsSection(state: LyricsUiState?, positionMs: Long) {
                 )
             }
             is LyricsUiState.Unavailable -> Text(
-                text = "Lyrics unavailable — ${current.reason}.",
+                // Core hands this panel two reason shapes: a
+                // fragment ("YouTube offers no lyrics for this
+                // track", wrapped below) and a complete sentence
+                // ("Lyrics are unavailable for this track.",
+                // period included). Wrapping the sentence too
+                // rendered "Lyrics unavailable — Lyrics are
+                // unavailable for this track.." — a complete
+                // sentence stands alone (bug sweep round 66).
+                text = if (current.reason.endsWith(".")) {
+                    current.reason
+                } else {
+                    "Lyrics unavailable — ${current.reason}."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

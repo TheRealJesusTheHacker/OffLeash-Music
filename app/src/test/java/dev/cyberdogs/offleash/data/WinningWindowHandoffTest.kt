@@ -131,6 +131,31 @@ class WinningWindowHandoffTest {
     }
 
     @Test
+    fun winnerPersistsPerUrlAcrossRepeatedLoads() {
+        // H1 pin (full bug sweep): the winning window is a
+        // per-URL record, not a one-shot — every later load of the
+        // same stream (segments, seeks, the recovery re-prepare's
+        // reloads) is shaped with it, a different stream's loads
+        // are untouched by it, and the ladder contents themselves
+        // are the shipped descent (largest first, tiny last).
+        assertEquals(
+            listOf(1048576L, 262144L, 65536L, 2048L),
+            RangeInterceptor.STREAM_WINDOW_LADDER,
+        )
+        val store = StreamWindowStore()
+        store.recordWinner(gvUrl, 2048L)
+        repeat(3) {
+            val out = throughStack(playerFirstFetch(), store)
+            assertEquals("bytes=0-2047", out.header("Range"))
+        }
+        assertEquals(2048L, store.windowFor(gvUrl))
+        val otherUrl = "https://rr9---sn-other.googlevideo.com/videoplayback?expire=9"
+        assertNull(store.windowFor(otherUrl))
+        val other = throughStack(Request.Builder().url(otherUrl).get().build(), store)
+        assertEquals("bytes=0-1048575", other.header("Range"))
+    }
+
+    @Test
     fun handToPlayerRecordsTheWinnerBeforeSettingTheItem() {
         // Source contract (the PlayerFetchShapeContractTest style):
         // the hand-off records the winner into the shared store

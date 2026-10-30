@@ -31,11 +31,6 @@ import dev.cyberdogs.offleash.playback.shareTextFor
  * Every surface that lists tracks builds one of these — via
  * [rememberTrackActions] where an [AppContainer] is at hand — so the
  * menu vocabulary is identical everywhere a track appears.
- *
- * There is deliberately NO Download item: the downloads engine is a
- * parallel lane and no downloads entry point exists in this base, so
- * the item is omitted rather than wired to a dead end. The
- * coordinator adds it in the integration pass once that engine lands.
  */
 class TrackActions(
     val onStartRadio: (Track) -> Unit,
@@ -46,6 +41,12 @@ class TrackActions(
     val likeController: LikeController?,
     /** Offline download (parity step 2): enqueues the track on the download manager. */
     val onDownload: (Track) -> Unit,
+    /**
+     * The download manager, when one is at hand: the menu reads its
+     * records so the Download item names the track's real state
+     * instead of offering a tap that silently does nothing.
+     */
+    val downloadManager: dev.cyberdogs.offleash.data.DownloadManager? = null,
 )
 
 /** Builds the standard [TrackActions] for a screen from the container. */
@@ -63,6 +64,7 @@ fun rememberTrackActions(
         onShowPlayer = onShowPlayer,
         likeController = container.likeController,
         onDownload = { track -> container.downloadManager.enqueue(track) },
+        downloadManager = container.downloadManager,
     )
 }
 
@@ -143,13 +145,24 @@ fun TrackOverflowMenu(
                     pickerOpen = true
                 },
             )
-            DropdownMenuItem(
-                text = { Text("Download") },
-                onClick = {
-                    menuOpen = false
-                    actions.onDownload(track)
-                },
-            )
+            if (actions.downloadManager != null) {
+                DownloadMenuItem(
+                    downloadManager = actions.downloadManager!!,
+                    track = track,
+                    onDownload = {
+                        menuOpen = false
+                        actions.onDownload(track)
+                    },
+                )
+            } else {
+                DropdownMenuItem(
+                    text = { Text("Download") },
+                    onClick = {
+                        menuOpen = false
+                        actions.onDownload(track)
+                    },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Start radio") },
                 onClick = {
@@ -159,7 +172,7 @@ fun TrackOverflowMenu(
             )
             track.artistBrowseId?.takeIf { it.isNotBlank() }?.let { artistId ->
                 DropdownMenuItem(
-                    text = { Text("Artists") },
+                    text = { Text("Artist") },
                     onClick = {
                         menuOpen = false
                         actions.onArtistClick(artistId)
@@ -207,6 +220,55 @@ fun TrackOverflowMenu(
                 onAddToPlaylist(playlist, track)
             },
             onDismiss = { pickerOpen = false },
+        )
+    }
+}
+
+/**
+ * The Download menu row: the label names the track's live download
+ * state. Enqueueing an already-downloaded (or in-flight) track is a
+ * silent no-op in the engine, so an always-on "Download" label was a
+ * dead-feeling tap for exactly the tracks a user re-checks; a failed
+ * download offers the retry the Library's Downloads section offers.
+ */
+@Composable
+private fun DownloadMenuItem(
+    downloadManager: dev.cyberdogs.offleash.data.DownloadManager,
+    track: Track,
+    onDownload: () -> Unit,
+) {
+    val records by downloadManager.records.collectAsState()
+    val state = records.firstOrNull { it.videoId == track.videoId }?.state
+    when (state) {
+        dev.cyberdogs.offleash.data.DownloadState.DONE -> DropdownMenuItem(
+            text = { Text("Downloaded") },
+            enabled = false,
+            onClick = {},
+        )
+        // QUEUED is not DOWNLOADING (bug sweep round 5): a queued
+        // track waits behind the one-at-a-time engine — possibly
+        // behind dozens of auto-downloads — and the Library's own
+        // status line calls that state "Waiting to download". The
+        // menu lumped both states into "Downloading…", claiming an
+        // activity that had not started for exactly the tracks
+        // still waiting.
+        dev.cyberdogs.offleash.data.DownloadState.QUEUED -> DropdownMenuItem(
+            text = { Text("Waiting to download") },
+            enabled = false,
+            onClick = {},
+        )
+        dev.cyberdogs.offleash.data.DownloadState.DOWNLOADING -> DropdownMenuItem(
+            text = { Text("Downloading…") },
+            enabled = false,
+            onClick = {},
+        )
+        dev.cyberdogs.offleash.data.DownloadState.FAILED -> DropdownMenuItem(
+            text = { Text("Retry download") },
+            onClick = onDownload,
+        )
+        else -> DropdownMenuItem(
+            text = { Text("Download") },
+            onClick = onDownload,
         )
     }
 }

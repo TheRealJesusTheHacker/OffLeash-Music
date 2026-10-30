@@ -1,5 +1,12 @@
 package dev.cyberdogs.offleash.data
 
+import dev.cyberdogs.offleash.core.error.AllRoadsRefused
+import dev.cyberdogs.offleash.core.error.ContextRejected
+import dev.cyberdogs.offleash.core.error.NetworkFailure
+import dev.cyberdogs.offleash.core.error.NoPlayableStream
+import dev.cyberdogs.offleash.core.error.OffleashException
+import dev.cyberdogs.offleash.core.error.ParseFailure
+import dev.cyberdogs.offleash.core.error.PlayerRefused
 import dev.cyberdogs.offleash.core.model.Track
 import java.io.File
 
@@ -173,7 +180,18 @@ fun downloadFileName(videoId: String): String {
     val safe = videoId.map { ch ->
         if (ch.isLetterOrDigit() || ch == '-' || ch == '_') ch else '_'
     }.joinToString("")
-    return (safe.ifEmpty { "track" }) + ".audio"
+    val base = safe.ifEmpty { "track" }
+    // When sanitising changed the id, two different ids could land
+    // on the same base ("a/b" and "a:b" both become "a_b") and their
+    // downloads would share — and delete — one file. A short stable
+    // hash of the ORIGINAL id keeps sanitised names distinct. Ids
+    // that needed no sanitising (every real YouTube id) keep the
+    // plain name they have always had.
+    return if (safe == videoId) {
+        "$base.audio"
+    } else {
+        "$base-${videoId.hashCode().toUInt().toString(16)}.audio"
+    }
 }
 
 /** The partial-file name for [fileName] — never playable, never DONE. */
@@ -272,11 +290,19 @@ data class DownloadedPlayback(
 /**
  * THE offline promise, as a pure decision: a track plays from its
  * local file exactly when a record exists, the record is DONE, and
- * the file is really there with bytes in it. Anything else returns
- * null and playback falls back to network resolution. The queue
- * controller consults this (through an injected provider) BEFORE any
- * network resolution, so a DONE download takes precedence over every
- * road.
+ * the file is really there — with bytes in it, and, when the record
+ * knows the expected size, with EXACTLY that many bytes. A file
+ * truncated or replaced behind the app's back (external deletion,
+ * storage trimming, a partial copy) must not be handed to the
+ * player to stall on: it returns null here and playback falls back
+ * to network resolution, and the download manager re-queues the
+ * record at the next process start so it heals by re-downloading.
+ * (Same-length corruption is undetectable without a stored hash —
+ * no hash is ever resolved for a stream — so that case rides on
+ * the player's own error surface, reported to the playback lane.)
+ * The queue controller consults this (through an injected
+ * provider) BEFORE any network resolution, so a DONE download
+ * takes precedence over every road.
  */
 fun downloadedPlaybackFor(
     record: DownloadRecord?,
@@ -287,6 +313,8 @@ fun downloadedPlaybackFor(
     val file = File(downloadsDir, record.fileName)
     val length = fileLength(file) ?: return null
     if (length <= 0L) return null
+    val expected = record.totalBytes
+    if (expected != null && length != expected) return null
     return DownloadedPlayback(file = file, mimeType = record.mimeType)
 }
 
@@ -310,15 +338,72 @@ fun tracksToAutoDownload(
     }
 }
 
-/** A named, plain-language reason for a failed download attempt. */
+private val URL_IN_MESSAGE = Regex("""https?://\S+""")
+
+/** The longest failure reason ever stored or shown. */
+private const val MAX_FAILURE_REASON_CHARS: Int = 300
+
+/**
+ * A named, plain-language reason for a failed download attempt.
+ *
+ * The reason is PERSISTED (downloads.json) and shown in the Library,
+ * so it must never carry a link: resolver and transport messages can
+ * embed the signed stream URL (or another address), and a signed URL
+ * is a secret. Links are replaced with a plain marker, and the whole
+ * reason is capped — an error page is not a failure reason.
+ */
 fun downloadFailureReason(error: Throwable): String {
-    val detail = error.message?.takeIf { it.isNotBlank() }
-    // Core failures already carry plain-language messages; the class
-    // name is prepended so the failure is NAMED (SPEC §6 shape), not
-    // a bare catch-all.
-    return if (detail != null) {
+    // Round 24: a core [OffleashException]'s message is NOT plain
+    // language, whatever this function used to assume — it EMBEDS
+    // raw material: ContextRejected carries the server's own error
+    // text, PlayerRefused the server's reason wording,
+    // NetworkFailure the transport detail (which can name a host or
+    // address), ParseFailure its detail, and AllRoadsRefused both
+    // roads' messages recursively. The production resolver throws
+    // exactly these, so copying `error.message` here persisted raw
+    // server/transport text into downloads.json and showed it in
+    // the Library's FAILED row — the round-6 lyrics leak on a
+    // second surface (that fix established the rule: an
+    // OffleashException is named by TYPE, never quoted). Core
+    // failures are therefore described from their type alone,
+    // mirroring ErrorMessages' plain shapes.
+    val detail = if (error is OffleashException) {
+        plainOffleashDetail(error)
+    } else {
+        error.message?.takeIf { it.isNotBlank() }
+            ?.replace(URL_IN_MESSAGE, "[link removed]")
+    }
+    // The class name is prepended so the failure is NAMED
+    // (SPEC §6 shape), not a bare catch-all.
+    val reason = if (detail != null) {
         "${error.javaClass.simpleName}: $detail"
     } else {
         error.javaClass.simpleName
     }
+    return reason.take(MAX_FAILURE_REASON_CHARS)
+}
+
+/**
+ * Round 24: the plain-language detail for a core failure, built
+ * from its TYPE (plus, for [PlayerRefused], the one machine token
+ * that changes the user's next step — the same exception
+ * ErrorMessages makes, reading the token field, never the
+ * message). No server wording, transport detail, or nested
+ * message ever enters this text.
+ */
+private fun plainOffleashDetail(error: OffleashException): String = when (error) {
+    is AllRoadsRefused ->
+        "YouTube refused this track both ways. " +
+            "Account road: ${plainOffleashDetail(error.accountError)} " +
+            "Anonymous road: ${plainOffleashDetail(error.anonymousError)}"
+    is ContextRejected -> "YouTube refused the app's request."
+    is PlayerRefused ->
+        if (error.reason.contains("LOGIN_REQUIRED", ignoreCase = true)) {
+            "YouTube won't play this track without a sign-in."
+        } else {
+            "YouTube won't play this track."
+        }
+    is NoPlayableStream -> "no playable stream was served."
+    is NetworkFailure -> "the connection failed."
+    is ParseFailure -> "YouTube answered in a shape the app doesn't understand."
 }

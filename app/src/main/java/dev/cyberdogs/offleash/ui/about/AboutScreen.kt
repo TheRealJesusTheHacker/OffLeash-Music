@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -201,7 +202,13 @@ fun AboutScreen(
                     }
                 }
                 else -> Text(
-                    text = "Session: checking…",
+                    // UNKNOWN is where health lands when a check
+                    // FAILED to reach Google, and it stays there until
+                    // the next launch's check — a present-tense
+                    // checking label claimed an activity that was no
+                    // longer running for most of that state's life
+                    // (chaos sweep round 2).
+                    text = "Session: not confirmed yet",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -231,11 +238,13 @@ fun AboutScreen(
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            text = "Sign-in is here. When you sign in, your password goes only " +
-                "to Google's own sign-in page — this app never sees it and " +
-                "never stores it. What the app keeps is a session cookie, " +
-                "stored encrypted on this device, never logged and never " +
-                "shown; signing out wipes it. Signed in, you get your liked " +
+            text = "When you sign in, your password is typed only " +
+                "on Google's own page — this app never sees it and " +
+                "never stores it. What the app keeps is the sign-in " +
+                "token Google hands it, stored encrypted on this " +
+                "device, never logged and never shown; signing out " +
+                "tells Google to revoke it and wipes the copy here. " +
+                "Signed in, you get your liked " +
                 "songs and your YouTube playlists. Signed out, everything " +
                 "stays fully anonymous, exactly as before.",
             style = MaterialTheme.typography.bodyLarge,
@@ -307,12 +316,23 @@ fun AboutScreen(
             onDismissRequest = { showSignOutConfirm = false },
             title = { Text("Sign out?") },
             text = {
-                Text(
-                    "Your sign-in will be removed from this device: " +
-                        "Google is told to revoke it, and the saved " +
-                        "sign-in is wiped. Your local playlists and " +
-                        "history stay — they were never tied to your account.",
-                )
+                // Height-bounded and scrolling, like the playlist
+                // picker: a dialog's text area does not scroll on its
+                // own, so at a 2.0x font scale on a short screen this
+                // paragraph pushed the Sign out / Cancel buttons past
+                // the dialog's edge (chaos sweep round 2).
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        "Your sign-in will be removed from this device: " +
+                            "Google is told to revoke it, and the saved " +
+                            "sign-in is wiped. Your local playlists and " +
+                            "history stay — they were never tied to your account.",
+                    )
+                }
             },
             confirmButton = {
                 TextButton(

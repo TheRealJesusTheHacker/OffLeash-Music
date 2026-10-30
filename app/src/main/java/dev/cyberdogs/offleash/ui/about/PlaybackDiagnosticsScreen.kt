@@ -71,6 +71,12 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
     val sessionForegroundLine = remember(refreshTick, lines) { foregroundStatusText(context) }
     val sessionBatteryLine = remember(refreshTick, lines) { batteryStatusText(context) }
 
+    // Test playback runs its stages in the scope below; while one
+    // run is in flight the button is disabled — a second tap used to
+    // launch a concurrent run whose stages interleaved into the same
+    // log and double-handed the probe track to the player.
+    var testRunning by remember { mutableStateOf(false) }
+
     // Account & session block: identity display name + health label
     // only — never cookie values or anything derived from them.
     val sessionState by container.accountUiState.collectAsState()
@@ -82,7 +88,11 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
     val accountHealthLine = when (sessionState.health.name) {
         "HEALTHY" -> "Healthy"
         "NEEDS_SIGN_IN" -> "Sign in again"
-        else -> "Checking…"
+        // UNKNOWN also means "the last check couldn't reach Google"
+        // and persists until the next one — a present-tense checking
+        // label claimed an activity that had already ended
+        // (chaos sweep round 2).
+        else -> "Not confirmed"
     }
 
     Column(
@@ -107,10 +117,15 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
         Spacer(Modifier.height(12.dp))
         Text(
             text = "This screen shows what happened on the last playback " +
-                "attempt, stage by stage, in plain language. If a track " +
+                "attempt, stage by stage. If a track " +
                 "fails, open this screen and send a screenshot of it — " +
                 "that is what turns a failure into a fixable bug. " +
-                "No addresses or personal data are shown here.",
+                "One thing here is personal: the account block below " +
+                "shows the name or email of the signed-in account, " +
+                "and Share diagnostics sends that line too. Nothing else " +
+                "is — no sign-in token or password is ever shown, and " +
+                "the log names the stream server's host, never an " +
+                "address of yours.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -148,13 +163,58 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = {
+                testRunning = true
                 scope.launch {
-                    runTestPlayback(container, appContext)
+                    try {
+                        runTestPlayback(container, appContext)
+                    } finally {
+                        testRunning = false
+                    }
                 }
+            },
+            enabled = !testRunning,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (testRunning) "Testing…" else "Test playback")
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = {
+                // The screen's own instructions end in "send a
+                // screenshot" — this hands the same lines to any
+                // share target directly, so sending them never
+                // depended on taking one. Only the rendered
+                // diagnostics text is shared: the same lines this
+                // screen shows, nothing else.
+                val shareText = buildString {
+                    appendLine("Account: $accountIdentityLine")
+                    appendLine("Session: $accountHealthLine")
+                    appendLine("PlaybackService: $sessionServiceLine")
+                    appendLine("Foreground: $sessionForegroundLine")
+                    appendLine("Battery: $sessionBatteryLine")
+                    appendLine()
+                    append(
+                        if (lines.isEmpty()) {
+                            diagnostics.renderText()
+                        } else {
+                            lines.joinToString("\n")
+                        },
+                    )
+                }
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(android.content.Intent.EXTRA_TEXT, shareText)
+                    putExtra(android.content.Intent.EXTRA_SUBJECT, "OffLeash playback diagnostics")
+                }
+                context.startActivity(
+                    android.content.Intent.createChooser(send, "Share diagnostics").apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
             },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Test playback")
+            Text("Share diagnostics")
         }
         Spacer(Modifier.height(8.dp))
         Text(
@@ -221,7 +281,12 @@ private suspend fun runTestPlayback(container: AppContainer, appContext: android
             }
         }
     } catch (e: Exception) {
-        diagnostics.log("test-fetch", "failed (${e.javaClass.simpleName}: ${e.message})")
+        // Class name only (bug sweep round 6): this log is SHARED
+        // by the Share diagnostics button, and a transport
+        // exception's message can embed the signed stream URL it
+        // failed to fetch — the one raw-message sink the rest of
+        // the diagnostics layer had already scrubbed.
+        diagnostics.log("test-fetch", "failed (${e.javaClass.simpleName})")
     }
     // (c) Hand the track to the player.
     diagnostics.log("test", "handing the probe track to the player")

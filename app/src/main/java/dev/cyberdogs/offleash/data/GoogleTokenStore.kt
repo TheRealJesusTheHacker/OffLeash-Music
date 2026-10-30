@@ -65,13 +65,25 @@ class GoogleTokenStore(
 
     private val lock = Any()
 
+    /**
+     * Total by contract (H3, 0.7.2 sweep): a storage read or a seal
+     * failure reads as "no session", exactly like corrupt bytes —
+     * a load never throws into a manager's init or a caller's
+     * thread. [save] is the deliberate exception: it MAY throw, and
+     * every caller must handle that, because a save that silently
+     * failed would leave the UI claiming a sign-in nothing persisted.
+     */
     fun load(): StoredGoogleSession? = synchronized(lock) {
-        val blob = storage.read() ?: return null
-        val plain = box.decrypt(blob) ?: return null
         try {
-            googleSessionJson.decodeFromString<StoredGoogleSession>(
-                plain.toString(Charsets.UTF_8)
-            )
+            val blob = storage.read() ?: return null
+            val plain = box.decrypt(blob) ?: return null
+            try {
+                googleSessionJson.decodeFromString<StoredGoogleSession>(
+                    plain.toString(Charsets.UTF_8)
+                )
+            } catch (e: Exception) {
+                null
+            }
         } catch (e: Exception) {
             null
         }
@@ -87,15 +99,25 @@ class GoogleTokenStore(
 
     /**
      * Destroys the stored tokens and VERIFIES the destruction:
-     * returns true only when a read-back finds nothing left.
+     * returns true only when a read-back finds nothing left. Total
+     * like [load]: a storage failure reports false (not verified
+     * gone), never a throw into sign-out.
      */
     fun wipe(): Boolean = synchronized(lock) {
-        storage.clear()
-        storage.read() == null
+        try {
+            storage.clear()
+        } catch (e: Exception) {
+            // The read-back below is the verdict either way.
+        }
+        isWipedClean()
     }
 
     /** True when nothing is stored — the post-sign-out ground truth. */
     fun isWipedClean(): Boolean = synchronized(lock) {
-        storage.read() == null
+        try {
+            storage.read() == null
+        } catch (e: Exception) {
+            false
+        }
     }
 }

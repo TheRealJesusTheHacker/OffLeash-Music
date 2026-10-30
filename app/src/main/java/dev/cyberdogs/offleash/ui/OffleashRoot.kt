@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -99,6 +100,16 @@ fun OffleashRoot(container: AppContainer) {
     var playerExpanded by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // The expanded player is an overlay, not a nav destination, so
+    // without this the system back press fell through to the nav
+    // stack: it popped the route UNDER the player (or, on a
+    // top-level route, left the app) while the player stayed open.
+    // Back closes the player first, like the player's own close
+    // button; only then does back mean navigation.
+    BackHandler(enabled = playerExpanded) {
+        playerExpanded = false
+    }
+
     // Cold-launch splash (2026-10-27, owner's spec): 3.8 seconds,
     // tap anywhere skips, and it never returns once this process has
     // shown it or played anything — the gate's process-lifetime
@@ -138,10 +149,27 @@ fun OffleashRoot(container: AppContainer) {
 
     // Surface playback errors as a snackbar when the full player is closed;
     // the player itself shows the same message in its error banner.
+    // Long duration: the named messages run two to three sentences
+    // (what happened + what to do), and the default Short snackbar
+    // dismissed them before they could be read.
     LaunchedEffect(namedError, playerExpanded) {
         val message = namedError
         if (message != null && !playerExpanded) {
-            snackbarHostState.showSnackbar(message)
+            // The action is the error card's Try again (bug sweep
+            // round 9): with the full player closed this snackbar
+            // was the ONLY surface for the error, and until now it
+            // carried no action at all — the listener had to open
+            // the player to retry a track the app already knew how
+            // to re-resolve. The like-error snackbar above stays
+            // actionless: a failed like has no such retry.
+            val result = snackbarHostState.showSnackbar(
+                message = message,
+                actionLabel = "Try again",
+                duration = androidx.compose.material3.SnackbarDuration.Long,
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                container.queueController.retryCurrent()
+            }
         }
     }
 
@@ -455,7 +483,9 @@ private fun MiniPlayer(
         color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onExpand),
+            // TalkBack gets the tap's purpose, not just the track
+            // text it merges in (chaos sweep round 2).
+            .clickable(onClickLabel = "Open the full player", onClick = onExpand),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),

@@ -400,6 +400,21 @@ class PlaybackDiagnostics {
     private fun addLocked(stage: String, detail: String) {
         val stamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
         lines.add("$stamp  $stage: $detail")
+        // Bounded ring (bug sweep round 2): this recorder lives for
+        // the whole process and the shared stack's interceptor logs
+        // EVERY stream load — a long, seek-heavy session (or a track
+        // that keeps re-resolving) appended lines without limit, and
+        // every append copied the whole list into the snapshot, so
+        // memory and per-load cost grew for the process lifetime.
+        // The diagnostics screen reads the LAST attempt; the newest
+        // [MAX_LOG_LINES] lines are that attempt's story, and the
+        // oldest are dropped as new ones land.
+        while (lines.size > MAX_LOG_LINES) lines.removeAt(0)
         _snapshot.value = lines.toList()
+    }
+
+    companion object {
+        /** Most stage lines retained; see [addLocked]. */
+        const val MAX_LOG_LINES: Int = 200
     }
 }

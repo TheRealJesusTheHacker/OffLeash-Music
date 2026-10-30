@@ -2,7 +2,6 @@ package dev.cyberdogs.offleash.data
 
 import okhttp3.Interceptor
 import okhttp3.Response
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The wire shape of one googlevideo GET as it leaves the shared
@@ -39,27 +38,47 @@ data class StreamFetchShape(
  * Keys are full stream URLs (each resolution mints a fresh signed
  * URL, so an entry can only ever shape fetches of the exact stream
  * it was won on). Values are byte counts only — never logged from
- * here. The map is bounded: past [MAX_ENTRIES] it clears rather
- * than growing for the process lifetime (a stale winner is harmless
- * — worst case a later fetch of an evicted URL rides the default
- * window, exactly the pre-round-3 behavior).
+ * here. The map is bounded at [MAX_ENTRIES] with LEAST-RECENTLY-USED
+ * eviction (bug sweep round 2): round 1's clear-all-on-full meant
+ * that under adversarial URL churn — every resolve mints a new
+ * signed URL, so radio/autoplay resolving ahead fills the map with
+ * dead URLs — the 65th new URL evicted EVERY winner, including the
+ * CURRENTLY PLAYING stream's, whose remaining loads then rode the
+ * default 1 MiB window the ladder had already proven gets refused
+ * (403) on exactly those streams. A stream that is playing keeps
+ * touching [windowFor] through the interceptor, so LRU keeps its
+ * winner warm; only genuinely dead URLs age out. An evicted URL's
+ * next fetch rides the default window, exactly the pre-round-3
+ * behavior.
  */
 class StreamWindowStore {
 
-    private val windows = ConcurrentHashMap<String, Long>()
+    // Access-ordered: a get (windowFor) counts as use, so the
+    // playing stream's entry is always the freshest. All access is
+    // synchronized — LinkedHashMap is not thread-safe, and the
+    // interceptor calls in from OkHttp threads.
+    private val windows = object : LinkedHashMap<String, Long>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, Long>,
+        ): Boolean = size > MAX_ENTRIES
+    }
 
     /** Record [windowBytes] as the window to shape fetches of [url] with. */
     fun recordWinner(url: String, windowBytes: Long) {
-        if (windows.size >= MAX_ENTRIES) windows.clear()
-        windows[url] = windowBytes
+        // A non-positive window is not a window: recording one would
+        // shape fetches with a malformed Range ("bytes=0--1"), so it
+        // is refused and any previous winner for the URL stands
+        // (bug sweep round 1).
+        if (windowBytes <= 0L) return
+        synchronized(windows) { windows[url] = windowBytes }
     }
 
     /** The recorded window for [url], or null when none was recorded. */
-    fun windowFor(url: String): Long? = windows[url]
+    fun windowFor(url: String): Long? = synchronized(windows) { windows[url] }
 
     /** Forget [url]'s window (its next fetch rides the default). */
     fun clear(url: String) {
-        windows.remove(url)
+        synchronized(windows) { windows.remove(url) }
     }
 
     companion object {
@@ -228,14 +247,17 @@ class RangeInterceptor(
             windowBytes: Long,
         ): String? {
             if (!isGoogleVideoGet(method, host)) return null
+            // A non-positive window can only produce a malformed
+            // header ("bytes=0--1"); fall back to the default window.
+            val effectiveWindow = if (windowBytes > 0L) windowBytes else STREAM_RANGE_WINDOW_BYTES
             if (existingRange == null) {
-                return boundedRangeHeader(0L, windowBytes)
+                return boundedRangeHeader(0L, effectiveWindow)
             }
             val match = RANGE_PATTERN.matchEntire(existingRange.trim()) ?: return null
             val start = match.groupValues[1].toLongOrNull() ?: return null
             val end = match.groupValues[2]
             if (end.isNotEmpty()) return null // already bounded — untouched
-            return boundedRangeHeader(start, windowBytes)
+            return boundedRangeHeader(start, effectiveWindow)
         }
 
         /**

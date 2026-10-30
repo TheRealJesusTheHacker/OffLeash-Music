@@ -63,6 +63,16 @@ class PlayerFetchShapeContractTest {
         val source = locateSource(
             "src/main/java/dev/cyberdogs/offleash/playback/QueueController.kt",
         ).readText()
+        // Round 12 strengthening (meta-audit): the isNotEmpty
+        // check below is NOT a presence guard — substringAfter
+        // returns the whole file when its anchor is absent, and
+        // a whole file is never empty. (The pin happened to stay
+        // deletion-sensitive only because the probe's KDoc above
+        // it mentions `bytes=0-0`; that accident is not a guard.)
+        assertTrue(
+            "probeUrl must exist at all in QueueController",
+            source.contains("private suspend fun probeUrl"),
+        )
         val probeBody = source
             .substringAfter("private suspend fun probeUrl")
             .substringBefore("private fun setResolving")

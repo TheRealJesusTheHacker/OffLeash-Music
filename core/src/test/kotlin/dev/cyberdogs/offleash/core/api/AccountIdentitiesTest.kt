@@ -159,10 +159,15 @@ class AccountIdentitiesTest {
 
     @Test
     fun throwingTransportMapsToFailed() {
+        // Round 2 scrub: the detail is class-name only. This detail
+        // is written to the sign-in diagnostics, and a real
+        // transport message can embed the host/address it failed to
+        // reach — the raw message no longer rides along.
         val transport = GetTransport(failure = RuntimeException("socket closed"))
         val lookup = YoutubeiClient(transport).accountIdentities(session)
             as IdentityLookup.Failed
-        assertTrue(lookup.detail!!.contains("socket closed"))
+        assertTrue(lookup.detail!!.contains("RuntimeException"))
+        assertFalse(lookup.detail!!.contains("socket closed"))
     }
 
     // ------------------------------------------------------------------

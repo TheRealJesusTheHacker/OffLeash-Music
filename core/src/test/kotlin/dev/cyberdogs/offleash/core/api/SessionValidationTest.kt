@@ -5,6 +5,7 @@ import dev.cyberdogs.offleash.core.GetTransport
 import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.auth.SessionValidation
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,7 +54,11 @@ class SessionValidationTest {
             GetTransport(failure = RuntimeException("no route to host"))
         )
         val validation = client.validateSession(session) as SessionValidation.Unreachable
-        assertTrue(validation.detail!!.contains("no route to host"))
+        // Round 2 scrub: the detail names the failure class only —
+        // it reaches the sign-in diagnostics, and a transport
+        // message can embed the host/address it failed to reach.
+        assertTrue(validation.detail!!.contains("RuntimeException"))
+        assertFalse(validation.detail!!.contains("no route to host"))
     }
 
     @Test

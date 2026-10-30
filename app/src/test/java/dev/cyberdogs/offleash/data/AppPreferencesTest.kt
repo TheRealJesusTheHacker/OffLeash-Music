@@ -157,6 +157,41 @@ class AppPreferencesTest {
     }
 
     @Test
+    fun playbackSpeedAndPitchChoiceRoundTrip() {
+        // Bug sweep round 1: the player's speed + pitch choice is
+        // persisted so a process death no longer resets it to 1.0×.
+        val store = InMemoryKeyValueStore()
+        val prefs = AppPreferences(store)
+        assertEquals(1.0f, prefs.playbackSpeed)
+        assertEquals(true, prefs.keepPitchAtSpeed)
+        prefs.setPlaybackSpeed(1.5f)
+        prefs.setKeepPitchAtSpeed(false)
+        assertEquals(1.5f, prefs.playbackSpeed)
+        assertEquals(false, prefs.keepPitchAtSpeed)
+        // A fresh instance over the same store reads the persisted values.
+        val fresh = AppPreferences(store)
+        assertEquals(1.5f, fresh.playbackSpeed)
+        assertEquals(false, fresh.keepPitchAtSpeed)
+    }
+
+    @Test
+    fun malformedPlaybackSpeedReadsAsNormalSpeed() {
+        val store = InMemoryKeyValueStore()
+        val prefs = AppPreferences(store)
+        store.putString(AppPreferences.KEY_PLAYBACK_SPEED, "fast")
+        assertEquals(1.0f, prefs.playbackSpeed)
+        store.putString(AppPreferences.KEY_PLAYBACK_SPEED, "-2")
+        assertEquals(1.0f, prefs.playbackSpeed)
+        store.putString(AppPreferences.KEY_PLAYBACK_SPEED, "NaN")
+        assertEquals(1.0f, prefs.playbackSpeed)
+        // Out-of-range clamps into the player's supported band.
+        store.putString(AppPreferences.KEY_PLAYBACK_SPEED, "8")
+        assertEquals(2.0f, prefs.playbackSpeed)
+        store.putString(AppPreferences.KEY_PLAYBACK_SPEED, "0.1")
+        assertEquals(0.5f, prefs.playbackSpeed)
+    }
+
+    @Test
     fun malformedBooleanValuesReadAsTheirDefaults() {
         val store = InMemoryKeyValueStore()
         store.putString(AppPreferences.KEY_AUTO_DOWNLOAD_LIKED, "yes")

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,8 +39,19 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.core.playback.QualityPreference
+import dev.cyberdogs.offleash.data.DownloadQuality
 import dev.cyberdogs.offleash.data.DownloadQualityPreference
 import kotlinx.coroutines.launch
+
+/**
+ * The [DownloadQuality] twin of a Settings [DownloadQualityPreference]:
+ * the two enums are parallel by design (Lane F owns one, Lane H the
+ * other) and share their stored names, so the mapping is the name.
+ * Settings writes BOTH accessors on every change (see the screen's
+ * KDoc) — this is the conversion the AppPreferences write needs.
+ */
+fun downloadQualityFor(quality: DownloadQualityPreference): DownloadQuality =
+    DownloadQuality.valueOf(quality.name)
 
 /** The short label shown for one quality choice. */
 fun qualityLabel(quality: QualityPreference): String = when (quality) {
@@ -74,14 +86,27 @@ fun downloadQualityCaption(quality: DownloadQualityPreference): String = when (q
 }
 
 /**
- * Settings: every control here is functional and persists immediately.
+ * Settings: every control here persists immediately, and every
+ * control takes effect as its caption describes — the one partial
+ * exception is the radio audio-version toggle, whose caption says
+ * plainly that it is saved but not yet in effect (the radio builder
+ * documents why: the API gives no audio-vs-video distinction to
+ * act on; see RadioQueue.kt).
  * The stream-quality rows write to
  * [dev.cyberdogs.offleash.data.AppPreferences] (Lane E, unchanged);
  * the Downloads and Playback controls write the Lane F-owned parity
  * keys (`download_quality`, `auto_download_liked`,
  * `audio_version_in_radio`) through
  * [dev.cyberdogs.offleash.data.ParityPreferences] over the same
- * preferences file. The account block mirrors About's, driven by the
+ * preferences file — AND through [dev.cyberdogs.offleash.data.AppPreferences],
+ * whose accessors are what the download engine, the auto-download
+ * worker, and the queue controller actually read. The two classes
+ * hold separate in-memory caches over one file; writing only one
+ * left the other's readers (and flow collectors, e.g. the Library's
+ * auto-download trigger) serving the old value until a restart —
+ * a control that persisted but did not take effect. Both classes'
+ * getters also read through to the persisted value, so the dual
+ * write is belt and braces, not the only line of defence. The account block mirrors About's, driven by the
  * presented account state (the container's accountUiState):
  * sign-in routes to the existing sign-in screen, sign-out goes
  * through the same revoke-and-wipe path (`signOutOfAccount()`)
@@ -148,7 +173,10 @@ fun SettingsScreen(
             DownloadQualityRow(
                 quality = quality,
                 selected = quality == downloadQuality,
-                onSelect = { container.parityPreferences.setDownloadQuality(quality) },
+                onSelect = {
+                    container.parityPreferences.setDownloadQuality(quality)
+                    container.appPreferences.setDownloadQuality(downloadQualityFor(quality))
+                },
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -156,7 +184,10 @@ fun SettingsScreen(
             title = "Auto-download Liked songs",
             caption = "New songs you like are downloaded automatically.",
             checked = autoDownloadLiked,
-            onCheckedChange = { container.parityPreferences.setAutoDownloadLiked(it) },
+            onCheckedChange = {
+                container.parityPreferences.setAutoDownloadLiked(it)
+                container.appPreferences.setAutoDownloadLiked(it)
+            },
         )
         Spacer(Modifier.height(24.dp))
         Text(
@@ -167,9 +198,14 @@ fun SettingsScreen(
         Spacer(Modifier.height(8.dp))
         ToggleRow(
             title = "Play audio version in radio",
-            caption = "In radio, play the audio version of a song instead of its music video.",
+            caption = "Saved for when YouTube's radio answers say which " +
+                "tracks are audio versions — they don't today, so this " +
+                "choice doesn't change radio yet.",
             checked = audioVersionInRadio,
-            onCheckedChange = { container.parityPreferences.setAudioVersionInRadio(it) },
+            onCheckedChange = {
+                container.parityPreferences.setAudioVersionInRadio(it)
+                container.appPreferences.setAudioVersionInRadio(it)
+            },
         )
         Spacer(Modifier.height(24.dp))
         Text(
@@ -245,7 +281,14 @@ fun SettingsScreen(
                     }
                 }
                 else -> Text(
-                    text = "Session: checking…",
+                    // UNKNOWN is where health lands when a check
+                    // FAILED to reach Google, and it stays there until
+                    // the next launch's check — a present-tense
+                    // checking label claimed an activity that was no
+                    // longer running for most of that state's life
+                    // (chaos sweep round 2, About; this twin in
+                    // Settings was missed — round 4).
+                    text = "Session: not confirmed yet",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -262,12 +305,25 @@ fun SettingsScreen(
             onDismissRequest = { showSignOutConfirm = false },
             title = { Text("Sign out?") },
             text = {
-                Text(
-                    "Your sign-in will be removed from this device: " +
-                        "Google is told to revoke it, and the saved " +
-                        "sign-in is wiped. Your local playlists and " +
-                        "history stay — they were never tied to your account.",
-                )
+                // Height-bounded and scrolling, like About's twin
+                // dialog: a dialog's text area does not scroll on its
+                // own, so at a 2.0x font scale on a short screen this
+                // paragraph pushed the Sign out / Cancel buttons past
+                // the dialog's edge (chaos sweep round 2 fixed About;
+                // this twin was missed — round 4).
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        "Your sign-in will be removed from this device: " +
+                            "Google is told to revoke it, and the saved " +
+                            "sign-in is wiped. Your local playlists, " +
+                            "downloads and history stay — they were never " +
+                            "tied to your account.",
+                    )
+                }
             },
             confirmButton = {
                 TextButton(

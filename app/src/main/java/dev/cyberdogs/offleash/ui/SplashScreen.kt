@@ -95,6 +95,12 @@ fun SplashScreen(onSkip: () -> Unit) {
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
+                // TalkBack names the one action this surface has;
+                // without a label the full-screen skip was an
+                // unlabelled click target (chaos sweep round 2). It
+                // is never a focus trap either way: the root's timer
+                // dismisses the splash on its own.
+                onClickLabel = "Skip the splash",
             ) { onSkip() },
         contentAlignment = Alignment.Center,
     ) {

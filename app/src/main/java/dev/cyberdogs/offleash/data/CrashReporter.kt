@@ -86,9 +86,20 @@ object CrashReporter {
         }
     }
 
+    /** Any URL inside a trace message — redacted before the trace is stored. */
+    private val URL_IN_TRACE = Regex("""https?://\S+""")
+
     /**
      * The trace text: when, on which thread, and the full stack.
      * Pure, so the format is unit-testable off-device.
+     *
+     * Links are redacted first (round 2 scrub): a stack trace prints
+     * exception MESSAGES verbatim, and a message from the media or
+     * network layer can embed the signed googlevideo URL it failed
+     * on — a signed URL is a secret and this file, while local-only,
+     * is exactly what the owner is asked to screenshot and share
+     * when a crash is diagnosed. Same "[link removed]" marker the
+     * persisted download failure reasons use.
      */
     fun formatTrace(threadName: String, throwable: Throwable, epochMs: Long): String {
         val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date(epochMs))
@@ -97,7 +108,7 @@ object CrashReporter {
             pw.println("The app stopped unexpectedly at $stamp (thread: $threadName).")
             throwable.printStackTrace(pw)
         }
-        val text = writer.toString().trimEnd()
+        val text = writer.toString().trimEnd().replace(URL_IN_TRACE, "[link removed]")
         return if (text.length <= MAX_TRACE_CHARS) {
             text
         } else {

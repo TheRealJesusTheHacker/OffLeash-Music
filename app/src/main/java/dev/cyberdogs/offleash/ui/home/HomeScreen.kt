@@ -44,6 +44,7 @@ import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -79,7 +80,9 @@ class HomeViewModel(
     private val _selectedChip = MutableStateFlow<HomeChip?>(null)
     val selectedChip: StateFlow<HomeChip?> = _selectedChip
 
-    fun load() = loadFeed(chip = null)
+    private var loadJob: kotlinx.coroutines.Job? = null
+
+    fun load() = loadFeed(chip = null, carryChips = false)
 
     /** Tapping the selected chip again clears it back to the full feed. */
     fun onChipClick(chip: HomeChip) {
@@ -90,18 +93,46 @@ class HomeViewModel(
         }
     }
 
-    private fun loadFeed(chip: HomeChip?) {
+    private fun loadFeed(chip: HomeChip?, carryChips: Boolean = true) {
         // Captured BEFORE the Loading reset: a filtered re-browse
         // that carries no chip cloud of its own keeps the full feed's
         // chips on screen, so the row the user is interacting with
         // never vanishes mid-tap; sections always come from the new
         // response.
-        val keptChips = (_state.value as? UiState.Content)?.data?.chips
+        //
+        // The carry is scoped to chip re-browses (bug sweep round
+        // 30): a full load() is a NEW feed — the first load, an
+        // ErrorPanel retry, and above all the identity-keyed reload
+        // HomeScreen fires whenever sign-in state or the account's
+        // email changes. The chips are browse endpoints (label +
+        // browseId + params) minted by the PREVIOUS response; on an
+        // account switch that never passes through a landed
+        // signed-out feed, carrying them let the previous account's
+        // chip row render as the new account's, and tapping one
+        // browsed the new account's home with the old account's
+        // endpoint. A full load therefore starts from the new
+        // response's own chips alone (an Error state holds no
+        // Content, so the retry path loses nothing by this).
+        val keptChips = if (carryChips) {
+            (_state.value as? UiState.Content)?.data?.chips
+        } else {
+            null
+        }
         _selectedChip.value = chip
         _state.value = UiState.Loading
-        viewModelScope.launch(Dispatchers.IO) {
+        // Stale-load guard (bug sweep round 1, the SearchViewModel
+        // rule applied here): the client call is blocking, so a
+        // superseded load — the anonymous feed still in flight when
+        // sign-in completes, a slow chip re-browse overtaken by a
+        // newer tap — runs to completion on its IO thread. Cancelling
+        // the previous job and publishing only while this job is
+        // still active keeps the OLD response from overwriting the
+        // NEWER state (signed-in home showing anonymous results was
+        // exactly this race).
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
             val auth = sessionProvider()
-            _state.value = try {
+            val result = try {
                 val bearer = bearerProvider()
                 val feed = if (bearer != null) {
                     client.homeFeedOAuth(bearer, chip)
@@ -116,7 +147,11 @@ class HomeViewModel(
                     },
                 )
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 UiState.Error(ErrorMessages.userMessage(e))
+            }
+            if (isActive) {
+                _state.value = result
             }
         }
     }
@@ -143,8 +178,12 @@ fun HomeScreen(
     val sessionState by container.accountUiState.collectAsState()
 
     // Load on first composition and reload on every sign-in/out
-    // transition, so the feed matches the current session.
-    LaunchedEffect(sessionState.signedIn) {
+    // transition, so the feed matches the current session. The
+    // identity is part of the key (bug sweep round 1): switching
+    // accounts without an intervening signed-out state changes the
+    // email but not `signedIn`, and the previous account's
+    // personalized feed must not survive that switch.
+    LaunchedEffect(sessionState.signedIn, sessionState.identityEmail) {
         viewModel.load()
     }
 
@@ -240,6 +279,24 @@ fun HomeScreen(
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                    // The empty state keys on the sections alone
+                    // (round 20): chips are navigation chrome, not
+                    // content — a signed-in feed (or a chip browse)
+                    // that returns zero sections must still SAY it
+                    // came back empty, instead of leaving a silent
+                    // blank under the greeting and chip row. Every
+                    // sibling browse surface (Charts, Moods, Search)
+                    // names its empty result the same way.
+                    if (current.data.sections.isEmpty()) {
+                        item {
+                            Text(
+                                text = "Nothing to show right now. Try again in a bit.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(16.dp),
+                            )
                         }
                     }
                     itemsIndexed(current.data.sections) { _, section ->

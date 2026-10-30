@@ -1,6 +1,5 @@
 package dev.cyberdogs.offleash.ui.components
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -95,14 +94,26 @@ fun BatteryRestrictionCard(modifier: Modifier = Modifier) {
                             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                         ).setData(Uri.parse("package:" + context.packageName))
                         context.startActivity(intent)
-                    } catch (e: ActivityNotFoundException) {
+                    } catch (e: Exception) {
+                        // Not only ActivityNotFoundException: some
+                        // OEM builds answer this intent with a
+                        // SecurityException instead of opening the
+                        // dialog, and that must land on the fallback
+                        // settings list too — never crash the screen
+                        // the card happens to sit on (chaos sweep
+                        // round 2).
                         try {
                             context.startActivity(
                                 Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
                             )
-                        } catch (ignored: ActivityNotFoundException) {
-                            // No settings surface on this device; the card
-                            // stays until dismissed.
+                        } catch (ignored: Exception) {
+                            // No settings surface on this device — or
+                            // the OEM answers THIS intent with a
+                            // SecurityException too (bug sweep round
+                            // 3: the round-2 fix widened only the
+                            // outer catch, so a throwing fallback
+                            // still crashed the screen the card sits
+                            // on). The card stays until dismissed.
                         }
                     }
                 },
@@ -112,9 +123,15 @@ fun BatteryRestrictionCard(modifier: Modifier = Modifier) {
             }
             TextButton(
                 onClick = {
+                    // commit(), not apply() (bug sweep round 3):
+                    // dismissal is forever for this install, and
+                    // apply()'s asynchronous disk write can be lost
+                    // if the process dies right after the tap,
+                    // resurrecting a card the owner already
+                    // dismissed. The write is one boolean, once.
                     prefs.edit()
                         .putBoolean(KEY_BATTERY_CARD_DISMISSED, true)
-                        .apply()
+                        .commit()
                     dismissed = true
                 },
             ) {

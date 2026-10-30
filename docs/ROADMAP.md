@@ -32,7 +32,17 @@ Anonymous, no account:
 
 ## Phase 2 — accounts (BUILT, 2026-10-23; security pass in `docs/AUDITS.md`)
 
-- Sign-in: WebView to Google's ServiceLogin music flow (the app never sees the password), navigation scope enforced in code, capture limited to a deliberate 7-cookie subset, identity validation with rollback, WebView jar wiped after capture; manual cookie-paste fallback through the same pipeline
+> **Sign-in superseded (0.7.0; noted by the round-4 sweep).** The
+> WebView sign-in below was replaced as the app's sign-in by the
+> Google device-code flow: the app shows a code, the owner approves
+> it on Google's own device page, and the app stores only the OAuth
+> token Google issues (encrypted store, automatic refresh,
+> revocation on sign-out). No WebView sign-in screen ships anymore.
+> The cookie session machinery remains only as a dormant fallback
+> for sessions stored by pre-0.7.0 installs. The bullets below stand
+> as the record of the Phase 2 build.
+
+- Sign-in (0.6.x design — replaced in 0.7.0, see the note above): WebView to Google's ServiceLogin music flow (the app never sees the password), navigation scope enforced in code, capture limited to a deliberate 7-cookie subset, identity validation with rollback, WebView jar wiped after capture; manual cookie-paste fallback through the same pipeline
 - Storage: ONE store, AES-256-GCM under an Android Keystore key in the no-backup directory; zero plaintext copies; backup/transfer excluded on every API level; never logged (regression-tested), never displayed; sign-out is a verified wipe
 - Authenticated API: classic SAPISIDHASH, deliberate presence rule, account-switcher enumeration (no hard-coded index), visitor data maintained alongside; signed-in surfaces: Liked Songs (LM), his playlists, personalized home + recommendations, account area (identity, health, sign-out)
 - Session keep-alive: app-start + ~12 h periodic validation, rotated cookies/visitor data absorbed, health states surfaced calmly, one silent re-validation + retry on a playback-time auth refusal

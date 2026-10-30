@@ -24,6 +24,7 @@ import dev.cyberdogs.offleash.core.model.SearchResults
 import dev.cyberdogs.offleash.core.model.Section
 import dev.cyberdogs.offleash.core.model.StreamInfo
 import dev.cyberdogs.offleash.core.model.Track
+import dev.cyberdogs.offleash.core.model.TrackContinuation
 import dev.cyberdogs.offleash.core.parse.YoutubeiParsers
 import dev.cyberdogs.offleash.core.parse.asArr
 import dev.cyberdogs.offleash.core.parse.asObj
@@ -113,7 +114,51 @@ class YoutubeiClient(
         } else {
             listOf(SearchFilters.ALL) + parsed.filters.filter { it.label != SearchFilters.ALL.label }
         }
-        return SearchResults(sections = parsed.sections, filters = filters)
+        return SearchResults(
+            sections = parsed.sections,
+            filters = filters,
+            continuation = parsed.continuation,
+        )
+    }
+
+    /**
+     * The next page of a playlist (or of Liked Songs, whose pages are
+     * playlist pages): a browse POST carrying only the continuation
+     * token the previous page offered. The response's own offered
+     * token comes back on the result; callers terminate via
+     * [dev.cyberdogs.offleash.core.model.ContinuationTracker], which
+     * also ends paging when a misbehaving server repeats a token.
+     */
+    fun playlistContinuation(
+        continuation: String,
+        auth: AuthSession? = null,
+    ): TrackContinuation {
+        val body = buildJsonObject {
+            put("context", contextJsonWithVisitor(YoutubeiContexts.WEB_REMIX.toJson(), auth))
+            put("continuation", continuation)
+        }
+        val root = postJson("browse", YoutubeiContexts.WEB_REMIX, body, auth)
+        return YoutubeiParsers.parsePlaylistContinuation(root)
+    }
+
+    /** The next page of search results for [continuation]. */
+    fun searchContinuation(continuation: String): SearchResults {
+        val body = buildJsonObject {
+            put("context", YoutubeiContexts.WEB_REMIX.toJson())
+            put("continuation", continuation)
+        }
+        val root = postJson("search", YoutubeiContexts.WEB_REMIX, body)
+        val parsed = YoutubeiParsers.parseSearch(root)
+        val filters = if (parsed.filters.isEmpty()) {
+            SearchFilters.ALL_FILTERS
+        } else {
+            listOf(SearchFilters.ALL) + parsed.filters.filter { it.label != SearchFilters.ALL.label }
+        }
+        return SearchResults(
+            sections = parsed.sections,
+            filters = filters,
+            continuation = parsed.continuation,
+        )
     }
 
     fun album(browseId: String): AlbumPage {
@@ -278,7 +323,24 @@ class YoutubeiClient(
                 LyricsResult.Found(lines, source = "YouTube Music")
             }
         } catch (e: OffleashException) {
-            LyricsResult.Unavailable(e.message ?: "Lyrics are unavailable for this track.")
+            // The plain fixed reason, NOT e.message (bug sweep
+            // round 6): an OffleashException's message embeds the
+            // server's own words (ContextRejected carries the raw
+            // server message) or the transport's detail
+            // (NetworkFailure carries the failing call's message,
+            // which names hosts/addresses) — and this reason is
+            // USER COPY, rendered verbatim by the player's lyrics
+            // panel and then cached for the process. Raw server or
+            // transport text never reaches a message the user reads
+            // (the ErrorMessages rule); the generic catch below has
+            // always used the fixed string, and this catch now
+            // matches it.
+            LyricsResult.Unavailable("Lyrics are unavailable for this track.")
+        } catch (e: Exception) {
+            // The documented contract is "never an exception": any
+            // other failure on the way (a drifted shape the parsers
+            // didn't model, a transport quirk) is Unavailable too.
+            LyricsResult.Unavailable("Lyrics are unavailable for this track.")
         }
     }
 
@@ -308,6 +370,8 @@ class YoutubeiClient(
         val root = try {
             Json.parseToJsonElement(response.body).asObj()
         } catch (e: Exception) {
+            return null
+        } catch (t: Throwable) {
             return null
         } ?: return null
         val synced = root.str("syncedLyrics")?.takeIf { it.isNotBlank() } ?: return null
@@ -340,8 +404,18 @@ class YoutubeiClient(
      * of a second either way) into timed lines. Lines without a
      * timestamp (metadata tags, blanks) are skipped; a line carrying
      * several timestamps yields one entry per timestamp.
+     *
+     * An `[offset:±ms]` metadata tag shifts EVERY line by that many
+     * milliseconds (the mainstream LRC convention: the tag's value is
+     * added to each timestamp, so a positive offset makes the lines
+     * land later). Until the bug sweep the tag was dropped like any
+     * other metadata line, so an offset-carrying track's synced
+     * lyrics drifted by exactly the tag value from start to finish.
+     * A shifted start never goes below zero.
      */
     private fun parseLrc(syncedLyrics: String): List<LyricsLine> {
+        val offsetMs = LRC_OFFSET_REGEX.find(syncedLyrics)
+            ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
         val lines = mutableListOf<LyricsLine>()
         for (rawLine in syncedLyrics.lines()) {
             val stamps = LRC_TIMESTAMP_REGEX.findAll(rawLine).toList()
@@ -356,10 +430,30 @@ class YoutubeiClient(
                 } else {
                     fraction.take(3).padEnd(3, '0').toLong()
                 }
+                // Checked arithmetic (round 2): the minute field is
+                // unbounded digits, and the plain Long math wrapped
+                // silently for absurd stamps — the coerceAtLeast
+                // then pinned the line at 0, claiming it current
+                // from the track's first moment. An overflowing
+                // stamp is junk and is skipped, like a missing one.
+                val startMs = try {
+                    Math.addExact(
+                        Math.addExact(
+                            Math.multiplyExact(
+                                Math.addExact(Math.multiplyExact(minutes, 60L), seconds),
+                                1000L,
+                            ),
+                            fractionMs,
+                        ),
+                        offsetMs,
+                    )
+                } catch (e: ArithmeticException) {
+                    continue
+                }
                 lines.add(
                     LyricsLine(
                         text = text,
-                        startMs = (minutes * 60 + seconds) * 1000 + fractionMs,
+                        startMs = startMs.coerceAtLeast(0L),
                     )
                 )
             }
@@ -406,7 +500,11 @@ class YoutubeiClient(
         val response = try {
             transport.get(ACCOUNT_SWITCHER_URL, switcherHeaders)
         } catch (e: Exception) {
-            return IdentityLookup.Failed(e.message ?: e.javaClass.simpleName)
+            // Class name only (round 2 scrub): this detail is written
+            // to the sign-in diagnostics, and a transport exception's
+            // message can embed the host/address it failed to reach.
+            // GoogleAuth's "transport: <class>" is the house shape.
+            return IdentityLookup.Failed("transport: ${e.javaClass.simpleName}")
         }
         if (response.status == 401 || response.status == 403) {
             return IdentityLookup.Rejected(response.status)
@@ -417,7 +515,17 @@ class YoutubeiClient(
         val root = try {
             Json.parseToJsonElement(stripXssiPrefix(response.body))
         } catch (e: Exception) {
-            return IdentityLookup.Failed("account response was not valid JSON (${e.message})")
+            // Class name only: decoding errors echo the body, and
+            // this string lands on the diagnostics card.
+            return IdentityLookup.Failed(
+                "account response was not valid JSON (${e.javaClass.simpleName})"
+            )
+        } catch (t: Throwable) {
+            // Same never-throws contract as the parse below: a deeply
+            // nested body overflows the parser's own stack (an Error).
+            return IdentityLookup.Failed(
+                "account response was not valid JSON (${t.javaClass.simpleName})"
+            )
         }
         // The parse walk is total by construction — every helper is
         // nullable-safe, and the 2026-10-27 crash hunt proved it
@@ -611,7 +719,7 @@ class YoutubeiClient(
                 ),
             )
         } catch (e: Exception) {
-            return IdentityLookup.Failed(e.message ?: e.javaClass.simpleName)
+            return IdentityLookup.Failed("transport: ${e.javaClass.simpleName}")
         }
         if (response.status == 401 || response.status == 403) {
             return IdentityLookup.Rejected(response.status)
@@ -622,7 +730,13 @@ class YoutubeiClient(
         val root = try {
             Json.parseToJsonElement(stripXssiPrefix(response.body)).asObj()
         } catch (e: Exception) {
-            return IdentityLookup.Failed("userinfo response was not valid JSON (${e.message})")
+            return IdentityLookup.Failed(
+                "userinfo response was not valid JSON (${e.javaClass.simpleName})"
+            )
+        } catch (t: Throwable) {
+            return IdentityLookup.Failed(
+                "userinfo response was not valid JSON (${t.javaClass.simpleName})"
+            )
         } ?: return IdentityLookup.Failed("userinfo response was not a JSON object")
         val name = root.str("name")
         val email = root.str("email")
@@ -672,6 +786,19 @@ class YoutubeiClient(
     /** The token session's Liked Songs (browse id `VLLM`, the "LM" list). */
     fun likedSongsOAuth(bearerToken: String): PlaylistPage =
         playlistOAuth(bearerToken, "VLLM")
+
+    /** The next page of a playlist under the token session. */
+    fun playlistContinuationOAuth(
+        bearerToken: String,
+        continuation: String,
+    ): TrackContinuation {
+        val body = buildJsonObject {
+            put("context", YoutubeiContexts.ANDROID_MUSIC.toJson())
+            put("continuation", continuation)
+        }
+        val root = postJsonOAuth("browse", YoutubeiContexts.ANDROID_MUSIC, body, bearerToken)
+        return YoutubeiParsers.parsePlaylistContinuation(root)
+    }
 
     /** One playlist page under the token session. */
     fun playlistOAuth(
@@ -781,11 +908,48 @@ class YoutubeiClient(
         bearerToken: String,
     ): JsonObject {
         val raw = postRawOAuth(path, context, body, bearerToken)
-        return try {
+        return parseJsonObject(raw, path)
+    }
+
+    /**
+     * Parses a 200 response body into its root object, with the two
+     * honesty rules the raw parse alone misses (bug sweep round 1):
+     *
+     * - A body carrying a top-level `error` object is an ERROR even
+     *   when the HTTP status is 200 — youtubei serves that shape,
+     *   and parsing it as content produced a fake-empty feed ("no
+     *   results") for what was really a refusal. It maps to
+     *   [ContextRejected] with the server's own message, exactly like
+     *   the same body on a 4xx.
+     * - The parse boundary catches Throwable, not just Exception:
+     *   the JSON parser itself recurses, and a deeply nested hostile
+     *   body (a captive portal's junk, a drifted tree) overflows its
+     *   stack — an Error that must degrade to the named
+     *   [ParseFailure], never crash the caller. The detail names the
+     *   failure class only; body content never enters a message.
+     */
+    private fun parseJsonObject(raw: String, path: String): JsonObject {
+        val root = try {
             Json.parseToJsonElement(raw).asObj()
         } catch (e: Exception) {
-            throw ParseFailure("response for '$path' was not valid JSON (${e.message})")
+            // The failure class only — NEVER the exception's message:
+            // kotlinx decoding errors echo the raw body back inside
+            // their message ("JSON input: …"), and a response body
+            // can carry signed URLs or token material that must
+            // never reach diagnostics (bug sweep round 1, found by
+            // the armor tests after their first green run).
+            throw ParseFailure(
+                "response for '$path' was not valid JSON (${e.javaClass.simpleName})"
+            )
+        } catch (t: Throwable) {
+            throw ParseFailure(
+                "response for '$path' could not be read (${t.javaClass.simpleName})"
+            )
         } ?: throw ParseFailure("response for '$path' was not a JSON object")
+        root.obj("error")?.let { error ->
+            throw ContextRejected(error.str("message") ?: "unknown server error")
+        }
+        return root
     }
 
     /**
@@ -848,11 +1012,7 @@ class YoutubeiClient(
         auth: AuthSession? = null,
     ): JsonObject {
         val raw = postRaw(path, context, body, auth)
-        return try {
-            Json.parseToJsonElement(raw).asObj()
-        } catch (e: Exception) {
-            throw ParseFailure("response for '$path' was not valid JSON (${e.message})")
-        } ?: throw ParseFailure("response for '$path' was not a JSON object")
+        return parseJsonObject(raw, path)
     }
 
     private fun postRaw(
@@ -922,6 +1082,11 @@ class YoutubeiClient(
         Json.parseToJsonElement(body).asObj().obj("error").str("message")
     } catch (e: Exception) {
         null
+    } catch (t: Throwable) {
+        // A deeply nested error body can overflow the parser's own
+        // stack; the caller still owes the named HTTP failure, not
+        // an escaping Error (round 2).
+        null
     }
 
     private companion object {
@@ -934,6 +1099,7 @@ class YoutubeiClient(
         const val NO_LYRICS_REASON = "YouTube offers no lyrics for this track"
         val VISITOR_DATA_REGEX = Regex("\"visitorData\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
         val LRC_TIMESTAMP_REGEX = Regex("""\[(\d+):(\d{2})(?:\.(\d+))?\]""")
+        val LRC_OFFSET_REGEX = Regex("""\[offset:\s*([+-]?\d+)\s*\]""")
     }
 }
 

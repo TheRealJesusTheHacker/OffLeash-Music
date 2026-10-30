@@ -54,6 +54,25 @@ sealed interface SignInAttempt {
  * credential that no longer works is only a liability. A session
  * that merely couldn't be reached (no network, server trouble) is
  * kept: network trouble is not a dead session.
+ *
+ * Legacy-generation semantics (H4, 0.7.2 sweep — the final word on
+ * how this 0.6.x cookie session coexists with the 0.7.0 Google
+ * sign-in): this session is a FALLBACK ONLY until a Google session
+ * exists. While a Google session is stored, this one is DORMANT:
+ * the keep-alive worker does not validate it (see
+ * [legacySessionValidationShouldRun]), the container's presented
+ * account state prefers the Google session, and nothing here may
+ * refresh, rotate, or re-validate it back to life behind the
+ * Google session's back. A total sign-out (the container's
+ * signOutOfAccount) wipes BOTH generations, so "signed out" never
+ * falls back to a cookie session the owner believes is gone. The
+ * remaining case — a Google session that EXISTED and was then
+ * revoked or wiped on its own — is covered by the container's
+ * GoogleSignInSeenMarker (bug sweep round 1): the presented state
+ * never falls back once the marker is set (see
+ * [legacyFallbackApplies]), and this worker's gate takes the
+ * marker as an input too, so validation stays dormant for the
+ * zombie session as well.
  */
 class SessionManager(
     private val store: SessionStore,
@@ -77,6 +96,56 @@ class SessionManager(
 
     private val mutex = Mutex()
 
+    /**
+     * The session's generation (bug sweep round 8): bumped ONLY
+     * when the session itself turns over — a sign-in is adopted,
+     * YouTube ends the session, or the owner signs out. Cookie
+     * rotation and revalidation of the same session replace the
+     * [snapshot] instance without touching this counter, because
+     * they are the same session continuing, not a new one. This is
+     * the discriminator a caller that captured the session before
+     * a blocking fetch must re-check afterwards: instance identity
+     * (`===`) cannot serve, since rotation swaps the instance for
+     * the same account as a matter of routine (the
+     * AutoDownloadLikedWorker's round-7 re-check misfired on
+     * exactly that), while the credential bytes cannot serve
+     * either, since rotation legitimately changes them. Mirrors
+     * LikeController's sessionGeneration discipline (round 6).
+     * Mutated only under [mutex]; read volatile.
+     */
+    @Volatile
+    private var sessionGeneration: Long = 0L
+
+    /** The current session generation — see [sessionGeneration]. */
+    fun sessionGeneration(): Long = sessionGeneration
+
+    /**
+     * The current session snapshot AND its generation, read as
+     * one consistent pair (bug sweep round 9). Reading the two
+     * separately — session first, generation second — can pair a
+     * PRE-turnover session with the POST-turnover generation when
+     * a sign-out + sign-in lands between the two reads: the
+     * caller then holds the old account's session under the new
+     * generation, and a later generation re-check passes for a
+     * list fetched under a session that is no longer current
+     * (the AutoDownloadLikedWorker's capture did exactly this).
+     * The generation is monotonic and turns over on every
+     * adoption / end / sign-out, so bracketing the snapshot read
+     * with two generation reads that AGREE proves no turnover
+     * happened while the snapshot was read: the pair belongs
+     * together. (Rotation between the reads replaces the
+     * snapshot with the same session continuing — same
+     * generation, correctly paired.)
+     */
+    fun currentSessionWithGeneration(): Pair<AuthSession?, Long> {
+        while (true) {
+            val before = sessionGeneration
+            val session = snapshot
+            val after = sessionGeneration
+            if (before == after) return session to before
+        }
+    }
+
     /** The last stored DTO, kept so updates can preserve its fields. */
     @Volatile
     private var stored: StoredSession? = null
@@ -89,7 +158,19 @@ class SessionManager(
     val uiState: StateFlow<SessionUiState> = _uiState.asStateFlow()
 
     init {
-        val loaded = store.load()
+        // Totality (H3): a store whose read fails at the very first
+        // load reads as "no session", never a crash in the
+        // container build. (The store's load is itself total; this
+        // is the belt to its braces, for Errors.)
+        val loaded = try {
+            store.load()
+        } catch (t: Throwable) {
+            signInDiagnostics.log(
+                "store",
+                "the saved session couldn't be read (${t.javaClass.simpleName}) — starting signed out",
+            )
+            null
+        }
         stored = loaded
         snapshot = loaded?.toAuthSession()
         if (loaded != null) {
@@ -324,6 +405,8 @@ class SessionManager(
         }
         stored = toStore
         snapshot = toStore.toAuthSession()
+        // A new session begins: the generation turns over (round 8).
+        sessionGeneration++
         val displayName = selected.name?.takeIf { it.isNotBlank() } ?: "Your account"
         _uiState.value = SessionUiState(
             signedIn = true,
@@ -375,7 +458,7 @@ class SessionManager(
                     // the stored copy and re-validates.
                     try {
                         store.save(updated)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         signInDiagnostics.log(
                             "store",
                             "the refreshed session couldn't be saved (${e.javaClass.simpleName}) — " +
@@ -407,17 +490,117 @@ class SessionManager(
         }
     }
 
-    /** The stored identity's match in a fresh enumeration: by email first, then by name. */
+    /**
+     * The stored identity's match in a fresh enumeration.
+     *
+     * The ROUTING keys win first (bug sweep round 6): the stored
+     * session carries the identity's authUser + pageId, and those —
+     * not the email — are what distinguish identities. Every
+     * identity in one account section shares the section header's
+     * email (the parser's own rule: brand identities have no email
+     * of their own), so the old email-first match returned the
+     * FIRST identity carrying that email — the personal identity,
+     * in enumeration order — for a session that had been adopted
+     * as a brand channel, and validation then silently overwrote
+     * the stored pageId/authUser/name with the personal identity's.
+     * A brand session's pageId is unique to it, so it matches
+     * exactly; a personal session (no pageId) matches the
+     * pageId-less identity at its own authUser index. Only when no
+     * routing match exists (the enumeration's routing drifted —
+     * the case the health test pins) do name, then avatar, then
+     * email, then the selected identity decide (round 7 reversed
+     * the textual pair: the section email is shared by every
+     * identity in the section, so email-first was
+     * first-in-enumeration and could still cross-match brand ↔
+     * personal; the name is per-identity. Round 8 added the
+     * avatar stage: a name is per-identity but not UNIQUE, and
+     * the avatar is the last discriminator the data carries —
+     * see the collision note at the fallback itself).
+     */
     private fun matchIdentity(
         identities: List<AccountIdentity>,
         previous: StoredSession?,
     ): AccountIdentity? {
         if (previous == null) return null
+        val previousPageId = previous.pageId
+        if (previousPageId != null) {
+            identities.firstOrNull { it.pageId == previousPageId }?.let { return it }
+        } else {
+            identities.firstOrNull {
+                it.pageId == null && it.authUser == previous.authUser
+            }?.let { return it }
+        }
+        // The drift fallback tries the NAME before the email (bug
+        // sweep round 7): the email is the section header's, shared
+        // by EVERY identity the parser enumerates in that section
+        // (brand identities carry the section email too — see
+        // parseSwitcherIdentities), so an email-first fallback is
+        // first-in-enumeration in disguise and re-runs the round-6
+        // bug through the fallback door whenever the routing keys
+        // drift (a stored pageId the server re-indexed away, a
+        // personal session whose authUser moved): a brand session
+        // re-matched to the personal identity enumerated first, or
+        // a personal session to a brand channel enumerated first.
+        // The name is per-identity, so it discriminates where the
+        // email cannot; the email remains only as the last textual
+        // fallback (both name and routing gone), ahead of the
+        // server-selected identity.
+        previous.identityName?.takeIf { it.isNotBlank() }?.let { name ->
+            val named = identities.filter { it.name == name }
+            if (named.size == 1) return named.first()
+            if (named.isNotEmpty()) {
+                // A name COLLISION (bug sweep round 8): the name
+                // is per-identity but not unique — a personal
+                // identity and a brand channel can share one
+                // display name, as can two brand channels — so
+                // first-in-enumeration would cross-match exactly
+                // as the shared email did. The stored avatar is
+                // the remaining per-identity discriminator (the
+                // parser reads each identity's own account photo,
+                // and adoption stored this session's): a namesake
+                // carrying it wins. Failing that, the
+                // server-selected namesake (the enumeration's own
+                // active-identity flag) beats enumeration order.
+                // The documented remainder: namesakes that share
+                // the name AND carry no distinguishing avatar
+                // (both avatars blank, or both changed since
+                // adoption) leave NO discriminating signal in the
+                // data at all — that case falls to the selected
+                // namesake, then first namesake, and is unwinnable
+                // by construction rather than silently "solved".
+                previous.avatarUrl?.takeIf { it.isNotBlank() }?.let { avatar ->
+                    // Only a UNIQUE avatar match within the
+                    // collision may decide (bug sweep round 9):
+                    // round 8 took the FIRST namesake carrying the
+                    // stored avatar, but an avatar several
+                    // namesakes share — a default letter/photo
+                    // avatar can be byte-identical across channels
+                    // — discriminates nothing, and first-match
+                    // pre-empted the server-selected namesake
+                    // below, leaving the outcome WORSE than the
+                    // round-7 order it replaced (avatar leg
+                    // skipped -> selected namesake). A shared
+                    // avatar now falls through to that same
+                    // selected-then-first order, exactly as when
+                    // no avatar matches at all.
+                    named.filter { it.avatarUrl == avatar }
+                        .singleOrNull()?.let { return it }
+                }
+                named.firstOrNull { it.isSelected == true }?.let { return it }
+                return named.first()
+            }
+        }
+        // The name itself drifted (a rename since adoption, round
+        // 8): a UNIQUE avatar match still identifies the session's
+        // own identity ahead of the shared email. Uniqueness is
+        // required — an avatar several identities carry (or the
+        // parser's placeholder) discriminates nothing.
+        previous.avatarUrl?.takeIf { it.isNotBlank() }?.let { avatar ->
+            identities.filter { it.avatarUrl == avatar }
+                .singleOrNull()?.let { return it }
+        }
         previous.identityEmail?.takeIf { it.isNotBlank() }?.let { email ->
             identities.firstOrNull { it.email == email }?.let { return it }
-        }
-        previous.identityName?.takeIf { it.isNotBlank() }?.let { name ->
-            identities.firstOrNull { it.name == name }?.let { return it }
         }
         return identities.firstOrNull { it.isSelected == true }
     }
@@ -427,6 +610,8 @@ class SessionManager(
         store.wipe()
         stored = null
         snapshot = null
+        // The session is over: the generation turns over (round 8).
+        sessionGeneration++
         _uiState.value = SessionUiState(
             signedIn = false,
             health = SessionHealth.NEEDS_SIGN_IN,
@@ -477,14 +662,17 @@ class SessionManager(
     /**
      * Signs out: the stored credential is wiped AND the wipe is
      * verified before the UI reports signed out. WebView data is the
-     * caller's job — see [wipeWebViewData] — because it must happen
-     * on the UI side where the WebView lives.
+     * caller's job — see [wipeWebViewData]; the container's
+     * signOutOfAccount (the one sign-out path every screen uses)
+     * performs it right after this wipe.
      */
     suspend fun signOut() {
         mutex.withLock {
             store.wipe()
             stored = null
             snapshot = null
+            // The session is over: the generation turns over (round 8).
+            sessionGeneration++
             _uiState.value = SessionUiState(
                 signedIn = false,
                 health = SessionHealth.UNKNOWN,
@@ -557,6 +745,22 @@ class SessionManager(
             listOf(2_000L, 4_000L, 8_000L, 16_000L)
     }
 }
+
+/**
+ * Whether the legacy cookie session's keep-alive may validate it
+ * on this run (H4, 0.7.2 sweep — see the legacy-generation
+ * semantics on [SessionManager]): only while a legacy session is
+ * actually stored AND no Google session exists. Once a Google
+ * session exists, the legacy session is dormant — validating it
+ * would burn battery and network keeping a superseded credential
+ * fresh, and a "healthy" answer would persist rotated cookies for
+ * a session that no longer drives anything.
+ */
+fun legacySessionValidationShouldRun(
+    legacySessionPresent: Boolean,
+    googleSessionPresent: Boolean,
+    googleSignInSeen: Boolean = false,
+): Boolean = legacySessionPresent && !googleSessionPresent && !googleSignInSeen
 
 /**
  * Clears everything the sign-in WebView may have left behind: its

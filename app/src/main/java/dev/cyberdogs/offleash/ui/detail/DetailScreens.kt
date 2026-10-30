@@ -39,6 +39,7 @@ import dev.cyberdogs.offleash.core.model.ArtistPage
 import dev.cyberdogs.offleash.core.model.PlaylistPage
 import dev.cyberdogs.offleash.core.model.Track
 import dev.cyberdogs.offleash.ui.ErrorMessages
+import dev.cyberdogs.offleash.ui.home.LIKED_MUSIC_BROWSE_ID
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.components.ErrorPanel
 import dev.cyberdogs.offleash.ui.components.LoadingPanel
@@ -50,6 +51,7 @@ import dev.cyberdogs.offleash.ui.components.rememberTrackActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,11 @@ private fun DetailHeader(
     thumbnailUrl: String?,
     onPlayAll: () -> Unit,
     onShuffle: () -> Unit,
+    // False when the page returned no tracks: Play all / Shuffle
+    // render disabled instead of as live-looking buttons whose tap
+    // silently does nothing (LocalPlaylistScreen already disables
+    // its twins in this state; round 4).
+    actionsEnabled: Boolean = true,
 ) {
     Column(
         modifier = Modifier
@@ -103,8 +110,8 @@ private fun DetailHeader(
         }
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onPlayAll) { Text("Play all") }
-            OutlinedButton(onClick = onShuffle) { Text("Shuffle") }
+            Button(onClick = onPlayAll, enabled = actionsEnabled) { Text("Play all") }
+            OutlinedButton(onClick = onShuffle, enabled = actionsEnabled) { Text("Shuffle") }
         }
     }
 }
@@ -153,17 +160,26 @@ class AlbumViewModel(
     private val _state = MutableStateFlow<UiState<AlbumPage>>(UiState.Loading)
     val state: StateFlow<UiState<AlbumPage>> = _state
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+
     init {
         load()
     }
 
     fun load() {
         _state.value = UiState.Loading
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = try {
+        // Stale-load guard (bug sweep round 1): cancel the previous
+        // load; publish only while this job is still active.
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = try {
                 UiState.Content(client.album(browseId))
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 UiState.Error(ErrorMessages.userMessage(e))
+            }
+            if (isActive) {
+                _state.value = result
             }
         }
     }
@@ -202,7 +218,18 @@ fun AlbumScreen(
                         thumbnailUrl = album.thumbnailUrl,
                         onPlayAll = { playAll(container, page.tracks) },
                         onShuffle = { shuffleAll(container, page.tracks) },
+                        actionsEnabled = page.tracks.isNotEmpty(),
                     )
+                }
+                if (page.tracks.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No tracks were returned for this album.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
                 }
                 trackItems(
                     tracks = page.tracks,
@@ -228,17 +255,25 @@ class ArtistViewModel(
     private val _state = MutableStateFlow<UiState<ArtistPage>>(UiState.Loading)
     val state: StateFlow<UiState<ArtistPage>> = _state
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+
     init {
         load()
     }
 
     fun load() {
         _state.value = UiState.Loading
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = try {
+        // Stale-load guard (bug sweep round 1): see AlbumViewModel.
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = try {
                 UiState.Content(client.artist(browseId))
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 UiState.Error(ErrorMessages.userMessage(e))
+            }
+            if (isActive) {
+                _state.value = result
             }
         }
     }
@@ -291,6 +326,23 @@ fun ArtistScreen(
                         )
                     }
                 }
+                // The empty state keys on the sections alone
+                // (round 21): an artist page whose browse returned
+                // a header but no sections must SAY it came back
+                // empty, instead of leaving a silent blank under
+                // the header. Every sibling browse surface (the
+                // album and playlist pages in this file, Charts,
+                // Moods, Home, Search) names its empty result.
+                if (page.sections.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No content was returned for this artist.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                }
                 items(page.sections) { section ->
                     SectionRow(section = section, actions = actions)
                     Spacer(Modifier.height(16.dp))
@@ -328,24 +380,130 @@ class PlaylistViewModel(
     private val _state = MutableStateFlow<UiState<PlaylistPage>>(UiState.Loading)
     val state: StateFlow<UiState<PlaylistPage>> = _state
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+
+    // Continuation paging (bug sweep round 1): the first page's
+    // offered token starts the tracker; loadMore() appends the next
+    // chunk's NEW tracks only, and the tracker ends paging on an
+    // absent or repeated token, so a misbehaving server can't loop
+    // the list forever.
+    private val continuationTracker =
+        dev.cyberdogs.offleash.core.model.ContinuationTracker()
+
+    private val _hasMore = MutableStateFlow(false)
+    val hasMore: StateFlow<Boolean> = _hasMore
+
+    private val _loadMoreError = MutableStateFlow<String?>(null)
+    val loadMoreError: StateFlow<String?> = _loadMoreError
+
+    private var loadingMore = false
+
     init {
         load()
     }
 
     fun load() {
         _state.value = UiState.Loading
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = try {
+        _hasMore.value = false
+        _loadMoreError.value = null
+        continuationTracker.reset()
+        // Stale-load guard (bug sweep round 1): see AlbumViewModel.
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            var fetched: PlaylistPage? = null
+            val result = try {
                 val bearer = bearerProvider()
-                UiState.Content(
-                    if (bearer != null) {
-                        client.playlistOAuth(bearer, browseId, params)
-                    } else {
-                        client.playlist(browseId, params, auth = authProvider())
-                    }
-                )
+                val page = if (bearer != null) {
+                    client.playlistOAuth(bearer, browseId, params)
+                } else {
+                    client.playlist(browseId, params, auth = authProvider())
+                }
+                fetched = page
+                UiState.Content(page)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 UiState.Error(ErrorMessages.userMessage(e))
+            }
+            // Round 5: the tracker start lives INSIDE the publish
+            // guard, exactly as in SearchViewModel. It used to run
+            // in the try above, so a superseded (cancelled) load —
+            // the client call is blocking and runs to completion —
+            // that returned after a refresh had started its own
+            // paging session still called start() with the STALE
+            // page's token, clobbering the new session's tracker
+            // while _state correctly stayed new. The refreshed
+            // page's Load more then fetched the stale session's
+            // pages and its merge guard refused them all: a dead
+            // Load more, hasMore stuck on.
+            if (isActive) {
+                fetched?.let { continuationTracker.start(it.continuation) }
+                _state.value = result
+                _hasMore.value = continuationTracker.current != null
+            }
+        }
+    }
+
+    /** Appends the next page of tracks; a no-op at the true end or while one is loading. */
+    fun loadMore() {
+        val token = continuationTracker.current ?: return
+        if (loadingMore) return
+        if ((_state.value as? UiState.Content)?.data == null) return
+        loadingMore = true
+        _loadMoreError.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val bearer = bearerProvider()
+                val chunk = if (bearer != null) {
+                    client.playlistContinuationOAuth(bearer, token)
+                } else {
+                    client.playlistContinuation(token, auth = authProvider())
+                }
+                // Round 5: this job is NOT the load job — a
+                // refresh cannot cancel it — and the fetch is
+                // blocking, so its isActive stays true even when
+                // its paging session is long gone. The advance goes
+                // through the tracker's guard: when a refresh
+                // reset/re-started the tracker while this fetch was
+                // out, tryAdvance refuses and leaves the new session
+                // untouched, and this stale chunk drops here
+                // instead of clobbering the new session's current
+                // token (the merge guard below reads state that
+                // the unguarded advance had already corrupted).
+                if (!continuationTracker.tryAdvance(token, chunk.continuation)) {
+                    return@launch
+                }
+                val nextToken = continuationTracker.current
+                if (isActive) {
+                    // Merge against the LATEST page, not the one
+                    // captured at tap time: a refresh that landed
+                    // while this chunk was in flight keeps its own
+                    // first page, and this chunk appends nothing to
+                    // a page it no longer belongs to (its tracker was
+                    // reset by the refresh, ending paging above).
+                    val latest = (_state.value as? UiState.Content)?.data
+                    if (latest != null && latest.continuation == token) {
+                        val fresh = dev.cyberdogs.offleash.core.model.newTracksOnly(
+                            latest.tracks,
+                            chunk.tracks,
+                        )
+                        _state.value = UiState.Content(
+                            latest.copy(
+                                tracks = latest.tracks + fresh,
+                                continuation = nextToken,
+                            )
+                        )
+                    }
+                    _hasMore.value = continuationTracker.current != null
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // The loaded page stays on screen; only the "more"
+                // row reports the failure, with its own retry.
+                if (isActive) {
+                    _loadMoreError.value = ErrorMessages.userMessage(e)
+                }
+            } finally {
+                loadingMore = false
             }
         }
     }
@@ -369,13 +527,18 @@ fun PlaylistScreen(
         )
     }
     val state by viewModel.state.collectAsState()
+    val hasMore by viewModel.hasMore.collectAsState()
+    val loadMoreError by viewModel.loadMoreError.collectAsState()
     val sessionState by container.accountUiState.collectAsState()
 
     // Reload when sign-in state flips after the initial load, so an
     // account playlist (e.g. Liked Songs) opened signed-out picks up the
     // session once the user signs in — and drops it on sign-out.
+    // The identity is part of the key (bug sweep round 1): an
+    // account switch that never passes through signed-out must also
+    // reload, or the previous account's page survives the switch.
     var authEffectSeen by remember { mutableStateOf(false) }
-    LaunchedEffect(sessionState.signedIn) {
+    LaunchedEffect(sessionState.signedIn, sessionState.identityEmail) {
         if (authEffectSeen) {
             viewModel.load()
         } else {
@@ -395,6 +558,21 @@ fun PlaylistScreen(
             val playlists by container.localPlaylistStore.playlists.collectAsState()
             val scope = rememberCoroutineScope()
             val trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick)
+            // Round 36: the Liked Songs page IS the account's like
+            // list — every track on it is account-liked by
+            // construction. Seed the like controller with that
+            // fact (it fills only tracks it holds no state for),
+            // so a row's heart and menu offer "Remove like" from
+            // the start instead of defaulting to "Like" until the
+            // track happens to become the player's current track
+            // and a per-track status fetch lands.
+            LaunchedEffect(page.tracks, browseId) {
+                page.tracks
+                    .takeIf {
+                        browseId == LIKED_MUSIC_BROWSE_ID && sessionState.signedIn
+                    }
+                    ?.let { container.likeController.noteAccountLiked(it) }
+            }
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
                     DetailHeader(
@@ -404,7 +582,18 @@ fun PlaylistScreen(
                         thumbnailUrl = page.thumbnailUrl,
                         onPlayAll = { playAll(container, page.tracks) },
                         onShuffle = { shuffleAll(container, page.tracks) },
+                        actionsEnabled = page.tracks.isNotEmpty(),
                     )
+                }
+                if (page.tracks.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No tracks were returned for this playlist.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
                 }
                 trackItems(
                     tracks = page.tracks,
@@ -413,6 +602,30 @@ fun PlaylistScreen(
                     scope = scope,
                     trackActions = trackActions,
                 )
+                if (loadMoreError != null) {
+                    item {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(
+                                text = loadMoreError!!,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(onClick = { viewModel.loadMore() }) {
+                                Text("Try again")
+                            }
+                        }
+                    }
+                } else if (hasMore) {
+                    item {
+                        OutlinedButton(
+                            onClick = { viewModel.loadMore() },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Text("Load more tracks")
+                        }
+                    }
+                }
             }
         }
     }

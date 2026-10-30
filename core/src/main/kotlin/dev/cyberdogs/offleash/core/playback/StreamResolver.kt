@@ -1,5 +1,6 @@
 package dev.cyberdogs.offleash.core.playback
 
+import dev.cyberdogs.offleash.core.error.ContextRejected
 import dev.cyberdogs.offleash.core.error.NoPlayableStream
 import dev.cyberdogs.offleash.core.error.ParseFailure
 import dev.cyberdogs.offleash.core.error.PlayerRefused
@@ -33,13 +34,37 @@ object StreamResolver {
         val root = try {
             Json.parseToJsonElement(playerResponseJson).asObj()
         } catch (e: Exception) {
-            throw ParseFailure("player response was not valid JSON (${e.message})")
+            // The failure class only — NEVER the exception's message:
+            // kotlinx decoding errors echo the raw body inside their
+            // message, and a player body carries signed stream URLs
+            // that must never reach diagnostics (bug sweep round 2;
+            // round 1 fixed this exact leak in the browse-path parse
+            // boundary but missed this one).
+            throw ParseFailure(
+                "player response was not valid JSON (${e.javaClass.simpleName})"
+            )
+        } catch (t: Throwable) {
+            // The JSON parser recurses: a deeply nested hostile body
+            // overflows its stack (an Error), and that must degrade
+            // to the named ParseFailure, never crash the caller.
+            throw ParseFailure(
+                "player response could not be read (${t.javaClass.simpleName})"
+            )
         } ?: throw ParseFailure("player response was not a JSON object")
+
+        // A 200 carrying a top-level error payload is the refusal it
+        // actually is, not a "playability unknown" mystery — the
+        // browse path learned this in round 1 (parseJsonObject); the
+        // player path bypasses that boundary (it parses raw), so the
+        // check lives here.
+        root.obj("error")?.let { error ->
+            throw ContextRejected(error.str("message") ?: "unknown server error")
+        }
 
         val playability = root.obj("playabilityStatus")
         val status = playability.str("status")
         if (status != "OK") {
-            val reason = playability.str("reason")
+            val rawReason = playability.str("reason")
                 ?: textOf(
                     playability.obj("errorScreen")
                         .obj("playerErrorMessageRenderer")
@@ -52,6 +77,21 @@ object StreamResolver {
                 )
                 ?: status
                 ?: "unknown"
+            // Keep the LOGIN_REQUIRED status token on the reason:
+            // the server's human text for that status ("Sign in to
+            // confirm you're not a bot") does not contain it, and
+            // isAuthRefusal() — which drives the session
+            // revalidation retry — keys on the token. Without this
+            // the refusal was misread as a plain unplayable and a
+            // dead session was never revalidated (round 2).
+            val reason = if (
+                status == "LOGIN_REQUIRED" &&
+                !rawReason.contains("LOGIN_REQUIRED", ignoreCase = true)
+            ) {
+                "$rawReason (LOGIN_REQUIRED)"
+            } else {
+                rawReason
+            }
             throw PlayerRefused(reason)
         }
 
@@ -61,19 +101,33 @@ object StreamResolver {
             val arr = streamingData[key] as? kotlinx.serialization.json.JsonArray ?: continue
             for (element in arr) element.asObj()?.let { formats.add(it) }
         }
-        val direct = formats.filter { it.str("url") != null }
+        // A blank url is not a playable stream: it used to count as
+        // direct and win selection on bitrate, handing the player a
+        // StreamInfo whose url was "" — a fake success that failed
+        // downstream as an unnamed media error (round 2).
+        val direct = formats.filter { !it.str("url").isNullOrBlank() }
         if (direct.isEmpty()) throw NoPlayableStream()
 
-        val audioOnly = direct.filter { it.str("mimeType")?.startsWith("audio/") == true }
+        // MIME type tokens are case-insensitive (RFC 2045) and this
+        // string arrives raw from the server with no normalization
+        // upstream: a case-sensitive check lets an "AUDIO/MP4"
+        // format fall out of the audio pool entirely, after which
+        // HIGH picks a higher-bitrate VIDEO format (round 6).
+        val audioOnly = direct.filter {
+            it.str("mimeType")?.startsWith("audio/", ignoreCase = true) == true
+        }
         val pool = if (audioOnly.isNotEmpty()) audioOnly else direct
         val best = selectFormat(pool, quality)
 
         return StreamInfo(
             url = best.str("url")!!,
             mimeType = best.str("mimeType") ?: "",
-            bitrate = best.int("bitrate") ?: 0,
-            contentLength = best.long("contentLength"),
-            approxDurationMs = best.long("approxDurationMs"),
+            // Hostile numbers are clamped to the honest floor: a
+            // negative bitrate/length/duration is junk data, not a
+            // fact about the stream (round 2).
+            bitrate = (best.int("bitrate") ?: 0).coerceAtLeast(0),
+            contentLength = best.long("contentLength")?.coerceAtLeast(0L),
+            approxDurationMs = best.long("approxDurationMs")?.coerceAtLeast(0L),
         )
     }
 
@@ -84,14 +138,14 @@ object StreamResolver {
     private val BEST_FIRST: Comparator<JsonObject> =
         compareByDescending<JsonObject> { it.int("bitrate") ?: 0 }
             .thenBy { format ->
-                if (format.str("mimeType")?.startsWith("audio/mp4") == true) 0 else 1
+                if (format.str("mimeType")?.startsWith("audio/mp4", ignoreCase = true) == true) 0 else 1
             }
 
     /** The mirror ordering for LOW's no-format-under-the-cap fallback. */
     private val LOWEST_FIRST: Comparator<JsonObject> =
         compareBy<JsonObject> { it.int("bitrate") ?: 0 }
             .thenBy { format ->
-                if (format.str("mimeType")?.startsWith("audio/mp4") == true) 0 else 1
+                if (format.str("mimeType")?.startsWith("audio/mp4", ignoreCase = true) == true) 0 else 1
             }
 
     /**

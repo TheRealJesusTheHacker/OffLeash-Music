@@ -145,6 +145,60 @@ class PlayQueueTest {
     }
 
     @Test
+    fun peekNextAgreesWithNextUnderShuffleRepeatAllAfterThePassEnds() {
+        // Regression pin (H7 sweep): peekNext used to return null
+        // once a shuffle pass was exhausted even under repeat ALL,
+        // while next() reshuffled and kept playing. Any caller
+        // asking "is there a next track?" (the player-error
+        // recovery skip decision) got a false no.
+        val queue = PlayQueue(Random(7))
+        queue.setQueue(tracks(4), 0)
+        queue.shuffle = true
+        queue.repeatMode = RepeatMode.ALL
+        // Drain the whole first pass.
+        repeat(3) { queue.next() }
+        val peeked = queue.peekNext()
+        assertTrue("peekNext must see the reshuffle next under repeat ALL", peeked != null)
+        assertTrue(
+            "the reshuffle never starts with the track that just played",
+            peeked!!.videoId != queue.current()!!.videoId,
+        )
+        assertTrue("next() must agree with peekNext here", queue.next() != null)
+    }
+
+    @Test
+    fun peekNextStaysNullUnderShuffleRepeatOffAfterThePassEnds() {
+        val queue = PlayQueue(Random(7))
+        queue.setQueue(tracks(3), 0)
+        queue.shuffle = true
+        repeat(2) { queue.next() }
+        assertNull(queue.peekNext())
+        assertNull(queue.next())
+    }
+
+    @Test
+    fun largeQueueShufflePassVisitsEveryTrackExactlyOnce() {
+        // 100+ track queues (long playlists): one shuffle pass is
+        // a full permutation — no repeats, no drops, and previous()
+        // walks the whole history back.
+        val queue = PlayQueue(Random(123))
+        queue.setQueue(tracks(150), 0)
+        queue.shuffle = true
+        val visited = mutableListOf(queue.currentIndex)
+        while (true) {
+            queue.next() ?: break
+            visited.add(queue.currentIndex)
+        }
+        assertEquals(150, visited.size)
+        assertEquals((0 until 150).toSet(), visited.toSet())
+        // Walk all the way back through actually-played history.
+        repeat(149) {
+            assertTrue("previous() must keep walking the history", queue.previous() != null)
+        }
+        assertEquals(visited.first(), queue.currentIndex)
+    }
+
+    @Test
     fun emptyQueueIsInert() {
         val queue = PlayQueue()
         queue.setQueue(emptyList(), 0)

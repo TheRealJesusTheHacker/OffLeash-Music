@@ -77,12 +77,43 @@ class PlayerMessageTest {
     }
 
     @Test
-    fun fallbackIncludesErrorCode() {
+    fun fallbackCarriesNoRawCode() {
+        // The owner's 2026-10-27 screenshot: a user-facing card that
+        // ended "(player error 2000)". The code is diagnostics (it
+        // is recorded by recordPlayerError); user copy points at the
+        // diagnostics screen instead of printing the code.
         val msg = ErrorMessages.playerMessage(9999, null)
         assertEquals(
-            "Something went wrong playing this track (player error 9999). Try again.",
+            "Something went wrong playing this track. Try again; if it keeps " +
+                "happening, open About → Playback diagnostics and send a screenshot.",
             msg,
         )
-        assertTrue(msg.contains("9999"))
+        assertTrue(!msg.contains("9999"))
+    }
+
+    @Test
+    fun userMessageNeverLeaksRawServerWording() {
+        // Server wording, playability tokens and exception text are
+        // diagnostics, not user copy: none of these raw strings may
+        // reach the rendered message.
+        val rejected = ErrorMessages.userMessage(
+            dev.cyberdogs.offleash.core.error.ContextRejected("RAW-JSON-{\"error\":400}"),
+        )
+        assertTrue(!rejected.contains("RAW-JSON"))
+        val refused = ErrorMessages.userMessage(
+            dev.cyberdogs.offleash.core.error.PlayerRefused("UNPLAYABLE-RAW-TOKEN"),
+        )
+        assertTrue(!refused.contains("UNPLAYABLE-RAW-TOKEN"))
+        assertEquals("YouTube won't play this track.", refused)
+        val bothRoads = ErrorMessages.userMessage(
+            dev.cyberdogs.offleash.core.error.AllRoadsRefused(
+                accountError = dev.cyberdogs.offleash.core.error.PlayerRefused("LOGIN_REQUIRED"),
+                anonymousError = dev.cyberdogs.offleash.core.error.NetworkFailure("socket-raw-detail"),
+            ),
+        )
+        assertTrue(!bothRoads.contains("LOGIN_REQUIRED"))
+        assertTrue(!bothRoads.contains("socket-raw-detail"))
+        assertTrue(bothRoads.contains("without a sign-in"))
+        assertTrue(bothRoads.contains("the connection failed"))
     }
 }

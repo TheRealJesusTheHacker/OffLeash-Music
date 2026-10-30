@@ -51,8 +51,23 @@ class AutoplayWiringContractTest {
     @Test
     fun sleepTimerExpiryCancelsTheAutoplayFetch() {
         val source = queueControllerSource()
+        // Slice bound tightened in round 9: the next declaration
+        // after expireSleepTimer is the PUBLIC setPlaybackSpeed, so
+        // bounding on "private fun" let the slice run on through two
+        // more functions. It still contained exactly one cancel —
+        // expiry's own — so the pin was deletion-sensitive, but the
+        // slice now ends where the function ends. (retryCurrent's
+        // own cancel of the same job is pinned separately by
+        // playback/R8SweepContractTest; this file's claim is the
+        // timer's.)
+        assertTrue(
+            "expireSleepTimer must exist at all (round 12 guard: " +
+                "the cancel literal is widespread, so an unguarded " +
+                "missing anchor would widen this slice and pass hollow)",
+            source.contains("private fun expireSleepTimer()"),
+        )
         val expire = source.substringAfter("private fun expireSleepTimer()")
-            .substringBefore("private fun")
+            .substringBefore("fun setPlaybackSpeed")
         assertTrue(expire.contains("autoplayJob?.cancel()"))
     }
 
@@ -60,6 +75,11 @@ class AutoplayWiringContractTest {
     fun listenerQueuesResetTheAutoplayChain() {
         val source = queueControllerSource()
         assertTrue(source.contains("private fun resetAutoplayChain()"))
+        assertTrue(
+            "playTracks must exist at all (round 12 guard: a " +
+                "widened slice reaches resetAutoplayChain's definition)",
+            source.contains("fun playTracks("),
+        )
         val playTracks = source.substringAfter("fun playTracks(")
             .substringBefore("fun play(")
         assertTrue(playTracks.contains("resetAutoplayChain()"))

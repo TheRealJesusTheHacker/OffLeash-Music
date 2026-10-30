@@ -76,6 +76,36 @@ class AuthedBrowseTest {
     }
 
     @Test
+    fun libraryPlaylistsReturnsTheShelfPlaylistsInShelfOrder() {
+        // Round 43: the test above is named "InOrder" but
+        // asserted only the count and non-empty fields, so
+        // reversing the collected list in libraryPlaylists
+        // itself ran green across the full suite while the
+        // library rendered in reverse shelf order. Pin the
+        // exact browse-id order (and the end titles) of the
+        // recorded shelf the test above serves.
+        val transport = FixedTransport(body = Fixtures.load("browse_home.json"))
+        val playlists = YoutubeiClient(transport).libraryPlaylists(session)
+        assertEquals(
+            listOf(
+                "VLRDCLAK5uy_lMzHW51iFg1Kx0d_2EHpzbOgCrwtu8cgI",
+                "VLRDCLAK5uy_lvHI2Z7dSfpD5g8wvmePjWPfYwq5IgkLo",
+                "VLRDCLAK5uy_lWy02cQBnTVTlwuRauaGKeUDH3L6PXNxI",
+                "VLRDCLAK5uy_nZiG9ehz_MQoWQxY5yElsLHCcG0tv9PRg",
+                "VLRDCLAK5uy_kN4eY_ibobGvCBwIJGEGpDjuwzYHIG_iE",
+                "VLRDCLAK5uy_m_h-nx7OCFaq9AlyXv78lG0AuloqW_NUA",
+                "VLRDCLAK5uy_kpxnNxJpPZjLKbL9WgvrPuErWkUxMP6x4",
+                "VLRDCLAK5uy_m8tb7ahoXoyC82BkVgvWpJo2TUw8VnrlI",
+                "VLRDCLAK5uy_lk7bC42AIcIBpSBiioTBrFdJeDNLSGCyE",
+                "VLRDCLAK5uy_kfLKunrTVrL7hzgZz_skOKXn_MVzrpB6g",
+            ),
+            playlists.map { it.browseId },
+        )
+        assertEquals("The Hits: '80s", playlists.first().title)
+        assertEquals("Los Himnos", playlists.last().title)
+    }
+
+    @Test
     fun fetchVisitorDataExtractsAndUnescapes() {
         val body = ")]}'\n{\"visitorData\":\"CgTest\\u003d\\u003dValue\"}"
         val client = YoutubeiClient(GetTransport(body = body))

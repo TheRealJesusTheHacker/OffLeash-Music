@@ -38,6 +38,7 @@ import dev.cyberdogs.offleash.ui.components.rememberTrackActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MoodsViewModel(private val client: YoutubeiClient) : ViewModel() {
@@ -45,17 +46,25 @@ class MoodsViewModel(private val client: YoutubeiClient) : ViewModel() {
     private val _state = MutableStateFlow<UiState<List<MoodCategory>>>(UiState.Loading)
     val state: StateFlow<UiState<List<MoodCategory>>> = _state
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+
     init {
         load()
     }
 
     fun load() {
         _state.value = UiState.Loading
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = try {
+        // Stale-load guard (bug sweep round 1): see ChartsViewModel.
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = try {
                 UiState.Content(client.moods())
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 UiState.Error(ErrorMessages.userMessage(e))
+            }
+            if (isActive) {
+                _state.value = result
             }
         }
     }
@@ -72,26 +81,35 @@ fun MoodsScreen(
     when (val current = state) {
         is UiState.Loading -> LoadingPanel()
         is UiState.Error -> ErrorPanel(message = current.message, onRetry = viewModel::load)
-        is UiState.Content -> LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            items(current.data) { category ->
-                Card(
-                    onClick = { onCategoryClick(category) },
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    ),
-                ) {
-                    Text(
-                        text = category.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(16.dp),
-                    )
+        is UiState.Content -> if (current.data.isEmpty()) {
+            Text(
+                text = "No moods or genres to show right now.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(16.dp),
+            )
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(current.data) { category ->
+                    Card(
+                        onClick = { onCategoryClick(category) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        ),
+                    ) {
+                        Text(
+                            text = category.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
                 }
             }
         }
@@ -106,17 +124,25 @@ class MoodPlaylistsViewModel(
     private val _state = MutableStateFlow<UiState<List<Section>>>(UiState.Loading)
     val state: StateFlow<UiState<List<Section>>> = _state
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+
     init {
         load()
     }
 
     fun load() {
         _state.value = UiState.Loading
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = try {
+        // Stale-load guard (bug sweep round 1): see ChartsViewModel.
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = try {
                 UiState.Content(client.moodPlaylists(category))
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 UiState.Error(ErrorMessages.userMessage(e))
+            }
+            if (isActive) {
+                _state.value = result
             }
         }
     }
@@ -135,7 +161,15 @@ fun MoodPlaylistsScreen(
     onArtistClick: (String) -> Unit,
     onPlaylistClick: (String, String?) -> Unit,
 ) {
-    val category = MoodCategory(title = title, params = params, browseId = "")
+    // The category's browseId is the MoodCategory default
+    // (FEmusic_moods_and_genres_category) — the category is reached
+    // by browseId + the category's params. This screen used to
+    // override that default with an explicitly EMPTY id (bug sweep
+    // round 1), so every mood page browsed nothing and could only
+    // ever fail or return the wrong surface; the navigation route
+    // carries just params and title, so the default is the correct
+    // id by construction.
+    val category = MoodCategory(title = title, params = params)
     val viewModel: MoodPlaylistsViewModel =
         viewModel(key = params) { MoodPlaylistsViewModel(container.client, category) }
     val state by viewModel.state.collectAsState()
@@ -161,6 +195,16 @@ fun MoodPlaylistsScreen(
                         .fillMaxWidth()
                         .padding(16.dp),
                 )
+            }
+            if (current.data.isEmpty()) {
+                item {
+                    Text(
+                        text = "No playlists to show for this mood right now.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
             }
             items(current.data) { section ->
                 SectionRow(section = section, actions = actions)

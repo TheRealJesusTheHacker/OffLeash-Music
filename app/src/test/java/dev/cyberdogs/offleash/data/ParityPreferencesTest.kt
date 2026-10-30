@@ -102,6 +102,22 @@ class ParityPreferencesTest {
     }
 
     @Test
+    fun booleansAreStoredAsStringsMatchingTheProductionEncoding() {
+        // SharedPreferencesParityStore writes booleans as the
+        // strings "true"/"false" (AppPreferences' string seam reads
+        // the same keys). The fake must encode identically, or a
+        // test could pass over bytes the device never writes.
+        val store = InMemoryParityKeyValueStore()
+        val prefs = ParityPreferences(store)
+        prefs.setAutoDownloadLiked(true)
+        assertEquals("true", store.getString(ParityPreferences.KEY_AUTO_DOWNLOAD_LIKED))
+        prefs.setAudioVersionInRadio(true)
+        assertEquals("true", store.getString(ParityPreferences.KEY_AUDIO_VERSION_IN_RADIO))
+        prefs.setAutoDownloadLiked(false)
+        assertEquals("false", store.getString(ParityPreferences.KEY_AUTO_DOWNLOAD_LIKED))
+    }
+
+    @Test
     fun theThreePreferencesAreIndependent() {
         val store = InMemoryParityKeyValueStore()
         val prefs = ParityPreferences(store)

@@ -20,7 +20,7 @@ class SleepTimerTest {
         assertTrue(state.isArmed)
         assertFalse(state.endOfTrack)
         assertEquals(15, state.requestedMinutes)
-        assertEquals(now + 15 * 60_000L, state.deadlineEpochMs)
+        assertEquals(now + 15 * 60_000L, state.deadlineMs)
     }
 
     @Test

@@ -14,6 +14,7 @@ import dev.cyberdogs.offleash.core.model.SearchFilter
 import dev.cyberdogs.offleash.core.model.SearchResults
 import dev.cyberdogs.offleash.core.model.Section
 import dev.cyberdogs.offleash.core.model.Track
+import dev.cyberdogs.offleash.core.model.TrackContinuation
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -295,22 +296,50 @@ object YoutubeiParsers {
         return sections
     }
 
-    private fun walkSections(node: JsonElement?, out: MutableList<Section>) {
+    private fun walkSections(node: JsonElement?, out: MutableList<Section>) =
+        walkSections(node, out, depth = 0)
+
+    private fun walkSections(node: JsonElement?, out: MutableList<Section>, depth: Int) {
+        // Depth-capped like the JsonNav walks: deeply nested junk
+        // degrades to "no (more) sections", never a stack overflow.
+        if (depth > TREE_WALK_MAX_DEPTH) return
         when (node) {
             is JsonObject -> {
                 val sectionList = node.obj("sectionListRenderer")
-                if (sectionList != null) {
-                    processSectionContents(sectionList.arr("contents"), out)
-                } else {
-                    for (value in node.values) walkSections(value, out)
+                    ?: node.obj("sectionListContinuation")
+                val shelfContinuation = node.obj("musicShelfContinuation")
+                    ?: node.obj("musicPlaylistShelfContinuation")
+                when {
+                    sectionList != null ->
+                        processSectionContents(sectionList.arr("contents"), out, depth)
+                    shelfContinuation != null -> {
+                        // A continuation response's bare shelf: its
+                        // contents are one more chunk of rows.
+                        val items = itemsOf(shelfContinuation.arr("contents"))
+                        if (items.isNotEmpty()) out.add(Section(null, items))
+                    }
+                    else -> for (value in node.values) walkSections(value, out, depth + 1)
                 }
             }
-            is JsonArray -> for (element in node) walkSections(element, out)
+            is JsonArray -> for (element in node) walkSections(element, out, depth + 1)
             else -> Unit
         }
     }
 
-    private fun processSectionContents(contents: JsonArray?, out: MutableList<Section>) {
+    private fun processSectionContents(
+        contents: JsonArray?,
+        out: MutableList<Section>,
+        depth: Int = 0,
+    ) {
+        // Depth is THREADED through every hop of the mutual
+        // recursion with walkSections (round 2): before this fix
+        // both the self-recursion on a nested sectionListRenderer
+        // and the else-branch call back into walkSections reset the
+        // depth to zero, so a chain of nested section lists — the
+        // exact shape a hostile body can repeat cheaply — recursed
+        // unbounded and overflowed the stack despite the round-1
+        // cap in walkSections itself.
+        if (depth > TREE_WALK_MAX_DEPTH) return
         if (contents == null) return
         val anonymous = mutableListOf<FeedItem>()
         fun flushAnonymous() {
@@ -321,16 +350,22 @@ object YoutubeiParsers {
         }
         for (element in contents) {
             val obj = element.asObj() ?: continue
+            // Every renderer value is re-read through the nullable
+            // obj() accessor, never `!!` on a containsKey check: a
+            // drifted/hostile body can carry the key with a non-object
+            // value ("musicCarouselShelfRenderer": "junk"), and the
+            // old force-unwrap let a NullPointerException escape to
+            // the UI for exactly that shape (bug sweep round 1).
             when {
                 obj.containsKey("musicCarouselShelfRenderer") -> {
                     flushAnonymous()
-                    val shelf = obj.obj("musicCarouselShelfRenderer")!!
+                    val shelf = obj.obj("musicCarouselShelfRenderer") ?: continue
                     val items = itemsOf(shelf.arr("contents"))
                     if (items.isNotEmpty()) out.add(Section(carouselTitle(shelf), items))
                 }
                 obj.containsKey("musicShelfRenderer") -> {
                     flushAnonymous()
-                    val shelf = obj.obj("musicShelfRenderer")!!
+                    val shelf = obj.obj("musicShelfRenderer") ?: continue
                     val items = itemsOf(shelf.arr("contents"))
                     if (items.isNotEmpty()) {
                         out.add(Section(textOf(shelf.obj("title")), items))
@@ -338,23 +373,37 @@ object YoutubeiParsers {
                 }
                 obj.containsKey("musicCardShelfRenderer") -> {
                     flushAnonymous()
-                    val shelf = obj.obj("musicCardShelfRenderer")!!
+                    val shelf = obj.obj("musicCardShelfRenderer") ?: continue
                     // The card itself is the top-result track; its
                     // `contents` rows duplicate the main result list, so
                     // they are deliberately not repeated here.
                     parseCardShelfTrack(shelf)?.let { out.add(Section(null, listOf(FeedItem.OfTrack(it)))) }
                 }
                 obj.containsKey("itemSectionRenderer") -> {
-                    val section = obj.obj("itemSectionRenderer")!!
+                    val section = obj.obj("itemSectionRenderer") ?: continue
                     anonymous.addAll(itemsOf(section.arr("contents")))
+                }
+                obj.containsKey("musicShelfContinuation") -> {
+                    flushAnonymous()
+                    val shelf = obj.obj("musicShelfContinuation") ?: continue
+                    val items = itemsOf(shelf.arr("contents"))
+                    if (items.isNotEmpty()) out.add(Section(null, items))
+                }
+                obj.containsKey("musicPlaylistShelfContinuation") -> {
+                    flushAnonymous()
+                    val shelf = obj.obj("musicPlaylistShelfContinuation") ?: continue
+                    val items = itemsOf(shelf.arr("contents"))
+                    if (items.isNotEmpty()) out.add(Section(null, items))
                 }
                 obj.containsKey("sectionListRenderer") -> {
                     flushAnonymous()
-                    processSectionContents(obj.obj("sectionListRenderer").arr("contents"), out)
+                    processSectionContents(
+                        obj.obj("sectionListRenderer").arr("contents"), out, depth + 1,
+                    )
                 }
                 else -> {
                     flushAnonymous()
-                    walkSections(obj, out)
+                    walkSections(obj, out, depth + 1)
                 }
             }
         }
@@ -455,7 +504,68 @@ object YoutubeiParsers {
     }
 
     fun parseSearch(root: JsonElement?): SearchResults =
-        SearchResults(sections = parseSections(root), filters = parseSearchFilters(root))
+        SearchResults(
+            sections = parseSections(root),
+            filters = parseSearchFilters(root),
+            continuation = parseContinuationToken(root),
+        )
+
+    // ------------------------------------------------------------------
+    // Continuations (bug sweep round 1)
+    // ------------------------------------------------------------------
+
+    /**
+     * The token a response offers for its next page, or null when it
+     * offers none — the honest end of the list. Until this sweep the
+     * token was dropped on the floor: the recorded playlist fixture
+     * carries one (its section list's `continuations`), so any
+     * playlist longer than the first page was silently truncated and
+     * presented as complete.
+     *
+     * Lookup order, most specific first: a section list's own
+     * `continuations[].nextContinuationData`, then any
+     * `nextContinuationData` in document order, then a
+     * `continuationItemRenderer`'s endpoint token. The
+     * `reloadContinuationData` tokens inside `frameworkUpdates` are a
+     * different mechanism (section reloads) and are never matched —
+     * the search is by the exact `nextContinuationData` key.
+     */
+    fun parseContinuationToken(root: JsonElement?): String? {
+        for (listElement in findAll(root, "sectionListRenderer")) {
+            val token = listElement.asObj().arr("continuations")
+                ?.firstNotNullOfOrNull { entry ->
+                    entry.asObj().obj("nextContinuationData").str("continuation")
+                }
+            if (!token.isNullOrEmpty()) return token
+        }
+        for (dataElement in findAll(root, "nextContinuationData")) {
+            val token = dataElement.asObj().str("continuation")
+            if (!token.isNullOrEmpty()) return token
+        }
+        for (itemElement in findAll(root, "continuationItemRenderer")) {
+            val endpoint = itemElement.asObj().obj("continuationEndpoint")
+            val token = endpoint.obj("continuationCommand").str("token")
+                ?: endpoint.str("token")
+            if (!token.isNullOrEmpty()) return token
+        }
+        return null
+    }
+
+    /**
+     * A playlist continuation response (`continuationContents` with a
+     * playlist/shelf continuation): the next chunk of tracks plus the
+     * token it in turn offers (null at the true end).
+     */
+    fun parsePlaylistContinuation(root: JsonElement?): TrackContinuation {
+        val tracks = parseSections(root)
+            .flatMap { it.items }
+            .filterIsInstance<FeedItem.OfTrack>()
+            .map { it.track }
+        return TrackContinuation(
+            tracks = tracks,
+            continuation = parseContinuationToken(root),
+        )
+    }
 
     // ------------------------------------------------------------------
     // Moods & genres
@@ -567,6 +677,7 @@ object YoutubeiParsers {
             author = author,
             thumbnailUrl = thumbnail,
             tracks = pageTracks(root),
+            continuation = parseContinuationToken(root),
         )
     }
 

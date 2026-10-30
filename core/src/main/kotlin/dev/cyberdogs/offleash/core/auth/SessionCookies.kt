@@ -263,6 +263,12 @@ object SessionCookies {
             Json.parseToJsonElement(text)
         } catch (e: Exception) {
             return null
+        } catch (t: Throwable) {
+            // normalizePastedCookie's contract is "never throws": a
+            // bracket-bomb paste overflows the recursive parser with
+            // an Error — that is "not a JSON cookie export" too, and
+            // the header reading gets to judge it (round 2).
+            return null
         }
         val array = root as? JsonArray ?: return null
         val out = linkedMapOf<String, String>()

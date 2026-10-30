@@ -49,6 +49,19 @@ class AtomicFileWriteTest {
     }
 
     @Test
+    fun staleTempFromACrashedWriteIsReplacedAndRemoved() {
+        val target = tempTarget()
+        writeTextAtomically(target, "old contents")
+        // A process died after writing its temp, before the rename:
+        // the stale temp must not corrupt or block the next write.
+        File(target.parentFile, target.name + ".tmp")
+            .writeText("torn temp payload, longer than the next write")
+        writeTextAtomically(target, "new")
+        assertEquals("new", target.readText())
+        assertFalse(File(target.parentFile, target.name + ".tmp").exists())
+    }
+
+    @Test
     fun writeCreatesMissingParentDirectories() {
         val dir = Files.createTempDirectory("offleash-atomic").toFile()
         val target = File(File(dir, "nested/deeper"), "store.json")

@@ -73,6 +73,49 @@ class HomeChipsTest {
     }
 
     @Test
+    fun homeFeedOAuthYieldsTheRecordedFixturesChips() {
+        // Round 40: the token road's chips were asserted nowhere —
+        // OAuthSurfacesTest reads its sections only — so a
+        // post-parse transformation on this road (a helper in the
+        // client, a file no contract pin reads) stripped the whole
+        // chip cloud while every pin stayed green: the signed-in
+        // home, whose load carries nothing (load() opts out of the
+        // carry), never showed a chip row. The OAuth feed must
+        // yield the same chips the cookie road is pinned to.
+        val transport = FixedTransport(body = Fixtures.load("browse_home.json"))
+        val feed = YoutubeiClient(transport).homeFeedOAuth("token")
+        assertEquals(11, feed.chips.size)
+        assertEquals(
+            listOf(
+                "Podcasts", "Relax", "Feel good", "Energize", "Sad",
+                "Romance", "Party", "Sleep", "Commute", "Workout", "Focus",
+            ),
+            feed.chips.map { it.label },
+        )
+    }
+
+    @Test
+    fun homeFeedWithAChipStillYieldsTheResponsesChips() {
+        // Round 40: the chip re-browse's RETURNED chips were
+        // asserted nowhere either (the older test reads the
+        // request body only) — a chip-conditional strip on either
+        // road passed the whole suite. Both roads must hand the
+        // response's chip cloud through.
+        val chips = YoutubeiParsers.parseHomeChips(
+            Json.parseToJsonElement(Fixtures.load("browse_home.json")),
+        )
+        val relax = chips.first { it.label == "Relax" }
+        val cookieFeed = YoutubeiClient(
+            FixedTransport(body = Fixtures.load("browse_home.json")),
+        ).homeFeed(chip = relax)
+        assertEquals(11, cookieFeed.chips.size)
+        val oauthFeed = YoutubeiClient(
+            FixedTransport(body = Fixtures.load("browse_home.json")),
+        ).homeFeedOAuth("token", chip = relax)
+        assertEquals(11, oauthFeed.chips.size)
+    }
+
+    @Test
     fun personalizedShelfTitlesParseGenericallyWithNoParserChange() {
         // Derived synthetic fixture (see its _comment): the generic
         // section parser already yields the personalized titles

@@ -103,6 +103,52 @@ class RadioQueueTest {
         assertEquals(emptyList<Track>(), continuation)
     }
 
+    // -- Autoplay chain stress (chaos sweep round 2) ------------------
+
+    @Test
+    fun continuationChainTerminatesWhenRelatedRepeatsItself() {
+        // A related() that keeps returning the SAME tracks must not
+        // chain forever: each generation excludes everything the
+        // queue already holds, so generation two is empty and the
+        // chain stops (the controller surfaces its honest stop).
+        val seed = track("seed")
+        val related = listOf(track("a"), track("b"), track("c"))
+        val gen1 = autoplayContinuation(seed, related, queuedIds = setOf("seed"))
+        assertEquals(listOf("a", "b", "c"), gen1.map { it.videoId })
+        val queuedAfterGen1 = setOf("seed") + gen1.map { it.videoId }
+        val gen2 = autoplayContinuation(
+            seed = gen1.last(),
+            related = related,
+            queuedIds = queuedAfterGen1,
+        )
+        assertEquals(emptyList<Track>(), gen2)
+    }
+
+    @Test
+    fun continuationChainAdvancesOnlyOnGenuinelyNewTracks() {
+        // Each generation offers one repeat of everything before it
+        // plus one new track: the chain advances by exactly the new
+        // track each time and never re-lines a played id.
+        val gen1 = autoplayContinuation(
+            track("seed"),
+            listOf(track("seed"), track("a")),
+            queuedIds = setOf("seed"),
+        )
+        val gen2 = autoplayContinuation(
+            gen1.last(),
+            listOf(track("seed"), track("a"), track("b")),
+            queuedIds = setOf("seed", "a"),
+        )
+        val gen3 = autoplayContinuation(
+            gen2.last(),
+            listOf(track("a"), track("b"), track("c")),
+            queuedIds = setOf("seed", "a", "b"),
+        )
+        assertEquals(listOf("a"), gen1.map { it.videoId })
+        assertEquals(listOf("b"), gen2.map { it.videoId })
+        assertEquals(listOf("c"), gen3.map { it.videoId })
+    }
+
     @Test
     fun shareUrlIsTheCanonicalMusicUrl() {
         assertEquals(

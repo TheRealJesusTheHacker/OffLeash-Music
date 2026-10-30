@@ -54,14 +54,34 @@ fun textOf(node: JsonElement?): String? {
     return null
 }
 
+/**
+ * The deepest tree level the recursive walks in this file will
+ * descend to. Real youtubei responses nest a few dozen levels; a
+ * hostile or drifted body nested deeper than this is junk below the
+ * cap, not data — the walk simply stops descending there instead of
+ * risking the call stack (a ~1000-deep body already overflows the
+ * JSON parser itself; these walks must stay well clear of the same
+ * failure on trees that did parse). Bug sweep round 1 (2026-10-27).
+ */
+const val TREE_WALK_MAX_DEPTH: Int = 100
+
 /** All values stored under [key], anywhere in the tree, in document order. */
-fun findAll(node: JsonElement?, key: String, out: MutableList<JsonElement> = mutableListOf()): List<JsonElement> {
+fun findAll(node: JsonElement?, key: String, out: MutableList<JsonElement> = mutableListOf()): List<JsonElement> =
+    findAll(node, key, out, depth = 0)
+
+private fun findAll(
+    node: JsonElement?,
+    key: String,
+    out: MutableList<JsonElement>,
+    depth: Int,
+): List<JsonElement> {
+    if (depth > TREE_WALK_MAX_DEPTH) return out
     when (node) {
         is JsonObject -> {
             node[key]?.let { out.add(it) }
-            for (value in node.values) findAll(value, key, out)
+            for (value in node.values) findAll(value, key, out, depth + 1)
         }
-        is JsonArray -> for (element in node) findAll(element, key, out)
+        is JsonArray -> for (element in node) findAll(element, key, out, depth + 1)
         else -> Unit
     }
     return out
@@ -80,25 +100,30 @@ fun findAll(node: JsonElement?, key: String, out: MutableList<JsonElement> = mut
  * Sweep #5 measurement, 2026-10-24). Absent keys still cost a full
  * walk — there is no honest way to prove absence sooner.
  */
-fun findFirst(node: JsonElement?, key: String): JsonElement? = when (node) {
-    is JsonObject -> {
-        node[key]?.let { return it }
-        var found: JsonElement? = null
-        for (value in node.values) {
-            found = findFirst(value, key)
-            if (found != null) break
+fun findFirst(node: JsonElement?, key: String): JsonElement? = findFirst(node, key, depth = 0)
+
+private fun findFirst(node: JsonElement?, key: String, depth: Int): JsonElement? {
+    if (depth > TREE_WALK_MAX_DEPTH) return null
+    return when (node) {
+        is JsonObject -> {
+            node[key]?.let { return it }
+            var found: JsonElement? = null
+            for (value in node.values) {
+                found = findFirst(value, key, depth + 1)
+                if (found != null) break
+            }
+            found
         }
-        found
-    }
-    is JsonArray -> {
-        var found: JsonElement? = null
-        for (element in node) {
-            found = findFirst(element, key)
-            if (found != null) break
+        is JsonArray -> {
+            var found: JsonElement? = null
+            for (element in node) {
+                found = findFirst(element, key, depth + 1)
+                if (found != null) break
+            }
+            found
         }
-        found
+        else -> null
     }
-    else -> null
 }
 
 /** Largest thumbnail URL from a `thumbnails` array (by width; last wins ties). */
@@ -145,7 +170,18 @@ fun thumbnailUrlOf(node: JsonObject?): String? {
 fun parseDurationSeconds(text: String?): Int? {
     val trimmed = text?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     if (!trimmed.matches(Regex("""\d+(:\d{1,2}){1,2}"""))) return null
-    return trimmed.split(":").fold(0) { acc, part -> acc * 60 + (part.toIntOrNull() ?: return null) }
+    // Fold in Long with an Int-range check per step (round 2): the
+    // leading field is unbounded digits, so the old Int fold wrapped
+    // silently — "40000000:00" read back as a NEGATIVE duration on
+    // the track. An absurd duration is unknown, never negative.
+    var total = 0L
+    for (part in trimmed.split(":")) {
+        val value = part.toLongOrNull() ?: return null
+        if (value > Int.MAX_VALUE) return null
+        total = total * 60 + value
+        if (total > Int.MAX_VALUE) return null
+    }
+    return total.toInt()
 }
 
 fun isDurationText(text: String): Boolean = parseDurationSeconds(text) != null

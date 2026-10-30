@@ -2,6 +2,11 @@ package dev.cyberdogs.offleash.ui.library
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.core.model.LocalPlaylist
@@ -94,6 +100,7 @@ fun LibraryScreen(
     var showCreate by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<LocalPlaylist?>(null) }
     var deleteTarget by remember { mutableStateOf<LocalPlaylist?>(null) }
+    var showClearDownloads by remember { mutableStateOf(false) }
 
     // "Your YouTube library" (Phase 2): the account's playlists, loaded
     // with the current session whenever signed in. Reloads on sign-in/out
@@ -102,7 +109,12 @@ fun LibraryScreen(
         mutableStateOf<UiState<List<PlaylistSummary>>>(UiState.Loading)
     }
     var ytReloadTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(sessionState.signedIn, ytReloadTick) {
+    // The identity is part of the key (bug sweep round 1): an
+    // account switch that never passes through signed-out changes
+    // the email but not `signedIn`, and the previous account's
+    // playlists must not survive it. On sign-out the section below
+    // stops rendering entirely, so no authed data stays on screen.
+    LaunchedEffect(sessionState.signedIn, sessionState.identityEmail, ytReloadTick) {
         if (!sessionState.signedIn) return@LaunchedEffect
         ytPlaylists = UiState.Loading
         ytPlaylists = try {
@@ -123,6 +135,11 @@ fun LibraryScreen(
                 UiState.Content(loaded)
             }
         } catch (e: Exception) {
+            // A superseded load (identity flipped again mid-flight)
+            // is cancelled by the effect relaunch; its cancellation
+            // must not be recorded as an error state over the new
+            // load's result.
+            if (e is kotlinx.coroutines.CancellationException) throw e
             UiState.Error(ErrorMessages.userMessage(e))
         }
     }
@@ -387,6 +404,37 @@ fun LibraryScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
+            // A download list that could not be read says so here,
+            // where the owner is looking at it (bug sweep round 1 —
+            // the store flags any loss, from a wholly unreadable
+            // file down to one salvaged entry; until this notice
+            // existed the flag had no reader and the loss was
+            // silent).
+            if (container.downloadStore.loadRecoveredFromCorruption) {
+                Text(
+                    // Wording covers BOTH losses the flag now means
+                    // (round 4): the round-1 text said the list "was
+                    // started fresh", which was true when the flag
+                    // only meant a wholly unreadable file — but the
+                    // round-2/3 salvage also sets it when a single
+                    // entry (or a duplicate) was dropped and every
+                    // other download survived, and telling the owner
+                    // those downloads were gone was a lie of exactly
+                    // the kind this notice exists to avoid.
+                    text = "Your download list couldn't be read completely, " +
+                        "so some downloads may be missing. You can download " +
+                        "any track again from its menu.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+            if (downloadRecords.isNotEmpty()) {
+                TextButton(
+                    onClick = { showClearDownloads = true },
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) { Text("Clear all downloads") }
+            }
         }
         if (downloadRecords.isEmpty()) {
             item {
@@ -437,7 +485,15 @@ fun LibraryScreen(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        maxLines = 2,
+                        // A FAILED reason is uncapped (round 64):
+                        // this row is the ONLY place the reason is
+                        // ever shown and a FAILED row is not
+                        // tappable, so the shipped 2-line ellipsis
+                        // cut the full reason — up to 300 stored
+                        // chars — out of reach entirely. The row
+                        // grows instead; every other state keeps
+                        // the 2-line bound.
+                        maxLines = if (record.state == DownloadState.FAILED) Int.MAX_VALUE else 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -529,7 +585,21 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("Delete playlist?") },
-            text = { Text("\"${target.name}\" and its track list will be removed from this device.") },
+            text = {
+                // Height-bounded and scrolling, like the sign-out
+                // dialogs (round 5): the body embeds the playlist's
+                // name, which is user text with no length cap, so a
+                // long name at a 2.0x font scale could push Delete /
+                // Cancel past the dialog's edge — the same overflow
+                // class rounds 2/4 fixed in the sibling dialogs.
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text("\"${target.name}\" and its track list will be removed from this device.")
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -540,6 +610,31 @@ fun LibraryScreen(
             },
             dismissButton = {
                 TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showClearDownloads) {
+        AlertDialog(
+            onDismissRequest = { showClearDownloads = false },
+            title = { Text("Clear all downloads?") },
+            text = {
+                Text(
+                    "Every downloaded track will be removed from this " +
+                        "device. Tracks can be downloaded again from " +
+                        "their menus."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearDownloads = false
+                        container.downloadManager.deleteAll()
+                    },
+                ) { Text("Clear all") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDownloads = false }) { Text("Cancel") }
             },
         )
     }
@@ -581,6 +676,21 @@ private fun PlaylistNameDialog(
                 onValueChange = { name = it },
                 label = { Text("Playlist name") },
                 singleLine = true,
+                // IME Done confirms, exactly as the button does
+                // (bug sweep round 53): this field shipped with
+                // no keyboard options or actions at all, so the
+                // keyboard's Done key neither confirmed the name
+                // nor dismissed — the round-52 search defect's
+                // sibling on the app's only other text input.
+                // Confirming dismisses the dialog (the callers
+                // clear their dialog state in onConfirm), which
+                // takes the keyboard with it; a blank name stays
+                // unconfirmable, matching the button's enabled
+                // state and the callers' own blank guard.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(
+                    onDone = { if (name.isNotBlank()) onConfirm(name) },
+                ),
             )
         },
         confirmButton = {
@@ -664,7 +774,15 @@ fun LocalPlaylistScreen(
                 )
             }
         }
-        itemsIndexed(playlist.tracks, key = { _, track -> track.videoId }) { index, track ->
+        // The key carries the index as well as the id (round 4):
+        // the store lets the same track be added to a playlist
+        // twice, and a LazyColumn keyed on videoId alone throws on
+        // the duplicate key and crashes the screen the moment such
+        // a playlist is opened.
+        itemsIndexed(
+            playlist.tracks,
+            key = { index, track -> "$index:${track.videoId}" },
+        ) { index, track ->
             TrackRow(
                 track = track,
                 onClick = { container.queueController.playTracks(playlist.tracks, index) },
@@ -684,6 +802,7 @@ fun LocalPlaylistScreen(
                                         playlist.id,
                                         index,
                                         index - 1,
+                                        track,
                                     )
                                 }
                             },
@@ -701,6 +820,7 @@ fun LocalPlaylistScreen(
                                         playlist.id,
                                         index,
                                         index + 1,
+                                        track,
                                     )
                                 }
                             },
@@ -714,9 +834,23 @@ fun LocalPlaylistScreen(
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    container.localPlaylistStore.removeTrack(
+                                    // Row-exact removal (round 5): the
+                                    // same track may appear twice in a
+                                    // playlist, and remove-by-id deleted
+                                    // every copy when one row was deleted.
+                                    // The row's full Track value rides
+                                    // along as a stale-tap guard (round
+                                    // 6, full-value form round 8): if
+                                    // the list shifted between render
+                                    // and this coroutine running, the
+                                    // index alone would delete a track
+                                    // the user never tapped Delete on —
+                                    // and a videoId alone cannot tell
+                                    // duplicate copies apart.
+                                    container.localPlaylistStore.removeTrackAt(
                                         playlist.id,
-                                        track.videoId,
+                                        index,
+                                        track,
                                     )
                                 }
                             },

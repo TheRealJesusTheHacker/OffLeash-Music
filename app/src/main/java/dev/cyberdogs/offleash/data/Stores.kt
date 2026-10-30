@@ -13,9 +13,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 import java.util.UUID
 
@@ -96,6 +98,68 @@ private val storeJson = Json {
 }
 
 /**
+ * Decodes [element] as a [TrackDto], or returns null when the entry
+ * is malformed. Store files are decoded entry by entry (bug sweep
+ * round 1): the old whole-document decode let ONE bad entry — a
+ * truncated write, a hand-edited file, a future schema's extra
+ * shape — read back as "no playlists / no recents at all", wiping
+ * every good entry with it. Salvage keeps the good entries and
+ * drops only the bad one; a file that isn't JSON at all still
+ * reads as empty, as before.
+ */
+private fun decodeTrackLenient(element: kotlinx.serialization.json.JsonElement): TrackDto? =
+    try {
+        storeJson.decodeFromJsonElement(TrackDto.serializer(), element)
+    } catch (e: Exception) {
+        null
+    }
+
+/** The leniently decoded tracks of a DTO-shaped `tracks` array element. */
+private fun decodeTracksLenient(element: kotlinx.serialization.json.JsonElement): List<TrackDto> {
+    val obj = element as? kotlinx.serialization.json.JsonObject ?: return emptyList()
+    val arr = obj["tracks"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+    return arr.mapNotNull { decodeTrackLenient(it) }
+}
+
+/** Decodes one playlist entry, salvaging its good tracks when the entry as a whole is malformed. */
+private fun decodePlaylistLenient(
+    element: kotlinx.serialization.json.JsonElement,
+): LocalPlaylistDto? {
+    try {
+        return storeJson.decodeFromJsonElement(LocalPlaylistDto.serializer(), element)
+    } catch (e: Exception) {
+        // Fall through to the salvage path: header fields plus the
+        // tracks that do decode.
+    }
+    val obj = element as? kotlinx.serialization.json.JsonObject ?: return null
+    // Header fields must be genuine strings: contentOrNull would
+    // coerce a numeric id / boolean name into a phantom playlist
+    // ("99" / "false") — a malformed entry is dropped, not dressed
+    // up as data the user never created.
+    val id = (obj["id"] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.takeIf { it.isString }?.contentOrNull ?: return null
+    val name = (obj["name"] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.takeIf { it.isString }?.contentOrNull ?: return null
+    val created = (obj["createdAtEpochMs"] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.longOrNull ?: 0L
+    return LocalPlaylistDto(
+        id = id,
+        name = name,
+        createdAtEpochMs = created,
+        tracks = decodeTracksLenient(element),
+    )
+}
+
+/** The top-level array stored under [key] in a store file, or null when the file isn't that shape. */
+private fun storeFileArray(text: String, key: String): kotlinx.serialization.json.JsonArray? =
+    try {
+        val root = storeJson.parseToJsonElement(text) as? kotlinx.serialization.json.JsonObject
+        root?.get(key) as? kotlinx.serialization.json.JsonArray
+    } catch (e: Exception) {
+        null
+    }
+
+/**
  * Local playlists, stored as one JSON document in the app files dir
  * (SPEC §5). All mutations are suspend functions serialized on a mutex and
  * persisted on the IO dispatcher. A corrupt file reads as empty — the store
@@ -121,13 +185,21 @@ class LocalPlaylistStore(private val file: File) {
 
     private fun readFromDisk(): List<LocalPlaylist> {
         if (!file.exists()) return emptyList()
-        return try {
-            val parsed = storeJson.decodeFromString<PlaylistsFile>(file.readText())
-            parsed.playlists.map { it.toPlaylist() }
+        val text = try {
+            file.readText()
         } catch (e: Exception) {
-            // Corruption-tolerant: a bad file reads as empty, never crashes.
-            emptyList()
+            return emptyList()
         }
+        // Corruption-tolerant per entry: a wholly unreadable file
+        // reads as empty; a file with some bad entries keeps the rest.
+        val array = storeFileArray(text, "playlists") ?: return emptyList()
+        // One playlist per id (round 2): a duplicated id in the file
+        // (torn write in an old build, a hand edit) would otherwise
+        // fork one playlist into two rows that every id-addressed
+        // mutation then edits together. First entry wins, the same
+        // rule DownloadStore applies to duplicate record ids.
+        return array.mapNotNull { decodePlaylistLenient(it)?.toPlaylist() }
+            .distinctBy { it.id }
     }
 
     private suspend fun persistLocked(playlists: List<LocalPlaylist>) {
@@ -195,20 +267,154 @@ class LocalPlaylistStore(private val file: File) {
         }
     }
 
+    /**
+     * Remove exactly the row at [index] — the per-row delete the
+     * playlist screen offers (bug sweep round 5). The screen
+     * deliberately supports the same track appearing twice (its
+     * rows are index-keyed since round 4), but [removeTrack]
+     * removes by videoId, so deleting ONE duplicate row deleted
+     * EVERY copy of that track. An out-of-range index is a no-op.
+     */
+    suspend fun removeTrackAt(playlistId: String, index: Int) {
+        update { current ->
+            current.removingRowAt(playlistId, index, expectedVideoId = null, expectedTrack = null)
+        }
+    }
+
+    /**
+     * [removeTrackAt], guarded by the identity of the row the user
+     * actually tapped (bug sweep round 6). The screen captures
+     * [index] at render time and the removal runs in a launched
+     * coroutine; another mutation that lands in between (a move, a
+     * removal of an earlier row, a second tap on the same row
+     * before the first removal settles) shifts the list, and the
+     * unguarded index then deletes a track the user never tapped
+     * Delete on — silently, with no confirmation or undo on this
+     * screen. A tap whose row no longer holds [expectedVideoId] is
+     * stale and drops as a no-op (the house rule for stale
+     * actions); the user sees the settled list and can tap again.
+     * When the row at [index] still holds the expected track —
+     * including a duplicate copy of it — the removal is exact,
+     * exactly as [removeTrackAt].
+     */
+    suspend fun removeTrackAt(playlistId: String, index: Int, expectedVideoId: String) {
+        update { current ->
+            current.removingRowAt(playlistId, index, expectedVideoId, expectedTrack = null)
+        }
+    }
+
+    /**
+     * [removeTrackAt], guarded by the row's full [Track] value
+     * (bug sweep round 8). The videoId guard cannot tell duplicate
+     * copies of one track apart — and copies of the same videoId
+     * are not always equal values: a track added from search and
+     * the same track added from a playlist page can differ in
+     * duration, thumbnail, or album fields. A stale launch
+     * replayed after such copies swapped places passed the
+     * videoId guard and removed the copy the user never tapped
+     * on. Comparing the whole value distinguishes those copies;
+     * fully identical copies remain indistinguishable AND
+     * interchangeable — removing either of two equal values is
+     * the same list afterwards, so no stronger guard exists or
+     * is needed there.
+     */
+    suspend fun removeTrackAt(playlistId: String, index: Int, expectedTrack: Track) {
+        update { current ->
+            current.removingRowAt(playlistId, index, expectedVideoId = null, expectedTrack)
+        }
+    }
+
+    private fun List<LocalPlaylist>.removingRowAt(
+        playlistId: String,
+        index: Int,
+        expectedVideoId: String?,
+        expectedTrack: Track?,
+    ): List<LocalPlaylist> = map { playlist ->
+        if (playlist.id == playlistId && index in playlist.tracks.indices &&
+            (expectedTrack != null && playlist.tracks[index] == expectedTrack ||
+                expectedTrack == null &&
+                (expectedVideoId == null || playlist.tracks[index].videoId == expectedVideoId))
+        ) {
+            val tracks = playlist.tracks.toMutableList()
+            tracks.removeAt(index)
+            playlist.copy(tracks = tracks)
+        } else {
+            playlist
+        }
+    }
+
     suspend fun moveTrack(playlistId: String, fromIndex: Int, toIndex: Int) {
         update { current ->
-            current.map { playlist ->
-                if (playlist.id != playlistId) {
-                    playlist
-                } else {
-                    val tracks = playlist.tracks.toMutableList()
-                    if (fromIndex in tracks.indices && toIndex in tracks.indices && fromIndex != toIndex) {
-                        val moved = tracks.removeAt(fromIndex)
-                        tracks.add(toIndex, moved)
-                    }
-                    playlist.copy(tracks = tracks)
-                }
+            current.movingRow(playlistId, fromIndex, toIndex, expectedVideoId = null, expectedTrack = null)
+        }
+    }
+
+    /**
+     * [moveTrack], guarded by the identity of the row the user
+     * actually tapped (bug sweep round 7 — the round-6
+     * [removeTrackAt] guard's sibling, which the move buttons never
+     * got). The screen captures both indices at render time and the
+     * move runs in a launched coroutine; another mutation landing
+     * in between (a removal of an earlier row, a double-tap on the
+     * same move button before the first move settles) shifts the
+     * list, and the unguarded indices then move a track the user
+     * never tapped Move on. A tap whose row no longer holds
+     * [expectedVideoId] is stale and drops as a no-op, exactly as
+     * a stale row delete does; the user sees the settled list and
+     * can tap again.
+     */
+    suspend fun moveTrack(
+        playlistId: String,
+        fromIndex: Int,
+        toIndex: Int,
+        expectedVideoId: String,
+    ) {
+        update { current ->
+            current.movingRow(playlistId, fromIndex, toIndex, expectedVideoId, expectedTrack = null)
+        }
+    }
+
+    /**
+     * [moveTrack], guarded by the row's full [Track] value (bug
+     * sweep round 8 — the [removeTrackAt] full-value guard's
+     * sibling, for the reason given there: duplicate copies of
+     * one videoId can be unequal values, and the videoId guard
+     * alone let a stale launch move the copy the user never
+     * tapped on; in the double-tap shape it silently undid the
+     * first move by moving the other copy back).
+     */
+    suspend fun moveTrack(
+        playlistId: String,
+        fromIndex: Int,
+        toIndex: Int,
+        expectedTrack: Track,
+    ) {
+        update { current ->
+            current.movingRow(playlistId, fromIndex, toIndex, expectedVideoId = null, expectedTrack)
+        }
+    }
+
+    private fun List<LocalPlaylist>.movingRow(
+        playlistId: String,
+        fromIndex: Int,
+        toIndex: Int,
+        expectedVideoId: String?,
+        expectedTrack: Track?,
+    ): List<LocalPlaylist> = map { playlist ->
+        if (playlist.id != playlistId) {
+            playlist
+        } else {
+            val tracks = playlist.tracks.toMutableList()
+            if (fromIndex in tracks.indices && toIndex in tracks.indices &&
+                fromIndex != toIndex &&
+                (expectedTrack != null && tracks[fromIndex] == expectedTrack ||
+                    expectedTrack == null &&
+                    (expectedVideoId == null || tracks[fromIndex].videoId == expectedVideoId))
+            ) {
+                val moved = tracks.removeAt(fromIndex)
+                tracks.add(toIndex, moved)
             }
+            playlist.copy(tracks = tracks)
         }
     }
 }
@@ -237,12 +443,19 @@ class RecentsStore(private val file: File) {
 
     private fun readFromDisk(): List<Track> {
         if (!file.exists()) return emptyList()
-        return try {
-            val parsed = storeJson.decodeFromString<RecentsFile>(file.readText())
-            parsed.tracks.map { it.toTrack() }.take(MAX_RECENTS)
+        val text = try {
+            file.readText()
         } catch (e: Exception) {
-            emptyList()
+            return emptyList()
         }
+        val array = storeFileArray(text, "tracks") ?: return emptyList()
+        // Deduped by videoId before the cap (round 2): recordPlayed
+        // dedupes on write, but a file an old build or a hand edit
+        // left with the same track twice must not load as duplicate
+        // rows — nor let duplicates eat slots under the cap.
+        return array.mapNotNull { decodeTrackLenient(it)?.toTrack() }
+            .distinctBy { it.videoId }
+            .take(MAX_RECENTS)
     }
 
     suspend fun recordPlayed(track: Track) {

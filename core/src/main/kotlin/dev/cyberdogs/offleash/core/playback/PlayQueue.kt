@@ -37,6 +37,13 @@ class PlayQueue(
 
     var shuffle: Boolean = false
         set(value) {
+            // Re-assigning the value already in effect must NOT
+            // reshuffle the remaining pass (chaos sweep round 2):
+            // rebuilding here re-admitted tracks already played in
+            // this pass and dropped the visit-each-exactly-once
+            // guarantee for a no-op write. Callers like a "Shuffle"
+            // button that unconditionally enables shuffle hit this.
+            if (field == value) return
             field = value
             rebuildUpcoming()
         }
@@ -48,8 +55,24 @@ class PlayQueue(
     /** Indices still to come in the current shuffle pass. */
     private val upcoming = ArrayDeque<Int>()
 
+    /**
+     * The next shuffle pass, materialized early by [peekNext] at a
+     * repeat-ALL pass boundary so the peeked track and the track
+     * [next] actually plays are the SAME track (chaos sweep round
+     * 2): previously peek reported the first non-current index while
+     * next reshuffled at random, so the two disagreed on identity
+     * exactly where the recovery skip decision reads the peek.
+     * Consumed by [next] only while repeat ALL still holds;
+     * discarded by any queue/pass rebuild.
+     */
+    private var pendingReshuffle: List<Int>? = null
+
+    private fun generateReshufflePool(): List<Int> =
+        tracks.indices.filter { it != currentIndex }.shuffled(random)
+
     private fun rebuildUpcoming() {
         upcoming.clear()
+        pendingReshuffle = null
         if (shuffle && tracks.size > 1) {
             val pool = tracks.indices.filter { it != currentIndex }.shuffled(random)
             upcoming.addAll(pool)
@@ -63,6 +86,7 @@ class PlayQueue(
         if (tracks.isEmpty()) {
             currentIndex = -1
             upcoming.clear()
+            pendingReshuffle = null
             return
         }
         val start = startIndex.coerceIn(0, tracks.lastIndex)
@@ -93,7 +117,8 @@ class PlayQueue(
             if (upcoming.isEmpty()) {
                 if (repeatMode != RepeatMode.ALL) return null
                 if (tracks.size == 1) return moveTo(currentIndex)
-                val pool = tracks.indices.filter { it != currentIndex }.shuffled(random)
+                val pool = pendingReshuffle ?: generateReshufflePool()
+                pendingReshuffle = null
                 upcoming.addAll(pool)
             }
             upcoming.removeFirst()
@@ -113,7 +138,21 @@ class PlayQueue(
         if (historyPos < history.lastIndex) return tracks[history[historyPos + 1]]
         return if (shuffle) {
             upcoming.firstOrNull()?.let { tracks[it] }
-                ?: if (repeatMode == RepeatMode.ALL && tracks.size == 1) current() else null
+                ?: if (repeatMode == RepeatMode.ALL && tracks.size == 1) {
+                    current()
+                } else if (repeatMode == RepeatMode.ALL) {
+                    // The pass is exhausted, but next() would
+                    // reshuffle (excluding the current track) and
+                    // keep playing — peek must agree that a next
+                    // exists AND which track it is, so the reshuffle
+                    // is materialized now and next() consumes exactly
+                    // this pool.
+                    val pool = pendingReshuffle
+                        ?: generateReshufflePool().also { pendingReshuffle = it }
+                    pool.firstOrNull()?.let { tracks[it] }
+                } else {
+                    null
+                }
         } else {
             val nextIndex = currentIndex + 1
             when {
@@ -151,5 +190,74 @@ class PlayQueue(
         currentIndex = index
         rebuildUpcoming()
         return current()
+    }
+
+    /**
+     * Appends [track] to the end of the queue WITHOUT disturbing
+     * the current position, the played history, or the in-flight
+     * shuffle pass (chaos sweep round 2). The controller used to
+     * emulate this with [setQueue], which cleared the history —
+     * previous() forgot everything played — and rebuilt the shuffle
+     * pass from scratch, re-admitting tracks already played in the
+     * pass and dropping ones still to come. Here the new index
+     * simply joins the current pass at its tail (or the pending
+     * reshuffle, when a repeat-ALL pass boundary was peeked), so
+     * the visit-each-exactly-once guarantee survives the append; in
+     * linear mode the list order alone makes it reachable.
+     */
+    fun append(track: Track) {
+        if (tracks.isEmpty()) {
+            setQueue(listOf(track), 0)
+            return
+        }
+        val newIndex = tracks.size
+        tracks = tracks + track
+        if (shuffle) {
+            val pending = pendingReshuffle
+            if (pending != null) {
+                pendingReshuffle = pending + newIndex
+            } else {
+                upcoming.addLast(newIndex)
+            }
+        }
+    }
+
+    /** Appends several tracks, each with [append]'s guarantees. */
+    fun appendAll(newTracks: List<Track>) {
+        for (track in newTracks) append(track)
+    }
+
+    /**
+     * Inserts [track] so it is the very next thing played, in BOTH
+     * modes (chaos sweep round 2). The controller's old rebuild
+     * emulation only achieved that in linear mode: under shuffle
+     * the rebuilt pass was shuffled at random, so "Play next" played
+     * at a random point in the pass — or, with repeat off and the
+     * pass partly played, possibly never before the pass ended.
+     *
+     * Inserting shifts every stored index at or after the insertion
+     * point (history and upcoming hold indices), so those are
+     * remapped. A forward history (the listener had walked back) is
+     * truncated — inserting is a branch, exactly like [moveTo]'s —
+     * so next() cannot detour through the redo entries first.
+     */
+    fun insertNext(track: Track) {
+        if (tracks.isEmpty() || currentIndex < 0) {
+            setQueue(listOf(track), 0)
+            return
+        }
+        val insertAt = currentIndex + 1
+        while (history.size > historyPos + 1) history.removeAt(history.lastIndex)
+        for (i in history.indices) {
+            if (history[i] >= insertAt) history[i] = history[i] + 1
+        }
+        val remappedUpcoming = upcoming.map { if (it >= insertAt) it + 1 else it }
+        upcoming.clear()
+        upcoming.addAll(remappedUpcoming)
+        pendingReshuffle = pendingReshuffle?.map { if (it >= insertAt) it + 1 else it }
+        tracks = tracks.toMutableList().apply { add(insertAt, track) }
+        if (shuffle) {
+            upcoming.addFirst(insertAt)
+        }
     }
 }

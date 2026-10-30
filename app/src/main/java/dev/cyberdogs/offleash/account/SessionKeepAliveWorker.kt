@@ -18,8 +18,17 @@ import java.util.concurrent.TimeUnit
  * what discovers — early, with a plain explanation — that a session
  * has ended, instead of the user finding out mid-playlist.
  *
- * The worker itself decides nothing: every health outcome is handled
- * inside the manager, so this always reports success.
+ * Legacy-generation semantics (H4, 0.7.2 sweep): the cookie session
+ * this worker serves is a fallback ONLY until a Google session
+ * exists. While one is stored, this worker validates NOTHING — the
+ * legacy session is dormant, and running validation on it every
+ * 12 hours would burn battery and network keeping a superseded
+ * credential fresh (and persisting its rotations) behind the
+ * Google session's back. See [legacySessionValidationShouldRun]
+ * and the semantics note on the session manager.
+ *
+ * Every health outcome is handled inside the manager, so this
+ * always reports success.
  */
 class SessionKeepAliveWorker(
     appContext: Context,
@@ -28,8 +37,20 @@ class SessionKeepAliveWorker(
 
     override suspend fun doWork(): Result {
         try {
-            val app = applicationContext as? OffleashApp
-            app?.container?.sessionManager?.validateNow()
+            val container = (applicationContext as? OffleashApp)?.container
+            if (container != null &&
+                dev.cyberdogs.offleash.data.legacySessionValidationShouldRun(
+                    legacySessionPresent = container.sessionManager.currentAuthSession() != null,
+                    googleSessionPresent = container.googleSessionManager.hasStoredSession(),
+                    // A Google sign-in that EXISTED and was wiped on
+                    // its own leaves no stored Google session — the
+                    // marker is what keeps this zombie dormant then
+                    // too (bug sweep round 2).
+                    googleSignInSeen = container.googleSignInSeenMarker.seen(),
+                )
+            ) {
+                container.sessionManager.validateNow()
+            }
         } catch (e: Exception) {
             // Health handling lives in the manager; a worker-level
             // failure simply means the next run tries again.

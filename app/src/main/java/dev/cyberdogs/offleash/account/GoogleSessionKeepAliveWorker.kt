@@ -26,8 +26,15 @@ class GoogleSessionKeepAliveWorker(
 
     override suspend fun doWork(): Result {
         try {
-            val app = applicationContext as? OffleashApp
-            app?.container?.googleSessionManager?.refreshIdentity()
+            val manager = (applicationContext as? OffleashApp)
+                ?.container?.googleSessionManager
+            // No stored session, no work (0.7.2 sweep): the identity
+            // refresh early-returns in that case anyway, but a
+            // signed-out device should not spend a periodic wake on
+            // a session that does not exist.
+            if (manager != null && manager.hasStoredSession()) {
+                manager.refreshIdentity()
+            }
         } catch (e: Exception) {
             // Health handling lives in the manager; a worker-level
             // failure simply means the next run tries again.
