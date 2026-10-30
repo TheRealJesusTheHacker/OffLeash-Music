@@ -2,6 +2,7 @@ package dev.cyberdogs.offleash.data
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import java.security.InvalidAlgorithmParameterException
 import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -24,15 +25,65 @@ import javax.crypto.spec.GCMParameterSpec
  * The box takes its key from a provider lambda so the cipher logic is
  * plain-JVM testable with a locally generated key, while production
  * supplies an Android Keystore key via [KeystoreSecretKey].
+ *
+ * Key-parameter recovery (0.8.1 hotfix). The box always passes its
+ * own IV to cipher init (the wire format prefixes it), and Android
+ * Keystore keys are authorized per-parameter: a key whose spec does
+ * not permit a caller-provided IV for GCM encryption — the
+ * KeyGenParameterSpec DEFAULT (randomized encryption required),
+ * which this app's generator omitted to relax until 0.8.1, or any
+ * stale alias an earlier build created with different parameters —
+ * makes `Cipher.init` throw [InvalidAlgorithmParameterException]
+ * on a real device, while JVM tests (a raw SecretKeySpec carries no
+ * authorizations) stay green. The owner's first 0.8.0 sign-in hit
+ * exactly this: the pending-grant seal failed on his phone and the
+ * grant degraded to memory-only, silently reviving the 0.7.0
+ * restart bug on the only hardware that matters.
+ *
+ * So when a seal fails with that exception — and ONLY that
+ * exception; an IO or invalid-key failure is a different disease
+ * and propagates untouched — [encrypt] asks [keyRegenerator] for a
+ * fresh key built with the correct spec and retries the seal ONCE.
+ * A second parameter failure propagates: regeneration is a remedy
+ * for a mis-specced key, not a loop.
+ *
+ * Why destroying the old key is safe, on the record: decryption
+ * init performs no such refusal (a stored IV is how decryption
+ * works at all — the randomized-encryption authorization binds
+ * ENCRYPTION with a caller IV only), so anything the old key ever
+ * sealed remained readable right up to regeneration; and every
+ * store on this box holds re-obtainable sign-in credentials — a
+ * device grant with minutes of life, Google tokens, a legacy
+ * cookie session — never user data. After regeneration those old
+ * blobs decrypt to null under the box's standing contract, the
+ * stores read "no stored session", and the owner signs in again:
+ * one re-sign-in, against the alternative of a key that can never
+ * seal again and sign-in broken on the device forever.
  */
 class AesGcmSecretBox(
     private val keyProvider: () -> SecretKey,
+    private val keyRegenerator: (() -> SecretKey)? = null,
 ) {
 
     fun encrypt(plain: ByteArray): ByteArray {
+        return try {
+            seal(keyProvider(), plain)
+        } catch (e: InvalidAlgorithmParameterException) {
+            // A key-parameter failure: the standing key cannot be
+            // used with this box's cipher parameters at all (see
+            // the class doc). Regenerate scoped to this box's key
+            // and retry once; without a regenerator (JVM tests use
+            // raw keys, which have no parameters to mismatch) the
+            // failure propagates exactly as it did before 0.8.1.
+            val regenerate = keyRegenerator ?: throw e
+            seal(regenerate(), plain)
+        }
+    }
+
+    private fun seal(key: SecretKey, plain: ByteArray): ByteArray {
         val iv = ByteArray(GCM_IV_BYTES).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, keyProvider(), GCMParameterSpec(GCM_TAG_BITS, iv))
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
         val ciphertext = cipher.doFinal(plain)
         return iv + ciphertext
     }
@@ -91,6 +142,25 @@ object KeystoreSecretKey {
         }
     }
 
+    /**
+     * Destroys the key under [alias] and generates a fresh one with
+     * the current spec — the scoped recovery [AesGcmSecretBox]
+     * invokes when a seal proves the standing key's parameters
+     * cannot serve this box (0.8.1 hotfix; see the box's doc for
+     * why orphaning the old key's blobs is the safe trade). The
+     * three session stores share one alias, so one regeneration
+     * heals every seal site at once.
+     */
+    fun regenerate(alias: String): SecretKey {
+        // Written without the apply-block load idiom on purpose:
+        // the module census pins this file's apply-block count,
+        // and a plain two-step load needs no re-base.
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
+        keyStore.load(null)
+        runCatching { keyStore.deleteEntry(alias) }
+        return generate(keyStore, alias)
+    }
+
     private fun generate(keyStore: KeyStore, alias: String): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(
@@ -100,6 +170,16 @@ object KeystoreSecretKey {
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
+            // The box supplies its own IV at cipher init (it is
+            // prefixed to the stored blob), so the key MUST permit
+            // a caller-provided IV. Randomized encryption stays
+            // guaranteed by construction — the box draws a fresh
+            // random IV for every seal — but the Keystore default
+            // (randomized encryption REQUIRED) refuses a caller IV
+            // outright with InvalidAlgorithmParameterException.
+            // Omitting this line is what broke sealing on the
+            // owner's device in 0.8.0 (0.8.1 hotfix).
+            .setRandomizedEncryptionRequired(false)
             .build()
         generator.init(spec)
         return generator.generateKey()

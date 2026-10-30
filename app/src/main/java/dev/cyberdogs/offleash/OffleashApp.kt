@@ -133,7 +133,14 @@ class AppContainer(app: OffleashApp) {
      */
     val sessionStore: SessionStore = SessionStore(
         storage = FileSecretStorage(sessionFileIn(app)),
-        box = AesGcmSecretBox { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+        box = AesGcmSecretBox(
+            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+            // 0.8.1 hotfix: a seal that proves the standing key's
+            // parameters unusable (the device-class failure behind
+            // the owner's 0.8.0 sign-in panel) regenerates the
+            // shared key once and retries — see AesGcmSecretBox.
+            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
+        ),
     )
 
     /**
@@ -144,7 +151,10 @@ class AppContainer(app: OffleashApp) {
      */
     val googleTokenStore: GoogleTokenStore = GoogleTokenStore(
         storage = FileSecretStorage(googleSessionFileIn(app)),
-        box = AesGcmSecretBox { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+        box = AesGcmSecretBox(
+            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
+        ),
     )
 
     /**
@@ -156,9 +166,10 @@ class AppContainer(app: OffleashApp) {
     val googlePendingGrantStore: GooglePendingGrantStore =
         GooglePendingGrantStore(
             storage = FileSecretStorage(googlePendingGrantFileIn(app)),
-            box = AesGcmSecretBox {
-                KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS)
-            },
+            box = AesGcmSecretBox(
+                keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+                keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
+            ),
         )
 
     /**

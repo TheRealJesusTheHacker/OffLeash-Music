@@ -139,8 +139,39 @@ class GoogleDeviceAuthTest {
             pollWith(HttpResponse(400, """{"error":"invalid_grant"}"""))
                 is TokenPollResult.InvalidGrant
         )
-        val failed = pollWith(HttpResponse(500, """{"error":"server_error"}"""))
+        // An unknown NON-5xx error is still Failed: an answer
+        // arrived, it is not a named state, and it is not a
+        // server-side blip the code can outwait.
+        val failed = pollWith(HttpResponse(400, """{"error":"unsupported_grant_type"}"""))
         assertTrue(failed is TokenPollResult.Failed)
+    }
+
+    @Test
+    fun pollNoAnswerOutcomesAreTransientNotFailed() {
+        // 0.8.1 hotfix: a poll that gets NO protocol answer — a
+        // Google 5xx, whatever its error payload — is Transient:
+        // the code's standing is unchanged and the caller keeps
+        // watching. (Before the hotfix these were Failed, and one
+        // such answer ended the owner's approval watch mid-window.)
+        fun pollWith(response: HttpResponse): TokenPollResult {
+            val transport = ScriptedFormTransport()
+            transport.responses.add(response)
+            return GoogleDeviceAuth(transport).pollForToken("device-code-abc")
+        }
+        assertTrue(
+            pollWith(HttpResponse(500, """{"error":"server_error"}"""))
+                is TokenPollResult.Transient
+        )
+        assertTrue(
+            pollWith(HttpResponse(503, "Service Unavailable"))
+                is TokenPollResult.Transient
+        )
+        // A named protocol answer stays itself at ANY status —
+        // the error code is mapped before the 5xx rule applies.
+        assertTrue(
+            pollWith(HttpResponse(500, """{"error":"access_denied"}"""))
+                is TokenPollResult.Denied
+        )
     }
 
     @Test
@@ -170,7 +201,11 @@ class GoogleDeviceAuthTest {
         val transport = ScriptedFormTransport()
         transport.failure = RuntimeException("timeout")
         val result = GoogleDeviceAuth(transport).pollForToken("device-code-abc")
-        assertTrue(result is TokenPollResult.Failed)
+        // 0.8.1: a transport failure is Transient — the
+        // value-not-a-throw contract is unchanged; the value's
+        // meaning is now "no answer arrived, keep watching".
+        assertTrue(result is TokenPollResult.Transient)
+        assertTrue((result as TokenPollResult.Transient).detail.startsWith("transport:"))
     }
 
     @Test

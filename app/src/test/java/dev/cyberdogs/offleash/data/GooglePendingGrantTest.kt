@@ -5,7 +5,9 @@ import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.auth.GoogleOAuth
+import java.security.InvalidAlgorithmParameterException
 import java.util.concurrent.atomic.AtomicInteger
+import javax.crypto.SecretKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -119,6 +121,33 @@ class GooglePendingGrantTest {
     private fun testPendingStore(): GooglePendingGrantStore =
         GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
 
+    /**
+     * A key source standing in for the owner's 0.8.0 device: the
+     * standing key's parameters refuse every seal
+     * (InvalidAlgorithmParameterException out of the seal attempt,
+     * as the Android Keystore provider throws from Cipher.init)
+     * until the box's scoped regeneration "rebuilds" it (0.8.1
+     * hotfix). Counts regenerations.
+     */
+    private class RecoveringKeySource {
+        val realKey: SecretKey = testSecretKey()
+        var regenerated = false
+        var regenerations = 0
+
+        fun key(): SecretKey {
+            if (!regenerated) {
+                throw InvalidAlgorithmParameterException("caller IV refused by key spec")
+            }
+            return realKey
+        }
+
+        fun regenerate(): SecretKey {
+            regenerations++
+            regenerated = true
+            return realKey
+        }
+    }
+
     private fun grantedResponse(): HttpResponse = HttpResponse(
         200,
         """{"access_token":"ya29.granted","expires_in":3599,""" +
@@ -210,6 +239,58 @@ class GooglePendingGrantTest {
         assertEquals("ya29.granted", tokenStore.load()!!.accessToken)
         // The spent grant is gone from the store — nothing to resume.
         assertNull(pendingStore.load())
+        scope2.cancel()
+    }
+
+    @Test
+    fun aGrantSealedThroughKeyRecoveryIsResumedByAFreshManager() = runBlocking {
+        // The owner's 0.8.0 field failure, pinned (0.8.1 hotfix):
+        // on his phone the pending-grant seal threw
+        // InvalidAlgorithmParameterException from the Keystore
+        // path, totality degraded the grant to memory-only, and
+        // 0.7.1's durability did not exist on his device. With the
+        // box's scoped recovery, the SAME save path now regenerates
+        // the key once, the seal persists, and a fresh manager
+        // resumes the same code.
+        val form = RoutingFormTransport()
+        val source = RecoveringKeySource()
+        val box = AesGcmSecretBox(source::key, source::regenerate)
+        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), box)
+        val tokenStore = testTokenStore()
+
+        val scope1 = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val first = manager(form, tokenStore, pendingStore, scope1)
+        first.startSignIn()
+        awaitTrue { first.phase.value is GoogleSignInPhase.AwaitingApproval }
+
+        // Exactly one regeneration healed the seal, and the grant
+        // IS persisted — readable back through the same box.
+        assertEquals(1, source.regenerations)
+        assertEquals("dc-1", pendingStore.load()!!.deviceCode)
+
+        // Process death, then the owner's approval of the original
+        // code lands while the app is dead.
+        scope1.cancel()
+        delay(250)
+        form.onPoll = { grantedResponse() }
+
+        val scope2 = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val second = manager(form, tokenStore, pendingStore, scope2)
+        val phase = second.phase.value
+        assertTrue(phase is GoogleSignInPhase.AwaitingApproval)
+        assertEquals(
+            "WDJB-MJHT",
+            (phase as GoogleSignInPhase.AwaitingApproval).userCode,
+        )
+        assertEquals(1, form.deviceCodeRequests.get())
+
+        awaitTrue { second.uiState.value.signedIn }
+        assertEquals("dc-1", form.lastPolledDeviceCode)
+        assertEquals("ya29.granted", tokenStore.load()!!.accessToken)
+        assertNull(pendingStore.load())
+        // Still exactly one: resuming and adopting never needed a
+        // second regeneration.
+        assertEquals(1, source.regenerations)
         scope2.cancel()
     }
 

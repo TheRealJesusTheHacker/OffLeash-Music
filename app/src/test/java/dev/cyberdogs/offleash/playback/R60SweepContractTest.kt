@@ -83,8 +83,12 @@ class R60SweepContractTest {
             "GooglePendingGrantStore(",
             "val googleSignInSeenMarker",
             listOf(
-                "box = AesGcmSecretBox {",
-                "KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS)",
+                // 0.8.1 hotfix re-base: named provider + regenerator
+                // (the seal-recovery wiring), replacing the
+                // trailing-lambda box.
+                "box = AesGcmSecretBox(",
+                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
+                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) }",
             ),
             "googlePendingGrantStore box",
         )

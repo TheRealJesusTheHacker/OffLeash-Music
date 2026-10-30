@@ -101,9 +101,12 @@ class R61SweepContractTest {
             listOf(
                 "GooglePendingGrantStore(",
                 "storage = FileSecretStorage(googlePendingGrantFileIn(app)),",
-                "box = AesGcmSecretBox {",
-                "KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS)",
-                "},",
+                // 0.8.1 hotfix re-base: the box slice now holds the
+                // named provider + regenerator lines (seal recovery).
+                "box = AesGcmSecretBox(",
+                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },",
+                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },",
+                "),",
                 ")",
                 "/**",
                 "* The \"a Google sign-in has happened here\" marker (bug sweep",

@@ -28,11 +28,16 @@ sealed interface GoogleSignInPhase {
     /**
      * A code is issued and the poll loop is running: the screen
      * shows [userCode] and sends the owner to [verificationUrl].
+     * [connectionTrouble] is set while the poll loop is riding out
+     * transient failures (0.8.1 hotfix): the watch is still alive
+     * and the code still good — the screen adds a "connection
+     * trouble — still checking" note instead of the flow ending.
      */
     data class AwaitingApproval(
         val userCode: String,
         val verificationUrl: String,
         val expiresAtEpochMs: Long,
+        val connectionTrouble: Boolean = false,
     ) : GoogleSignInPhase
 
     /** The attempt ended without a sign-in; [reason] says why, plainly. */
@@ -596,6 +601,15 @@ class GoogleSessionManager(
         val epoch = flowEpoch
         try {
             var intervalSeconds = grant.intervalSeconds.coerceAtLeast(1L)
+            // Transient-failure state (0.8.1 hotfix): consecutive
+            // polls that got NO protocol answer (transport / 5xx),
+            // the backoff the next park uses instead of the plain
+            // interval, and whether the waiting screen is already
+            // showing the "connection trouble" note. Any definitive
+            // answer from Google resets all three.
+            var consecutiveTransients = 0
+            var transientBackoffMs: Long? = null
+            var troubleShown = false
             while (true) {
                 // Park until the next due poll — or wake at once on
                 // a "check now" signal, coalesced by the channel.
@@ -603,8 +617,12 @@ class GoogleSessionManager(
                 // (0.7.2 sweep): with a long poll interval, parking
                 // the full interval would sleep straight past the
                 // expiry and leave a dead code on screen for hours.
+                // While riding out transient failures the park is
+                // the backoff instead of the interval (0.8.1).
                 val remainingMs = (grant.expiresAtEpochMs - nowMs()).coerceAtLeast(0L)
-                withTimeoutOrNull(minOf(intervalSeconds * 1000L, remainingMs)) {
+                withTimeoutOrNull(
+                    minOf(transientBackoffMs ?: (intervalSeconds * 1000L), remainingMs)
+                ) {
                     checkNowSignal.receive()
                 }
                 if (nowMs() >= grant.expiresAtEpochMs) {
@@ -625,7 +643,11 @@ class GoogleSessionManager(
                         auth.pollForToken(grant.deviceCode)
                     } catch (t: Throwable) {
                         if (t is CancellationException) throw t
-                        TokenPollResult.Failed("transport: ${t.javaClass.simpleName}")
+                        // The auth client maps its own failures to
+                        // values; a throw escaping it is a transport
+                        // event by shape — transient, like the
+                        // client's own mapping (0.8.1 hotfix).
+                        TokenPollResult.Transient("transport: ${t.javaClass.simpleName}")
                     }
                 }
                 when (poll) {
@@ -676,8 +698,38 @@ class GoogleSessionManager(
                     }
                     TokenPollResult.Pending -> {
                         signInDiagnostics.log("google-sign-in", "poll: still pending")
+                        // A definitive answer: the connection works,
+                        // so any transient run and its note end here.
+                        consecutiveTransients = 0
+                        transientBackoffMs = null
+                        if (troubleShown) {
+                            troubleShown = false
+                            publishPhaseIfCurrent(
+                                epoch,
+                                GoogleSignInPhase.AwaitingApproval(
+                                    grant.userCode,
+                                    grant.verificationUrl,
+                                    grant.expiresAtEpochMs,
+                                ),
+                            )
+                        }
                     }
                     TokenPollResult.SlowDown -> {
+                        // Also a definitive answer (Google replied):
+                        // the transient run ends here too.
+                        consecutiveTransients = 0
+                        transientBackoffMs = null
+                        if (troubleShown) {
+                            troubleShown = false
+                            publishPhaseIfCurrent(
+                                epoch,
+                                GoogleSignInPhase.AwaitingApproval(
+                                    grant.userCode,
+                                    grant.verificationUrl,
+                                    grant.expiresAtEpochMs,
+                                ),
+                            )
+                        }
                         intervalSeconds += SLOW_DOWN_INCREMENT_SECONDS
                         signInDiagnostics.log(
                             "google-sign-in",
@@ -735,9 +787,65 @@ class GoogleSessionManager(
                         finishPollWithFailure(epoch, grant, INVALID_GRANT_REASON)
                         return
                     }
+                    is TokenPollResult.Transient -> {
+                        // NO protocol answer arrived (0.8.1
+                        // hotfix): a DNS hiccup, a timeout, an IO
+                        // blip, a Google 5xx. The code's standing is
+                        // unchanged, so the watch does NOT end — the
+                        // loop backs off and keeps checking inside
+                        // the grant's remaining life, and the waiting
+                        // screen shows a "connection trouble" note
+                        // instead of the failure card. The owner's
+                        // first 0.8.0 attempt died here: eight clean
+                        // pending polls, one UnknownHostException,
+                        // and the old Failed mapping landed the flow
+                        // on the terminal card mid-approval-window.
+                        consecutiveTransients++
+                        if (consecutiveTransients > MAX_CONSECUTIVE_TRANSIENT_POLLS) {
+                            // The budget is spent: this is no
+                            // longer a blip. The ending is the
+                            // failure card — with the code KEPT, so
+                            // "try again" resumes this same code
+                            // rather than burning it.
+                            signInDiagnostics.log(
+                                "google-sign-in",
+                                "poll: connection still unreachable after " +
+                                    "$MAX_CONSECUTIVE_TRANSIENT_POLLS tries " +
+                                    "(${poll.detail}) — the code is kept",
+                            )
+                            publishPhaseIfCurrent(
+                                epoch,
+                                GoogleSignInPhase.Failed(TRANSPORT_EXHAUSTED_REASON),
+                            )
+                            return
+                        }
+                        transientBackoffMs =
+                            transientBackoffMs(consecutiveTransients, intervalSeconds)
+                        signInDiagnostics.log(
+                            "google-sign-in",
+                            "poll: connection trouble (${poll.detail}) — still " +
+                                "checking ($consecutiveTransients in a row, next " +
+                                "check in ${transientBackoffMs!! / 1000L}s)",
+                        )
+                        if (!troubleShown) {
+                            troubleShown = true
+                            publishPhaseIfCurrent(
+                                epoch,
+                                GoogleSignInPhase.AwaitingApproval(
+                                    grant.userCode,
+                                    grant.verificationUrl,
+                                    grant.expiresAtEpochMs,
+                                    connectionTrouble = true,
+                                ),
+                            )
+                        }
+                    }
                     is TokenPollResult.Failed -> {
-                        // Transient by assumption: the code itself
-                        // is still good, so the persisted grant is
+                        // A NON-transient failure (0.8.1: transport
+                        // and 5xx outcomes are Transient now): an
+                        // answer arrived that is neither a named
+                        // state nor retryable. The code itself is
+                        // still good, so the persisted grant is
                         // KEPT — "try again" / "check now" resume
                         // checking this same code, and a restart
                         // resumes it too.
@@ -1326,6 +1434,39 @@ class GoogleSessionManager(
 
         /** RFC 8628: a slow_down answer adds 5 seconds to the interval. */
         const val SLOW_DOWN_INCREMENT_SECONDS = 5L
+
+        /**
+         * The transient-poll budget (0.8.1 hotfix): at most this
+         * many CONSECUTIVE no-answer polls (transport / 5xx) are
+         * ridden out inside the approval watch before the ending
+         * is the failure card. At the 5s cadence Google issues,
+         * the backoff schedule below (5, 10, 20, 40, then 60s
+         * capped) sums to roughly 17½ minutes across 20 tries —
+         * most of a standard 30-minute grant — and the grant's
+         * own expiry usually ends the watch first, honestly.
+         */
+        const val MAX_CONSECUTIVE_TRANSIENT_POLLS = 20
+
+        /** The cap on one transient-backoff park, milliseconds. */
+        const val MAX_TRANSIENT_BACKOFF_MS = 60_000L
+
+        /**
+         * The park after the [consecutiveTransients]-th consecutive
+         * no-answer poll: the poll interval doubled per failure
+         * (interval, 2×, 4×, 8×…), capped at
+         * [MAX_TRANSIENT_BACKOFF_MS].
+         */
+        fun transientBackoffMs(consecutiveTransients: Int, intervalSeconds: Long): Long {
+            val doublings = (consecutiveTransients - 1).coerceIn(0, 6)
+            val scaled = intervalSeconds.coerceAtLeast(1L) * 1000L * (1L shl doublings)
+            return minOf(scaled, MAX_TRANSIENT_BACKOFF_MS)
+        }
+
+        const val TRANSPORT_EXHAUSTED_REASON =
+            "Checking with Google kept failing — the connection " +
+                "couldn't be reached. Nothing was stored, but your " +
+                "code is still good until it expires — try again " +
+                "to keep checking for it."
 
         const val DENIED_REASON =
             "The sign-in was declined on Google's page, so no sign-in " +

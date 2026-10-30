@@ -16,7 +16,7 @@ A Cyberdogs project — the unofficial side of Sentinel Safeguard. Inspirations,
 
 **Playback truth (proven, not assumed):** anonymous playback works through the **iOS 20.10.4** client context (`com.google.ios.youtube/20.10.4`), which answers player requests with direct, unciphered audio URLs that stream (HTTP 206, real bytes). WEB_REMIX / WEB contexts answer UNPLAYABLE anonymously and are not on the playback path. Proven end-to-end twice: from the sandbox (browse → search → player → ranged stream GET, all green) and again from GitHub CI runners via the `live-smoke` job. If YouTube changes or retires that context, the app names the failure in plain language (`YouTube refused the app's request`) instead of spinning forever — a refused context is a named error, demonstrated by a unit test.
 
-**Build state:** CI runs the full gate on every push to `main` — the `:core` JVM suite (303 tests, pinned to recorded youtubei fixtures) plus the `:app` unit tests (731), then assembles the debug APK as a personal-use build artifact (never a release). The `:app` release story is a later decision.
+**Build state:** CI runs the full gate on every push to `main` — the `:core` JVM suite (304 tests, pinned to recorded youtubei fixtures) plus the `:app` unit tests (741), then assembles the debug APK as a personal-use build artifact (never a release). The `:app` release story is a later decision.
 
 ## License
 

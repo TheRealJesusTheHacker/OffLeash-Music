@@ -110,11 +110,12 @@ class R4FreshEyesContractTest {
     fun shippedVersionIsTheReleaseThisSweepShips() {
         val gradle = repoFile("app/build.gradle.kts")
         assertTrue(
-            "About renders the package versionName — the 0.8.0 ship must not " +
+            "About renders the package versionName — the ship must not " +
                 "label itself with the pre-release sign-in-fix name " +
-                "(coordinator naming: base \"0.8.0-sweep\" + the hunt flavor's " +
-                "\"-hunt1\" suffix = the shipped 0.8.0-sweep-hunt1)",
-            gradle.contains("versionName = \"0.8.0-sweep\""),
+                "(coordinator naming: base \"0.8.1-sweep\" + the hunt flavor's " +
+                "\"-hunt1\" suffix = the shipped 0.8.1-sweep-hunt1; the pin " +
+                "was re-based from 0.8.0 at the 0.8.1 hotfix ship)",
+            gradle.contains("versionName = \"0.8.1-sweep\""),
         )
         assertFalse(
             "the pre-release version name must not survive into the ship build",

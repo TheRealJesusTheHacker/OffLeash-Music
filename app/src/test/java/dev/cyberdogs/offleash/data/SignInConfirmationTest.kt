@@ -300,7 +300,9 @@ class SignInConfirmationTest {
     fun sealFailureDuringAdoptionFailsPolitelyAndStoresNothing() = runBlocking {
         val store = SessionStore(
             InMemorySecretStorage(),
-            AesGcmSecretBox { throw RuntimeException("keystore unavailable in test") },
+            AesGcmSecretBox(
+                keyProvider = { throw RuntimeException("keystore unavailable in test") },
+            ),
         )
         val transport = FakeAccountTransport()
         val diagnostics = SignInDiagnostics()

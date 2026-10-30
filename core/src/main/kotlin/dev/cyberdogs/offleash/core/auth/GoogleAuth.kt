@@ -115,6 +115,20 @@ sealed interface TokenPollResult {
      */
     object InvalidGrant : TokenPollResult
 
+    /**
+     * A TRANSIENT failure (0.8.1 hotfix): the poll never got a
+     * protocol answer — a transport exception (DNS, timeout, IO)
+     * or an HTTP 5xx from Google's side. Nothing about the code's
+     * standing changed, so the caller keeps watching: the owner's
+     * first 0.8.0 attempt died when one UnknownHostException in a
+     * run of clean pending polls was mapped to [Failed] and the
+     * manager ended the approval watch on a terminal card, in the
+     * middle of the window where the owner was about to approve.
+     * Distinct from [Failed], which now means an answer arrived
+     * and it was neither a named state nor retryable.
+     */
+    data class Transient(val detail: String) : TokenPollResult
+
     data class Failed(val detail: String) : TokenPollResult
 }
 
@@ -199,7 +213,11 @@ class GoogleDeviceAuth(
                 ),
             )
         } catch (e: Exception) {
-            return TokenPollResult.Failed("transport: ${e.javaClass.simpleName}")
+            // No answer at all arrived (DNS, timeout, IO): the
+            // code's standing is unknown, not bad — transient
+            // (0.8.1 hotfix; this was Failed until the owner's
+            // 0.8.0 attempt died on a single DNS hiccup).
+            return TokenPollResult.Transient("transport: ${e.javaClass.simpleName}")
         }
         if (response.status == 200) {
             val root = parseJsonObject(response.body)
@@ -220,9 +238,18 @@ class GoogleDeviceAuth(
             // the grant behind this device code no longer exists.
             // Terminal, like Expired — never a kept-code failure.
             "invalid_grant" -> TokenPollResult.InvalidGrant
-            else -> TokenPollResult.Failed(
-                "HTTP ${response.status}: ${error ?: "no error code"}"
-            )
+            else -> if (response.status in 500..599) {
+                // Google's side hiccuped; the code's standing is
+                // not in question. Transient, like a transport
+                // failure (0.8.1 hotfix).
+                TokenPollResult.Transient(
+                    "HTTP ${response.status}: ${error ?: "no error code"}"
+                )
+            } else {
+                TokenPollResult.Failed(
+                    "HTTP ${response.status}: ${error ?: "no error code"}"
+                )
+            }
         }
     }
 

@@ -255,6 +255,22 @@ fun SignInScreen(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
+                if (current.connectionTrouble) {
+                    // The approval watch is riding out a connection
+                    // blip (0.8.1 hotfix): the code stands and the
+                    // app is still checking — the note says exactly
+                    // that, where the flow used to end on a failure
+                    // card for a single DNS hiccup.
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Connection trouble — still checking. " +
+                            "Your code is still good; approve whenever " +
+                            "you're ready and this screen will finish " +
+                            "on its own once the connection is back.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = {

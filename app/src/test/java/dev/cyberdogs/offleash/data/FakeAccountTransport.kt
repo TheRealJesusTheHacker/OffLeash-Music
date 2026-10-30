@@ -177,7 +177,7 @@ fun testSecretKey(): SecretKey =
     KeyGenerator.getInstance("AES").apply { init(256, SecureRandom()) }.generateKey()
 
 fun testSecretBox(key: SecretKey = testSecretKey()): AesGcmSecretBox =
-    AesGcmSecretBox { key }
+    AesGcmSecretBox(keyProvider = { key })
 
 fun testSessionStore(storage: SecretStorage = InMemorySecretStorage()): SessionStore =
     SessionStore(storage, testSecretBox())

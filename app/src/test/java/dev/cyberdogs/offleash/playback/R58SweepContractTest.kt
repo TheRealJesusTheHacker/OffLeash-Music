@@ -130,7 +130,12 @@ class R58SweepContractTest {
             "val googleTokenStore",
             listOf(
                 "storage = FileSecretStorage(sessionFileIn(app))",
-                "box = AesGcmSecretBox { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
+                // 0.8.1 hotfix re-base: the box now takes the key
+                // provider AND the scoped key regenerator by name —
+                // the seal-recovery wiring every sealed store shares.
+                "box = AesGcmSecretBox(",
+                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
+                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) }",
             ),
             "sessionStore construction",
         )
@@ -140,7 +145,11 @@ class R58SweepContractTest {
             "val googlePendingGrantStore",
             listOf(
                 "storage = FileSecretStorage(googleSessionFileIn(app))",
-                "box = AesGcmSecretBox { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
+                // 0.8.1 hotfix re-base: same recovery wiring as the
+                // session store above.
+                "box = AesGcmSecretBox(",
+                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
+                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) }",
             ),
             "googleTokenStore construction",
         )
