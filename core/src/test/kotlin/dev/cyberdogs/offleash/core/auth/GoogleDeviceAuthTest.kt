@@ -130,6 +130,15 @@ class GoogleDeviceAuthTest {
             pollWith(HttpResponse(400, """{"error":"expired_token"}"""))
                 is TokenPollResult.Expired
         )
+        // invalid_grant on a poll means the code itself no longer
+        // stands (revoked/consumed/never issued) — terminal, like
+        // expired_token, NOT a kept-code failure (perfection pass:
+        // as Failed, the manager kept the dead code and told the
+        // owner it was "still good until it expires").
+        assertTrue(
+            pollWith(HttpResponse(400, """{"error":"invalid_grant"}"""))
+                is TokenPollResult.InvalidGrant
+        )
         val failed = pollWith(HttpResponse(500, """{"error":"server_error"}"""))
         assertTrue(failed is TokenPollResult.Failed)
     }

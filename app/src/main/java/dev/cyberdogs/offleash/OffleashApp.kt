@@ -26,6 +26,9 @@ import dev.cyberdogs.offleash.data.DownloadStore
 import dev.cyberdogs.offleash.data.FileSecretStorage
 import dev.cyberdogs.offleash.data.GooglePendingGrantStore
 import dev.cyberdogs.offleash.data.GoogleSessionManager
+import dev.cyberdogs.offleash.data.GoogleSignInSeenMarker
+import dev.cyberdogs.offleash.data.googleSignInSeenFileIn
+import dev.cyberdogs.offleash.data.legacyFallbackApplies
 import dev.cyberdogs.offleash.data.GoogleTokenStore
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
@@ -48,6 +51,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import dev.cyberdogs.offleash.playback.PlaybackDiagnostics
 import dev.cyberdogs.offleash.playback.PlaybackService
 import dev.cyberdogs.offleash.playback.QueueController
+import dev.cyberdogs.offleash.playback.SpeedUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -90,6 +94,9 @@ class OffleashApp : Application() {
  */
 class AppContainer(app: OffleashApp) {
 
+    /** The application, kept for the few container operations that need a Context. */
+    private val application: OffleashApp = app
+
     /** Shared playback-diagnostics recorder (last attempt only). */
     val playbackDiagnostics: PlaybackDiagnostics = PlaybackDiagnostics()
 
@@ -108,6 +115,16 @@ class AppContainer(app: OffleashApp) {
      */
     @Volatile
     private var sessionManagerRef: SessionManager? = null
+
+    /**
+     * The same late-bound arrangement for the Google session
+     * manager, for the client transport's Bearer-retry hook (the
+     * reactive 401 → refresh → retry-once path): the hook delegates
+     * through this reference, assigned the moment the manager
+     * exists, before anything can make a request.
+     */
+    @Volatile
+    private var googleSessionManagerRef: GoogleSessionManager? = null
 
     /**
      * The encrypted session store: a Keystore-sealed file in the
@@ -145,6 +162,15 @@ class AppContainer(app: OffleashApp) {
         )
 
     /**
+     * The "a Google sign-in has happened here" marker (bug sweep
+     * round 1): once set, the legacy cookie session never drives the
+     * presented account state or gets validated again — see
+     * [GoogleSignInSeenMarker] for the resurrection it prevents.
+     */
+    val googleSignInSeenMarker: GoogleSignInSeenMarker =
+        GoogleSignInSeenMarker(googleSignInSeenFileIn(app))
+
+    /**
      * The ONE OkHttp client for the whole app: youtubei API calls and
      * stream fetches go through the same stack (same connection pool,
      * same address-family choices), because googlevideo stream URLs are
@@ -173,9 +199,14 @@ class AppContainer(app: OffleashApp) {
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val client: YoutubeiClient = YoutubeiClient(
-        OkHttpTransport(
-            okHttpClient,
-            onResponseCookies = { pairs -> sessionManagerRef?.onResponseCookies(pairs) },
+        dev.cyberdogs.offleash.data.BearerRetryTransport(
+            OkHttpTransport(
+                okHttpClient,
+                onResponseCookies = { pairs -> sessionManagerRef?.onResponseCookies(pairs) },
+            ),
+            bearerRefresh = { rejected ->
+                googleSessionManagerRef?.bearerAfterRejection(rejected)
+            },
         ),
     )
 
@@ -216,17 +247,24 @@ class AppContainer(app: OffleashApp) {
 
     /**
      * The account state the UI presents: the Google session when one
-     * exists, otherwise the cookie session's state (a pre-0.7.0
-     * stored cookie session still names its account until the owner
-     * signs in with Google or signs out). Kept current by the
-     * collectors in the wiring init below.
+     * exists; otherwise the cookie session's state — but ONLY on a
+     * device that has never had a Google sign-in (a pre-0.7.0 stored
+     * cookie session still names its account there). Once a Google
+     * sign-in has happened ([googleSignInSeenMarker]), a Google store
+     * wiped on its own must land on the honest Google signed-out
+     * state, never resurrect the dormant cookie session. Kept
+     * current by the collectors in the wiring init below.
      */
     private val _accountUiState = MutableStateFlow(accountUiStateSnapshot())
     val accountUiState: StateFlow<SessionUiState> = _accountUiState.asStateFlow()
 
     private fun accountUiStateSnapshot(): SessionUiState {
         val google = googleSessionManager.uiState.value
-        return if (google.signedIn) google else sessionManager.uiState.value
+        return if (legacyFallbackApplies(google.signedIn, googleSignInSeenMarker.seen())) {
+            sessionManager.uiState.value
+        } else {
+            google
+        }
     }
 
     /**
@@ -237,6 +275,12 @@ class AppContainer(app: OffleashApp) {
     suspend fun signOutOfAccount() {
         googleSessionManager.signOut()
         sessionManager.signOut()
+        // The legacy sign-in WebView's cookie jar and web storage
+        // are wiped too: SessionManager.signOut documents that as
+        // the caller's job, and this is the one sign-out path every
+        // screen uses — until the round 3 sweep no caller did it, so
+        // a ≤0.6.x install's WebView cookies survived every sign-out.
+        dev.cyberdogs.offleash.data.wipeWebViewData(application)
     }
 
     /**
@@ -249,6 +293,7 @@ class AppContainer(app: OffleashApp) {
     init {
         // Close the wiring cycle described on [sessionManagerRef].
         sessionManagerRef = sessionManager
+        googleSessionManagerRef = googleSessionManager
         // Periodic validation (12h, connected) for as long as the app
         // is installed; the manager decides what each result means.
         SessionKeepAlive.enqueue(app)
@@ -258,10 +303,22 @@ class AppContainer(app: OffleashApp) {
         // Auto-download of Liked (parity step 2): the worker itself
         // checks the preference and the session before doing anything.
         AutoDownloadLiked.enqueue(app)
+        // A stored Google session means a Google sign-in has
+        // happened on this device (covers upgrades into this build):
+        // set the marker before anything consults it below.
+        if (googleSessionManager.hasStoredSession()) {
+            googleSignInSeenMarker.mark()
+        }
         // App-start validation when a stored session exists: a dead
         // session is found — and wiped, with a plain explanation in
-        // the UI state — at launch, not mid-playlist.
-        if (sessionManager.currentAuthSession() != null) {
+        // the UI state — at launch, not mid-playlist. The legacy
+        // session is validated only while it is the ONLY sign-in
+        // generation this device has ever had (the dormancy rule —
+        // the keep-alive worker applies the same gate).
+        if (sessionManager.currentAuthSession() != null &&
+            !googleSessionManager.hasStoredSession() &&
+            !googleSignInSeenMarker.seen()
+        ) {
             sessionScope.launch {
                 try {
                     sessionManager.validateNow()
@@ -350,6 +407,10 @@ class AppContainer(app: OffleashApp) {
         // session when one exists, else the cookie session's.
         sessionScope.launch {
             googleSessionManager.uiState.collect {
+                // An adoption landing sets the marker first, so the
+                // snapshot below (and every later one) can never fall
+                // back to the cookie session again.
+                if (it.signedIn) googleSignInSeenMarker.mark()
                 _accountUiState.value = accountUiStateSnapshot()
             }
         }
@@ -416,7 +477,15 @@ class AppContainer(app: OffleashApp) {
         // the next track without rebuilding the controller.
         bearerProvider = { googleSessionManager.currentBearer() },
         revalidateSession = {
-            sessionManager.validateNow()
+            // The dormancy rule applies here too: once a Google
+            // session exists (or has existed), the cookie session is
+            // never actively refreshed again — the stored session is
+            // still returned for the resolver's fallback road.
+            if (!googleSessionManager.hasStoredSession() &&
+                !googleSignInSeenMarker.seen()
+            ) {
+                sessionManager.validateNow()
+            }
             sessionManager.currentAuthSession()
         },
         // The shared client runs the anonymous-road probe ladder, so a
@@ -438,6 +507,17 @@ class AppContainer(app: OffleashApp) {
         // Lane G: the audio-version-in-radio preference, read at
         // radio-start time (default false = pre-preference behavior).
         audioVersionInRadioProvider = { appPreferences.audioVersionInRadio },
+        // Speed + pitch persistence (bug sweep round 1): seed the
+        // owner's last choice and write every change back, so a
+        // process death no longer resets playback to 1.0×.
+        initialSpeedState = SpeedUiState(
+            speed = appPreferences.playbackSpeed,
+            preservePitch = appPreferences.keepPitchAtSpeed,
+        ),
+        onSpeedStateChanged = { state ->
+            appPreferences.setPlaybackSpeed(state.speed)
+            appPreferences.setKeepPitchAtSpeed(state.preservePitch)
+        },
     )
 
     /**

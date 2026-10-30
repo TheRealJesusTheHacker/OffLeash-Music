@@ -103,6 +103,18 @@ sealed interface TokenPollResult {
     /** The device code expired before approval. */
     object Expired : TokenPollResult
 
+    /**
+     * The device code itself is no longer valid at Google
+     * (`invalid_grant`): it was revoked, consumed, or never stood.
+     * Unlike a transport failure this is TERMINAL — the code can
+     * never be approved, so retrying against it would wait on a
+     * zombie until its nominal expiry. (Added by the sign-in
+     * perfection pass: until then this answer fell into [Failed],
+     * which KEEPS the code and tells the owner it "is still good
+     * until it expires" — a dead code presented as a live one.)
+     */
+    object InvalidGrant : TokenPollResult
+
     data class Failed(val detail: String) : TokenPollResult
 }
 
@@ -170,8 +182,9 @@ class GoogleDeviceAuth(
      * One poll of the token endpoint for [deviceCode]. The protocol's
      * answer set is mapped by the book (RFC 8628 §3.5): 200 grants;
      * `authorization_pending` keeps waiting; `slow_down` lengthens
-     * the interval; `access_denied` and `expired_token` end the
-     * attempt as named states, not errors.
+     * the interval; `access_denied`, `expired_token`, and
+     * `invalid_grant` (the code no longer stands) end the attempt as
+     * named states, not errors.
      */
     fun pollForToken(deviceCode: String): TokenPollResult {
         val response = try {
@@ -203,6 +216,10 @@ class GoogleDeviceAuth(
             "slow_down" -> TokenPollResult.SlowDown
             "access_denied" -> TokenPollResult.Denied
             "expired_token" -> TokenPollResult.Expired
+            // The same verdict the refresh path reads as Revoked:
+            // the grant behind this device code no longer exists.
+            // Terminal, like Expired — never a kept-code failure.
+            "invalid_grant" -> TokenPollResult.InvalidGrant
             else -> TokenPollResult.Failed(
                 "HTTP ${response.status}: ${error ?: "no error code"}"
             )
@@ -277,6 +294,11 @@ class GoogleDeviceAuth(
     private fun parseJsonObject(body: String): JsonObject? = try {
         Json.parseToJsonElement(body).asObj()
     } catch (e: Exception) {
+        null
+    } catch (t: Throwable) {
+        // The class contract is "never throws": the JSON parser
+        // recurses, so a deeply nested hostile body overflows with
+        // an Error, which must also read as unparseable (round 2).
         null
     }
 

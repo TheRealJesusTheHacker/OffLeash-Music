@@ -30,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.cyberdogs.offleash.AppContainer
@@ -86,6 +88,21 @@ fun SignInScreen(
 
     LaunchedEffect(sessionState.signedIn) {
         if (sessionState.signedIn) onSignedIn()
+    }
+
+    // Ticking clock for the waiting screen's expiry copy (round 3
+    // sweep): the minutes-left text below is computed from the
+    // grant, but without a tick it was computed once at first
+    // composition and then froze — a code with minutes left could
+    // go on reading its opening number long after it stopped being
+    // true. Thirty seconds is plenty of grain for a
+    // minute-granularity sentence.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(phase) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(30_000L)
+        }
     }
 
     Column(
@@ -180,14 +197,61 @@ fun SignInScreen(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
+                Spacer(Modifier.height(8.dp))
+                // Copy affordance (bug sweep round 13): the code
+                // was display-only — a plain Text is not selectable
+                // in Compose, and there was no clipboard path
+                // anywhere in the app — so on the expected path
+                // (this phone's own browser) the owner had to
+                // memorise the code or app-switch back and forth
+                // to read it in pieces. One tap now puts the exact
+                // code on the clipboard to paste into Google's
+                // page; on another device the code is still read
+                // and typed as before.
+                val clipboardManager = LocalClipboardManager.current
+                var codeCopied by remember(current.userCode) {
+                    mutableStateOf(false)
+                }
+                OutlinedButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(current.userCode))
+                        codeCopied = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (codeCopied) {
+                            "Copied — paste it on Google's page"
+                        } else {
+                            "Copy code"
+                        },
+                    )
+                }
                 Spacer(Modifier.height(16.dp))
+                // The remaining life is computed from the grant
+                // itself (0.7.2 sweep): a code RESUMED after the app
+                // was restarted may have only a few minutes left,
+                // and telling the owner "about 30 minutes" for it
+                // would be a lie of exactly the kind the expired
+                // ending then has to explain.
+                // (Perfection pass: the last partial minute reads
+                // "less than a minute" — the coerceAtLeast(1) this
+                // replaces sold a code with twenty seconds left as
+                // "about 1 minute", a time the grant doesn't give.)
+                val remainingMs = (current.expiresAtEpochMs - nowMs)
+                    .coerceAtLeast(0L)
+                val expiryText = when {
+                    remainingMs < 60_000L -> "less than a minute."
+                    remainingMs < 120_000L -> "about 1 minute."
+                    else -> "about ${remainingMs / 60_000L} minutes."
+                }
                 Text(
                     text = "1. Open google.com/device in any browser — " +
                         "this phone's browser works.\n" +
                         "2. Enter the code above.\n" +
                         "3. Approve with your Google account.\n\n" +
                         "This screen finishes on its own once you approve. " +
-                        "The code expires in about 30 minutes.",
+                        "The code expires in $expiryText",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
