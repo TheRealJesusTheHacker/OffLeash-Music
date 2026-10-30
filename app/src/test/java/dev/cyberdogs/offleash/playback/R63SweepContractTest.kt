@@ -132,7 +132,7 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
@@ -150,7 +150,7 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )
@@ -168,7 +168,7 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -238,14 +238,14 @@ class R63SweepContractTest {
         }
         assertEquals(
             "the module's shipped StateFlow write total on " +
-                "the normalized view is 110, as on raw text",
-            110,
+                "the normalized view is 112, as on raw text",
+            112,
             grandTotal,
         )
         assertEquals(
             "the module's shipped MutableStateFlow namings " +
-                "on the normalized view total 39, as on raw text",
-            39,
+                "on the normalized view total 40, as on raw text",
+            40,
             grandBirths,
         )
     }
@@ -258,7 +258,7 @@ class R63SweepContractTest {
         val expectedCollectVM: Map<String, List<String>> = mapOf(
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to listOf("state", "state", "state", "hasMore", "loadMoreError"),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to listOf("state"),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to listOf("state", "selectedChip"),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to listOf("state", "feedNote", "selectedChip"),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to listOf("state", "state"),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to listOf("state", "hasMore", "loadMoreError"),
         )
@@ -348,7 +348,7 @@ class R63SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 8,
             "app:dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "app:dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 4,
             "app:dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 9,

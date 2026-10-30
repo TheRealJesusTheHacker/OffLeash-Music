@@ -166,8 +166,14 @@ class R30SweepContractTest {
             occurrences(home, "carryChips = false"),
         )
         assertTrue(
-            "load() itself must pass the opt-out",
-            home.contains("fun load() = loadFeed(chip = null, carryChips = false)"),
+            "load() itself must pass the opt-out (re-based at " +
+                "0.8.2: load() also clears the degradation note " +
+                "before the full load — the opt-out call itself " +
+                "is unchanged)",
+            home.contains(
+                "_feedNote.value = null\n" +
+                    "        loadFeed(chip = null, carryChips = false)",
+            ),
         )
         assertTrue(
             "loadFeed must take the carry as a parameter whose " +
@@ -556,10 +562,27 @@ class R30SweepContractTest {
                 "— the client response as the direct value; " +
                 "a transformation applied at the acquisition " +
                 "(a helper call on the response before the " +
-                "branch ever sees it) rewrites this block",
+                "branch ever sees it) rewrites this block " +
+                "(re-based at 0.8.2: the token leg runs the " +
+                "browse cascade with the brand delegation and " +
+                "degrades to the anonymous leg on refusal — " +
+                "the client response is still the direct " +
+                "value on both legs)",
             home.contains(
                 "val feed = if (bearer != null) {\n" +
-                    "                    client.homeFeedOAuth(bearer, chip)\n" +
+                    "                    try {\n" +
+                    "                        client.homeFeedOAuth(bearer, chip, delegationProvider())\n" +
+                    "                    } catch (e: Exception) {\n" +
+                    "                        if (e is kotlinx.coroutines.CancellationException) throw e\n" +
+                    "                        // Degradation (0.8.2): the personalized\n" +
+                    "                        // cascade refused — fall back to the\n" +
+                    "                        // anonymous feed (cookie session when one\n" +
+                    "                        // stands, plain anonymous otherwise) under\n" +
+                    "                        // the honest note. Only when THAT also\n" +
+                    "                        // fails does the load become an error.\n" +
+                    "                        note = PERSONALIZED_FEED_REFUSED_NOTE\n" +
+                    "                        client.homeFeed(auth, chip)\n" +
+                    "                    }\n" +
                     "                } else {\n" +
                     "                    client.homeFeed(auth, chip)\n" +
                     "                }",
@@ -569,9 +592,18 @@ class R30SweepContractTest {
             "the publish must hand the try's result to the " +
                 "state exactly as shipped — a transformed " +
                 "value published instead (the sequential " +
-                "override's last step) rewrites this block",
+                "override's last step) rewrites this block " +
+                "(re-based at 0.8.2: the degradation note " +
+                "publishes beside the result, inside the same " +
+                "guard — the result itself is still handed " +
+                "to the state untransformed)",
             home.contains(
                 "if (isActive) {\n" +
+                    "                // The note publishes with the content it describes,\n" +
+                    "                // inside the same stale-load guard: a superseded\n" +
+                    "                // degraded load must not leave its note standing\n" +
+                    "                // over a newer personalized feed.\n" +
+                    "                if (result is UiState.Content) _feedNote.value = note\n" +
                     "                _state.value = result\n" +
                     "            }",
             ),
@@ -648,11 +680,15 @@ class R30SweepContractTest {
                 "only the shipped launch prologue may " +
                 "stand — an inserted statement there (a " +
                 "second launch, a mutating call) rides " +
-                "the same unbound water",
+                "the same unbound water (re-based at " +
+                "0.8.2: the degradation note's load-local " +
+                "is part of the shipped prologue, named " +
+                "here like every other statement)",
             listOf(
                 "loadJob?.cancel()",
                 "loadJob = viewModelScope.launch(Dispatchers.IO) {",
                 "val auth = sessionProvider()",
+                "var note: String? = null",
                 "val result = try {",
                 "val bearer = bearerProvider()",
             ),
@@ -670,10 +706,15 @@ class R30SweepContractTest {
                 "slot the round-38 blocks left open)",
             emptyList<String>(),
             codeLines(
+                // 0.8.2: the anchor keys on the acquisition
+                // block's comment-free tail — the strict view
+                // renders the degradation comment inside the
+                // block as blank lines, so a contiguous anchor
+                // cannot span it; the block's interior is
+                // bound by the raw contains + region pins
+                // above, and this tail is unique in the file.
                 strict.substringAfter(
-                    "val feed = if (bearer != null) {\n" +
-                        "                    client.homeFeedOAuth(bearer, chip)\n" +
-                        "                } else {\n" +
+                    "                } else {\n" +
                         "                    client.homeFeed(auth, chip)\n" +
                         "                }",
                 ).substringBefore("UiState.Content("),
@@ -711,8 +752,12 @@ class R30SweepContractTest {
                 "at the function's tail",
             listOf("}", "}", "}"),
             codeLines(
+                // Anchored on the publish block's comment-free
+                // tail, like the acquisition anchor above: the
+                // strict view blanks the note comment inside
+                // the guard, so the anchor cannot span it.
                 strict.substringAfter(
-                    "if (isActive) {\n" +
+                    "                if (result is UiState.Content) _feedNote.value = note\n" +
                         "                _state.value = result\n" +
                         "            }",
                 ).substringBefore("@Composable"),

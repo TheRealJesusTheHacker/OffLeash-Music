@@ -117,7 +117,7 @@ class R52SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
@@ -135,7 +135,7 @@ class R52SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )
@@ -176,11 +176,12 @@ class R52SweepContractTest {
             assertEquals(
                 "$path must hold exactly its shipped COMBINED " +
                     "`.value` write total over any receiver " +
-                    "(the totals sum to the true 110: 109 plain " +
+                    "(the totals sum to the true 112: 111 plain " +
                     "+ 1 compound as shipped since round 61 " +
                     "added the sign-out presentation publish in " +
-                    "GoogleSessionManager; the plain rewrite " +
-                    "of the compound line is 110 + 0 and holds " +
+                    "GoogleSessionManager and 0.8.2 added Home's " +
+                    "two feedNote writes; the plain rewrite " +
+                    "of the compound line is 112 + 0 and holds " +
                     "the same totals)",
                 expectedTotals[path] ?: 0,
                 anyReceiverCombined.findAll(text).count(),
@@ -200,10 +201,11 @@ class R52SweepContractTest {
         }
         assertEquals(
             "the module's true shipped StateFlow write total, " +
-                "plain and compound together, is 110 (109 at " +
+                "plain and compound together, is 112 (109 at " +
                 "round 52; round 61's sign-out presentation " +
-                "publish in GoogleSessionManager is the +1)",
-            110,
+                "publish in GoogleSessionManager is +1 and " +
+                "0.8.2's Home feedNote reset + publish is +2)",
+            112,
             grandCombined,
         )
     }

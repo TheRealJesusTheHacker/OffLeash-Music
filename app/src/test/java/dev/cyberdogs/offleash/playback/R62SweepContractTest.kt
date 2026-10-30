@@ -71,7 +71,7 @@ class R62SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -100,9 +100,10 @@ class R62SweepContractTest {
             )
         }
         assertEquals(
-            "the module must hold exactly its 39 shipped " +
-                "MutableStateFlow namings (round 61's census)",
-            39,
+            "the module must hold exactly its 40 shipped " +
+                "MutableStateFlow namings (round 61's census, " +
+                "+1 at 0.8.2 for Home's feedNote flow)",
+            40,
             total,
         )
     }

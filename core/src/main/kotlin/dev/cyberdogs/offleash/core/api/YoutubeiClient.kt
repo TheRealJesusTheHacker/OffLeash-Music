@@ -1131,7 +1131,7 @@ class YoutubeiClient(
             throw ContextRejected(
                 error.str("message") ?: "unknown server error",
                 serverStatus = error.str("status"),
-                serverReason = error.arr("errors")?.firstOrNull().asObj().str("reason"),
+                serverReason = firstErrorReason(error),
             )
         }
         return root
@@ -1156,7 +1156,10 @@ class YoutubeiClient(
         var headers = context.headers() + ("Authorization" to "Bearer $bearerToken")
         if (delegation != null) {
             headers = headers + ("X-Goog-AuthUser" to delegation.authUser.toString())
-            delegation.pageId?.let { headers = headers + ("X-Goog-PageId" to it) }
+            val pageId = delegation.pageId
+            if (pageId != null) {
+                headers = headers + ("X-Goog-PageId" to pageId)
+            }
         }
         val response = try {
             transport.post(context.endpointUrl(path), headers, body.toString())
@@ -1311,12 +1314,19 @@ class YoutubeiClient(
         ServerError(
             message = error.str("message"),
             status = error.str("status"),
-            reason = error.arr("errors")?.firstOrNull().asObj().str("reason"),
+            reason = firstErrorReason(error),
         )
     } catch (e: Exception) {
         ServerError(null, null, null)
     } catch (t: Throwable) {
         ServerError(null, null, null)
+    }
+
+    /** The first entry's `reason` in an error object's `errors` list. */
+    private fun firstErrorReason(error: JsonObject?): String? {
+        val errors = error.arr("errors") ?: return null
+        if (errors.isEmpty()) return null
+        return errors[0].asObj().str("reason")
     }
 
     private companion object {

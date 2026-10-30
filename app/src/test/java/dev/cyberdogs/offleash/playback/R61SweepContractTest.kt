@@ -232,7 +232,7 @@ class R61SweepContractTest {
                 "both sessions exist",
             library.contains(
                 "                when {\n" +
-                    "                    bearer != null -> container.client.libraryPlaylistsOAuth(bearer)\n" +
+                    "                    bearer != null -> container.client.libraryPlaylistsOAuth(bearer, delegation = container.currentBrowseDelegation())\n" +
                     "                    else -> container.sessionManager.currentAuthSession()\n" +
                     "                        ?.let { container.client.libraryPlaylists(it) }\n" +
                     "                }\n"
@@ -249,7 +249,28 @@ class R61SweepContractTest {
                 "win whenever both sessions exist",
             detail.contains(
                 "                val page = if (bearer != null) {\n" +
-                    "                    client.playlistOAuth(bearer, browseId, params)\n" +
+                    "                    try {\n" +
+                    "                        client.playlistOAuth(\n" +
+                    "                            bearer, browseId, params, delegationProvider(),\n" +
+                    "                        )\n" +
+                    "                    } catch (e: Exception) {\n" +
+                    "                        if (e is kotlinx.coroutines.CancellationException) throw e\n" +
+                    "                        // Degradation (0.8.2): the token road\n" +
+                    "                        // refused — the cookie/anonymous road still\n" +
+                    "                        // serves PUBLIC playlists, so a refused\n" +
+                    "                        // account must not blank a page the public\n" +
+                    "                        // can open. One dishonest shape is guarded:\n" +
+                    "                        // the anonymous Liked page (VLLM) is an\n" +
+                    "                        // empty shell (200, zero tracks), so an\n" +
+                    "                        // empty VLLM fallback rethrows the token\n" +
+                    "                        // road's refusal instead of presenting a\n" +
+                    "                        // fake-empty Liked list.\n" +
+                    "                        val fallback = client.playlist(\n" +
+                    "                            browseId, params, auth = authProvider(),\n" +
+                    "                        )\n" +
+                    "                        if (browseId == \"VLLM\" && fallback.tracks.isEmpty()) throw e\n" +
+                    "                        fallback\n" +
+                    "                    }\n" +
                     "                } else {\n" +
                     "                    client.playlist(browseId, params, auth = authProvider())\n" +
                     "                }\n"
@@ -260,7 +281,7 @@ class R61SweepContractTest {
                 "token-first selection as the first page",
             detail.contains(
                 "                val chunk = if (bearer != null) {\n" +
-                    "                    client.playlistContinuationOAuth(bearer, token)\n" +
+                    "                    client.playlistContinuationOAuth(bearer, token, delegationProvider())\n" +
                     "                } else {\n" +
                     "                    client.playlistContinuation(token, auth = authProvider())\n" +
                     "                }\n"

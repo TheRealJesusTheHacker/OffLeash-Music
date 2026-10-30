@@ -109,7 +109,15 @@ class HomeViewModel(
 
     private var loadJob: kotlinx.coroutines.Job? = null
 
-    fun load() = loadFeed(chip = null, carryChips = false)
+    fun load() {
+        // A full load clears any standing degradation note up
+        // front: the note belongs to the feed it described. (Chip
+        // re-browses go through loadFeed directly; their publishes
+        // assign the note on every Content, so no stale note can
+        // outlive the feed that earned it.)
+        _feedNote.value = null
+        loadFeed(chip = null, carryChips = false)
+    }
 
     /** Tapping the selected chip again clears it back to the full feed. */
     fun onChipClick(chip: HomeChip) {
@@ -146,7 +154,6 @@ class HomeViewModel(
             null
         }
         _selectedChip.value = chip
-        _feedNote.value = null
         _state.value = UiState.Loading
         // Stale-load guard (bug sweep round 1, the SearchViewModel
         // rule applied here): the client call is blocking, so a

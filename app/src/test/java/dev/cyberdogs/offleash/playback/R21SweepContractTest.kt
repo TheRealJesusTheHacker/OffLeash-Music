@@ -495,13 +495,14 @@ class R21SweepContractTest {
         // exactly one way in this file, on the page
         // itself, exactly once.
         assertEquals(
-            "the file must hold exactly four emptiness " +
-                "guards — the three track guards and the " +
-                "artist sections guard; a fifth, on any " +
-                "receiver (an alias, a with-receiver), " +
+            "the file must hold exactly five emptiness " +
+                "guards — the four track guards (the 0.8.2 " +
+                "anonymous-Liked fallback guard among them) " +
+                "and the artist sections guard; a sixth, on " +
+                "any receiver (an alias, a with-receiver), " +
                 "means the asserted solo block is not the " +
                 "only sections check in the file",
-            4,
+            5,
             occurrences(detail, "isEmpty()"),
         )
         assertEquals(

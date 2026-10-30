@@ -193,7 +193,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 8,
             "app:dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "app:dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 4,
             "app:dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 9,

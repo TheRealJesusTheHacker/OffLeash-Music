@@ -53,7 +53,8 @@ data class YoutubeiContext(
         }
         putJsonObject("user") {
             put("lockedSafetyMode", false)
-            delegation?.pageId?.let { put("onBehalfOfUser", it) }
+            val pageId = delegation?.pageId
+            if (pageId != null) put("onBehalfOfUser", pageId)
         }
     }
 

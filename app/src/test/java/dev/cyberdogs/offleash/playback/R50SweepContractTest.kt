@@ -105,7 +105,7 @@ class R50SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
@@ -123,7 +123,7 @@ class R50SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -185,7 +185,7 @@ class R50SweepContractTest {
         val expected: Map<String, List<String>> = mapOf(
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to listOf("state", "state", "state", "hasMore", "loadMoreError"),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to listOf("state"),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to listOf("state", "selectedChip"),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to listOf("state", "feedNote", "selectedChip"),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to listOf("state", "state"),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to listOf("state", "hasMore", "loadMoreError"),
         )

@@ -289,6 +289,7 @@ class R57SweepContractTest {
             ),
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf(
                 "viewModel.state" to 1,
+                "viewModel.feedNote" to 1,
                 "viewModel.selectedChip" to 1,
                 "container.accountUiState" to 1,
             ),

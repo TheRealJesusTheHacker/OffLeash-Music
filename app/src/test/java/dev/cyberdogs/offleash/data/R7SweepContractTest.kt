@@ -127,7 +127,10 @@ class R7SweepContractTest {
     fun autoDownloadCapturesTheFetchCredentialBeforeFetching() {
         val body = doWorkBody()
         val captureAt = body.indexOf("fetchBearer" + " = " + "bearer")
-        val fetchAt = body.indexOf("likedSongsOAuth(bearer)")
+        // 0.8.2: the fetch gained the browse-delegation argument;
+        // the locator keys on the call's opening, the ordering
+        // subject below is unchanged.
+        val fetchAt = body.indexOf("likedSongsOAuth(bearer")
         assertTrue("the fetch credential must be captured", captureAt >= 0)
         assertTrue("the liked fetch must exist", fetchAt >= 0)
         assertTrue(

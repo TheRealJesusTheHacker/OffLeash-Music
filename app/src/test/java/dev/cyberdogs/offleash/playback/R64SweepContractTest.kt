@@ -187,7 +187,7 @@ class R64SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
@@ -205,7 +205,7 @@ class R64SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )
@@ -223,7 +223,7 @@ class R64SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -276,8 +276,8 @@ class R64SweepContractTest {
                 rawNames,
             )
         }
-        assertEquals(110, grandTotal)
-        assertEquals(39, grandBirths)
+        assertEquals(112, grandTotal)
+        assertEquals(40, grandBirths)
     }
 
     // -- F3–F8: the remainder families on the normalized view ------------

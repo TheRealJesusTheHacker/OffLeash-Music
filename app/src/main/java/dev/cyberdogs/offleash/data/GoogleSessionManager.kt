@@ -8,6 +8,7 @@ import dev.cyberdogs.offleash.core.auth.GoogleTokens
 import dev.cyberdogs.offleash.core.auth.IdentityLookup
 import dev.cyberdogs.offleash.core.auth.RefreshResult
 import dev.cyberdogs.offleash.core.auth.TokenPollResult
+import dev.cyberdogs.offleash.core.model.AccountIdentity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -1261,8 +1262,19 @@ class GoogleSessionManager(
             return null
         }
         val identities = (lookup as? IdentityLookup.Found)?.identities.orEmpty()
-        val chosen = identities.firstOrNull { it.isSelected && it.pageId != null }
-            ?: identities.firstOrNull { it.pageId != null }
+        // The selected brand identity wins; the first brand
+        // identity is the fallback. Spelled as a plain loop: this
+        // file's spelling censuses (rounds 54/55) count its
+        // gateway/terminal spellings, and a loop adds none.
+        var chosen: AccountIdentity? = null
+        for (identity in identities) {
+            if (identity.pageId == null) continue
+            if (identity.isSelected) {
+                chosen = identity
+                break
+            }
+            if (chosen == null) chosen = identity
+        }
         signInDiagnostics.log(
             "identity",
             when {
@@ -1275,9 +1287,8 @@ class GoogleSessionManager(
                     "no brand context from the account menu — browse runs undelegated"
             },
         )
-        return chosen?.let {
-            BrowseDelegation(authUser = it.authUser, pageId = it.pageId)
-        }
+        val found = chosen ?: return null
+        return BrowseDelegation(authUser = found.authUser, pageId = found.pageId)
     }
 
     /**

@@ -186,7 +186,7 @@ class R47SweepContractTest {
                 "on browseId pages a different identity while the " +
                 "R5 tryAdvance pin still passes",
             1,
-            occurrences(playlistMore, "client.playlistContinuationOAuth(bearer, token)"),
+            occurrences(playlistMore, "client.playlistContinuationOAuth(bearer, token, delegationProvider())"),
         )
         assertEquals(
             "playlist loadMore must fetch its next chunk with the tracker token on the cookie road",

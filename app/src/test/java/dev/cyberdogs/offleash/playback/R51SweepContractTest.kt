@@ -107,7 +107,7 @@ class R51SweepContractTest {
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )

@@ -77,10 +77,7 @@ class AutoDownloadLikedWorker(
                 val bearer = container.currentBearerToken()
                 fetchBearer = bearer
                 when {
-                    bearer != null -> container.client.likedSongsOAuth(
-                        bearer,
-                        delegation = container.currentBrowseDelegation(),
-                    )
+                    bearer != null -> container.client.likedSongsOAuth(bearer, delegation = container.currentBrowseDelegation())
                     else -> {
                         // Dormancy (bug sweep round 9): the cookie
                         // session is a FALLBACK ONLY — while a
