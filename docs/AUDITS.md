@@ -1,5 +1,21 @@
 # OffLeash Music — Audit Log
 
+## 2026-10-30 — 0.8.0-sweep: the whole-product bug sweep lands; sign-in perfection on top
+
+**Starting HEAD:** `193a5679` (0.7.1). **What this is:** the full-product sweep the owner ordered after the one-bug-per-build circling — five hunt rounds integrated (sign-in, playback, downloads, UI, chaos) plus the rounds that followed — shipped as ONE build, followed by the sign-in perfection pass as its own commit. Version: code **16**, name `0.8.0-sweep` (hunt build `0.8.0-sweep-hunt1`).
+
+**Ship sequence (two commits, fast-forward only, built on the live remote head):**
+1. *Sweep commit* `fd12727f` — 186 files: playback recovery (mid-stream failures now recover instead of dying, poisoned-download fix, local-playlist crash fix, search "load more" fix), queue/transport, sign-in lifecycle, downloads, UI. Commit message carries the full round summary.
+2. *Sign-in perfection commit* `24254232` — exactly the manifest's 11 files (README + 10 code/test): reactive 401 → refresh → retry-once on every OAuth surface; a Google-cancelled device code ends honestly (`invalid_grant`); waiting/expired copy states the grant truth.
+
+**Pre-push verification (on the exact ship tree):** local harness — core **303/303**, app **731/731**, zero compile errors in every stage. After the push, the ENTIRE remote tree was re-fetched and byte-compared against the local tree: **305 blobs, zero mismatches, zero local-only files.**
+
+**Push history, honestly:** the first ship attempt (earlier today) stopped at the first blob — the fleet's replacement fine-grained token proved read-only in practice (`POST /git/blobs` 403, "Resource not accessible by personal access token"); zero blobs, zero commits, no ref movement. The owner then replaced the token through the Secure Vault and fixed its repository access; the re-run's first attempt died mid-upload on a transient TLS EOF, again before any commit or ref movement, and the second attempt completed the sequence above clean.
+
+**CI on head `24254232`:** "OffLeash — Android" run **41085327002** success, "Push on main" run **41085326682** success. Hunt APK: `OffLeash-Hunt-0.8.0-sweep-hunt1.apk`, 21,350,768 bytes, SHA-256 `9b2a46a1c9483c878ed282d498c76b6e554cfd72bfae6a7e623a3b8b988e9b0a`, package `dev.cyberdogs.offleash.hunt`, versionCode 16 / `0.8.0-sweep-hunt1`, signer G3 `3176e075d152787d2f4d5224d26f42ca38a88563abcc3d4a12cb4a17081e84b4` (apksigner-verified). No GitHub release, per the hunt-build rule.
+
+**Remaining proof is the owner's, as always:** install the hunt build → first sign-in acceptance, autoplay continuity, and the screen-off/background playback retest on his phone. No agent-side result substitutes for that.
+
 ## 2026-10-27 — 0.7.1-signinfix: the device grant survives leaving the app
 
 **Starting HEAD:** `dde19b78` (0.7.0-google). **Owner field report, verbatim:** "Right as soon as I click out of the app the sign in process restarts." The device-code flow could never complete: approving REQUIRES leaving the app for a browser, and leaving the app restarted the grant — the code he approved at google.com/device belonged to a grant the app had already abandoned.
