@@ -124,7 +124,10 @@ fun LibraryScreen(
                 // session is the fallback for a pre-0.7.0 sign-in.
                 val bearer = container.currentBearerToken()
                 when {
-                    bearer != null -> container.client.libraryPlaylistsOAuth(bearer)
+                    bearer != null -> container.client.libraryPlaylistsOAuth(
+                        bearer,
+                        delegation = container.currentBrowseDelegation(),
+                    )
                     else -> container.sessionManager.currentAuthSession()
                         ?.let { container.client.libraryPlaylists(it) }
                 }

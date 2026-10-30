@@ -30,7 +30,15 @@ data class YoutubeiContext(
     val androidSdkVersion: Int? = null,
 ) {
     /** The `context` object embedded in every youtubei request body. */
-    fun toJson(): JsonObject = buildJsonObject {
+    /**
+     * The request `context` object. With a [delegation] carrying a
+     * brand page id, the `user` object gains `onBehalfOfUser` — the
+     * youtubei field that runs the request AS that brand identity
+     * (0.8.2 browse hunt: the owner's playlists live on his brand
+     * channel, not the bare Google identity). A null delegation (or
+     * one without a page id) produces exactly the Phase 1 shape.
+     */
+    fun toJson(delegation: BrowseDelegation? = null): JsonObject = buildJsonObject {
         putJsonObject("client") {
             put("clientName", clientName)
             put("clientVersion", clientVersion)
@@ -45,6 +53,7 @@ data class YoutubeiContext(
         }
         putJsonObject("user") {
             put("lockedSafetyMode", false)
+            delegation?.pageId?.let { put("onBehalfOfUser", it) }
         }
     }
 
@@ -57,6 +66,22 @@ data class YoutubeiContext(
         "Accept" to "application/json",
     )
 }
+
+/**
+ * Brand-channel delegation for a signed-in browse (0.8.2): a Google
+ * account can carry several youtubei identities (the bare Google
+ * identity plus one per brand channel). [authUser] is the identity's
+ * index, sent as the `X-Goog-AuthUser` header; [pageId] is the brand
+ * identity's page id, sent as the `X-Goog-PageId` header and as
+ * `context.user.onBehalfOfUser`. The owner's playlists live on his
+ * brand channel, so a browse without delegation can be refused (or
+ * answered for the wrong identity) even with a valid Bearer token.
+ * Captured from the account-menu identity list at sign-in adoption.
+ */
+data class BrowseDelegation(
+    val authUser: Int,
+    val pageId: String?,
+)
 
 object YoutubeiContexts {
 
@@ -120,13 +145,20 @@ object YoutubeiContexts {
      * 2026-10-27 from the sandbox: `FEmusic_home` answered 200 with
      * this context, and a deliberately bad Bearer was refused 401 —
      * the surface enforces OAuth Bearer as its auth mechanism.
+     *
+     * 0.8.2 (2026-10-30): version moved 5.26.1 → 8.10.52. Probes that
+     * day showed all three versions (5.26.1 / 7.29.0 / 8.10.52)
+     * behaving identically on the music browse surfaces, so currency
+     * is NOT what refused the owner's signed-in browse — the bump is
+     * hygiene, and the real work is the signed-in browse cascade +
+     * brand delegation in [YoutubeiClient].
      */
     val ANDROID_MUSIC = YoutubeiContext(
         clientName = "ANDROID_MUSIC",
-        clientVersion = "5.26.1",
+        clientVersion = "8.10.52",
         apiKey = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
         host = "music.youtube.com",
-        userAgent = "com.google.android.apps.youtube.music/5.26.1 (Linux; U; Android 14; en_US)",
+        userAgent = "com.google.android.apps.youtube.music/8.10.52 (Linux; U; Android 14; en_US)",
         osName = "Android",
         osVersion = "14",
         androidSdkVersion = 34,

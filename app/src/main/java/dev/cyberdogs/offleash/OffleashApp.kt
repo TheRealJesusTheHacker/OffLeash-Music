@@ -13,6 +13,7 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
@@ -219,6 +220,11 @@ class AppContainer(app: OffleashApp) {
                 googleSessionManagerRef?.bearerAfterRejection(rejected)
             },
         ),
+        // Signed-in browse attempts land in the same owner-visible
+        // diagnostics trail as playback (0.8.2): the core hook's
+        // lines carry surface, client config, and refusal class —
+        // statuses only, never tokens or server text.
+        browseAttemptLog = { line -> playbackDiagnostics.log("browse", line) },
     )
 
     /**
@@ -300,6 +306,14 @@ class AppContainer(app: OffleashApp) {
      * from an IO dispatcher, like every core client call.
      */
     fun currentBearerToken(): String? = googleSessionManager.currentBearer()
+
+    /**
+     * The stored brand delegation signed-in browse runs as
+     * (0.8.2), or null when signed out / no brand channel. Cheap
+     * read — call beside [currentBearerToken].
+     */
+    fun currentBrowseDelegation(): BrowseDelegation? =
+        googleSessionManager.browseDelegation()
 
     init {
         // Close the wiring cycle described on [sessionManagerRef].

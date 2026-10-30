@@ -27,8 +27,7 @@ object ErrorMessages {
             "YouTube refused this track both ways. " +
                 "Signed in: ${plainReason(error.accountError)} " +
                 "Anonymous: ${plainReason(error.anonymousError)}"
-        is ContextRejected ->
-            "YouTube refused the app's request — the app may need an update."
+        is ContextRejected -> contextRejectedMessage(error)
         is PlayerRefused -> playerRefusedMessage(error.reason)
         is NoPlayableStream ->
             "No playable stream for this track — YouTube served only locked formats."
@@ -39,6 +38,31 @@ object ErrorMessages {
                 "the app may need an update."
         else ->
             "Something went wrong. Try again."
+    }
+
+    /**
+     * A refusal, named by its class (0.8.2): the structured fields
+     * on [ContextRejected] say WHICH refusal happened, and each
+     * class gets the copy (and the next step) that fits it, instead
+     * of one generic line for all of them. A refusal carrying no
+     * fields — every construction predating the structured parse —
+     * keeps the original line verbatim.
+     *
+     * - 401 / UNAUTHENTICATED: the sign-in itself was refused — the
+     *   fix the user can actually take is signing in again.
+     * - 403 / PERMISSION_DENIED: the account was refused this
+     *   request — signing in again won't change it; say so plainly.
+     * - 400 / FAILED_PRECONDITION and everything else: the request
+     *   shape was refused — the app's side of the contract, the
+     *   original "may need an update" line.
+     */
+    private fun contextRejectedMessage(error: ContextRejected): String = when {
+        error.httpStatus == 401 || error.serverStatus == "UNAUTHENTICATED" ->
+            "YouTube refused the app's sign-in for this — sign out and back in, then try again."
+        error.httpStatus == 403 || error.serverStatus == "PERMISSION_DENIED" ->
+            "YouTube refused this request for your account."
+        else ->
+            "YouTube refused the app's request — the app may need an update."
     }
 
     /**

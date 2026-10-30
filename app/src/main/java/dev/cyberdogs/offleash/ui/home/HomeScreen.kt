@@ -30,6 +30,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.core.auth.AuthSession
+import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.model.HomeChip
 import dev.cyberdogs.offleash.core.model.HomeFeed
@@ -63,6 +64,16 @@ import kotlinx.coroutines.launch
  * is never rendered). The screen observes the session state and
  * reloads whenever sign-in state flips.
  */
+
+/**
+ * The note shown over the anonymous feed when the personalized
+ * feed refused (0.8.2): the degradation is honest, never silent —
+ * the owner can tell at a glance that what he is seeing is the
+ * public catalog, not his feed.
+ */
+const val PERSONALIZED_FEED_REFUSED_NOTE: String =
+    "Your personalized feed was refused — showing the public feed."
+
 class HomeViewModel(
     private val client: YoutubeiClient,
     private val sessionProvider: () -> AuthSession? = { null },
@@ -72,10 +83,26 @@ class HomeViewModel(
      * ahead of the cookie session's, matching the rest of the app.
      */
     private val bearerProvider: () -> String? = { null },
+    /**
+     * The stored brand delegation (0.8.2), read beside the bearer:
+     * the personalized browse runs as the account's brand channel
+     * when one was captured at sign-in.
+     */
+    private val delegationProvider: () -> BrowseDelegation? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<HomeFeed>>(UiState.Loading)
     val state: StateFlow<UiState<HomeFeed>> = _state
+
+    /**
+     * The degradation note (0.8.2): non-null exactly when the feed
+     * on screen is the ANONYMOUS feed served because the
+     * personalized one refused. A signed-in user must never reach
+     * less music than a signed-out one — the refusal degrades to
+     * the public catalog under this honest note, never to a blank.
+     */
+    private val _feedNote = MutableStateFlow<String?>(null)
+    val feedNote: StateFlow<String?> = _feedNote
 
     private val _selectedChip = MutableStateFlow<HomeChip?>(null)
     val selectedChip: StateFlow<HomeChip?> = _selectedChip
@@ -119,6 +146,7 @@ class HomeViewModel(
             null
         }
         _selectedChip.value = chip
+        _feedNote.value = null
         _state.value = UiState.Loading
         // Stale-load guard (bug sweep round 1, the SearchViewModel
         // rule applied here): the client call is blocking, so a
@@ -132,10 +160,23 @@ class HomeViewModel(
         loadJob?.cancel()
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             val auth = sessionProvider()
+            var note: String? = null
             val result = try {
                 val bearer = bearerProvider()
                 val feed = if (bearer != null) {
-                    client.homeFeedOAuth(bearer, chip)
+                    try {
+                        client.homeFeedOAuth(bearer, chip, delegationProvider())
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        // Degradation (0.8.2): the personalized
+                        // cascade refused — fall back to the
+                        // anonymous feed (cookie session when one
+                        // stands, plain anonymous otherwise) under
+                        // the honest note. Only when THAT also
+                        // fails does the load become an error.
+                        note = PERSONALIZED_FEED_REFUSED_NOTE
+                        client.homeFeed(auth, chip)
+                    }
                 } else {
                     client.homeFeed(auth, chip)
                 }
@@ -151,6 +192,11 @@ class HomeViewModel(
                 UiState.Error(ErrorMessages.userMessage(e))
             }
             if (isActive) {
+                // The note publishes with the content it describes,
+                // inside the same stale-load guard: a superseded
+                // degraded load must not leave its note standing
+                // over a newer personalized feed.
+                if (result is UiState.Content) _feedNote.value = note
                 _state.value = result
             }
         }
@@ -171,9 +217,11 @@ fun HomeScreen(
             container.client,
             sessionProvider = { container.sessionManager.currentAuthSession() },
             bearerProvider = { container.currentBearerToken() },
+            delegationProvider = { container.currentBrowseDelegation() },
         )
     }
     val state by viewModel.state.collectAsState()
+    val feedNote by viewModel.feedNote.collectAsState()
     val selectedChip by viewModel.selectedChip.collectAsState()
     val sessionState by container.accountUiState.collectAsState()
 
@@ -221,6 +269,19 @@ fun HomeScreen(
                     chips = current.data.chips,
                 )
                 LazyColumn(Modifier.fillMaxSize()) {
+                    if (feedNote != null) {
+                        item {
+                            Text(
+                                text = feedNote!!,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(
+                                    horizontal = 16.dp,
+                                    vertical = 8.dp,
+                                ),
+                            )
+                        }
+                    }
                     if (chrome.showGreeting) {
                         item {
                             Text(

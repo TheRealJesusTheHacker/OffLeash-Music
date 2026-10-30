@@ -68,6 +68,17 @@ import kotlinx.serialization.json.putJsonObject
  */
 class YoutubeiClient(
     private val transport: HttpTransport,
+    /**
+     * Optional sink for signed-in browse attempt outcomes (0.8.2):
+     * one line per cascade attempt — surface, client config, and the
+     * outcome class (ok / refused with HTTP status + Google's status
+     * and reason / failed with the failure class). Lines carry no
+     * tokens, no URLs, and no server message text — statuses and
+     * class names only — so the app can route them straight into its
+     * owner-visible diagnostics trail. Never throws into the client:
+     * hook failures are swallowed at the call site.
+     */
+    private val browseAttemptLog: ((String) -> Unit)? = null,
 ) {
 
     fun home(auth: AuthSession? = null): List<Section> =
@@ -691,14 +702,25 @@ class YoutubeiClient(
     // ------------------------------------------------------------------
     // Google OAuth session (0.7.0): the token road
     //
-    // Every call in this section authenticates the way the official
-    // YouTube Music app does: the ANDROID_MUSIC context plus an
+    // Every call in this section authenticates with an
     // `Authorization: Bearer <token>` header. No cookies, no
     // SAPISIDHASH, no visitor data — the token IS the session.
     // Failures map onto the same error taxonomy as the cookie road
     // (4xx → ContextRejected with the server's message, 5xx and
     // transport trouble → NetworkFailure), so callers handle both
     // roads identically.
+    //
+    // 0.8.2 browse hunt: the token is minted by the TV-client device
+    // flow, and the owner's device proved the naive pairing (that
+    // token presented as ANDROID_MUSIC) refused on every signed-in
+    // browse surface while identity worked. Signed-in BROWSE calls
+    // therefore run a cascade of presentations — ANDROID_MUSIC, then
+    // WEB_REMIX (ytmusicapi's proven Bearer road), each with the
+    // account's brand delegation when one is known, then without —
+    // and remember the winner. Player and like calls keep the single
+    // ANDROID_MUSIC presentation: playback already falls back to the
+    // anonymous road per track, and likes were not part of the
+    // refusal.
     // ------------------------------------------------------------------
 
     /**
@@ -762,41 +784,100 @@ class YoutubeiClient(
     private fun userinfoShapeSummary(root: JsonObject): String =
         "userinfo keys [${root.keys.joinToString(", ")}]"
 
+    /**
+     * The token road's account identity LIST — the brand-aware twin
+     * of [accountIdentities] (0.8.2). Userinfo (above) only ever
+     * names the bare Google identity; the account's brand channels —
+     * where the owner's playlists actually live — appear only in the
+     * account menu. This POSTs `account/account_menu` on WEB_REMIX
+     * with the Bearer token (the presentation ytmusicapi proves for
+     * Bearer account calls) and parses the response with the same
+     * switcher parser as the cookie road, so each identity carries
+     * its pageId + authUser for [BrowseDelegation].
+     *
+     * Same never-throws [IdentityLookup] contract as the other
+     * identity calls: a refusal is a state (Rejected on 401/403,
+     * Failed otherwise), never an exception — adoption treats brand
+     * capture as best-effort enrichment, not a sign-in gate.
+     */
+    fun accountIdentitiesOAuth(bearerToken: String): IdentityLookup {
+        val body = buildJsonObject {
+            put("context", YoutubeiContexts.WEB_REMIX.toJson())
+        }
+        val root = try {
+            postJsonOAuth(
+                "account/account_menu", YoutubeiContexts.WEB_REMIX, body, bearerToken,
+            )
+        } catch (e: ContextRejected) {
+            val status = e.httpStatus ?: -1
+            return if (status == 401 || status == 403) {
+                IdentityLookup.Rejected(status)
+            } else {
+                IdentityLookup.Failed("account menu refused (HTTP $status)")
+            }
+        } catch (e: NetworkFailure) {
+            return IdentityLookup.Failed("account menu unreachable")
+        } catch (e: OffleashException) {
+            return IdentityLookup.Failed(
+                "account menu failed (${e.javaClass.simpleName})"
+            )
+        }
+        return try {
+            IdentityLookup.Found(parseSwitcherIdentities(root), switcherShapeSummary(root))
+        } catch (t: Throwable) {
+            IdentityLookup.Failed(
+                "account menu unreadable (${t.javaClass.simpleName})"
+            )
+        }
+    }
+
     /** The personalized home feed under the token session. */
-    fun homeFeedOAuth(bearerToken: String, chip: HomeChip? = null): HomeFeed {
-        val root = postJsonOAuth(
-            "browse", YoutubeiContexts.ANDROID_MUSIC,
-            browseBodyFor(
-                YoutubeiContexts.ANDROID_MUSIC,
-                chip?.browseId ?: "FEmusic_home",
-                chip?.params,
-            ),
-            bearerToken,
-        )
+    fun homeFeedOAuth(
+        bearerToken: String,
+        chip: HomeChip? = null,
+        delegation: BrowseDelegation? = null,
+    ): HomeFeed {
+        val browseId = chip?.browseId ?: "FEmusic_home"
+        val root = browseOAuth(browseId, bearerToken, delegation) { config ->
+            postJsonOAuth(
+                "browse", config.context,
+                browseBodyFor(config.context, browseId, chip?.params, config.delegation),
+                bearerToken, config.delegation,
+            )
+        }
         return YoutubeiParsers.parseHome(root)
     }
 
     /** The token session's library playlists, in shelf order. */
-    fun libraryPlaylistsOAuth(bearerToken: String): List<PlaylistSummary> =
-        browseSectionsOAuth("FEmusic_liked_playlists", bearerToken)
+    fun libraryPlaylistsOAuth(
+        bearerToken: String,
+        delegation: BrowseDelegation? = null,
+    ): List<PlaylistSummary> =
+        browseSectionsOAuth("FEmusic_liked_playlists", bearerToken, delegation = delegation)
             .flatMap { it.items }
             .filterIsInstance<FeedItem.OfPlaylist>()
             .map { it.playlist }
 
     /** The token session's Liked Songs (browse id `VLLM`, the "LM" list). */
-    fun likedSongsOAuth(bearerToken: String): PlaylistPage =
-        playlistOAuth(bearerToken, "VLLM")
+    fun likedSongsOAuth(
+        bearerToken: String,
+        delegation: BrowseDelegation? = null,
+    ): PlaylistPage =
+        playlistOAuth(bearerToken, "VLLM", delegation = delegation)
 
     /** The next page of a playlist under the token session. */
     fun playlistContinuationOAuth(
         bearerToken: String,
         continuation: String,
+        delegation: BrowseDelegation? = null,
     ): TrackContinuation {
-        val body = buildJsonObject {
-            put("context", YoutubeiContexts.ANDROID_MUSIC.toJson())
-            put("continuation", continuation)
+        val root = browseOAuth("continuation", bearerToken, delegation) { config ->
+            val body = buildJsonObject {
+                put("context", config.context.toJson(config.delegation))
+                put("continuation", continuation)
+            }
+            postJsonOAuth("browse", config.context, body, bearerToken, config.delegation)
         }
-        val root = postJsonOAuth("browse", YoutubeiContexts.ANDROID_MUSIC, body, bearerToken)
         return YoutubeiParsers.parsePlaylistContinuation(root)
     }
 
@@ -805,12 +886,15 @@ class YoutubeiClient(
         bearerToken: String,
         browseId: String,
         params: String? = null,
+        delegation: BrowseDelegation? = null,
     ): PlaylistPage {
-        val root = postJsonOAuth(
-            "browse", YoutubeiContexts.ANDROID_MUSIC,
-            browseBodyFor(YoutubeiContexts.ANDROID_MUSIC, browseId, params),
-            bearerToken,
-        )
+        val root = browseOAuth(browseId, bearerToken, delegation) { config ->
+            postJsonOAuth(
+                "browse", config.context,
+                browseBodyFor(config.context, browseId, params, config.delegation),
+                bearerToken, config.delegation,
+            )
+        }
         return YoutubeiParsers.parsePlaylist(root, browseId)
     }
 
@@ -881,13 +965,108 @@ class YoutubeiClient(
         browseId: String,
         bearerToken: String,
         params: String? = null,
+        delegation: BrowseDelegation? = null,
     ): List<Section> {
-        val root = postJsonOAuth(
-            "browse", YoutubeiContexts.ANDROID_MUSIC,
-            browseBodyFor(YoutubeiContexts.ANDROID_MUSIC, browseId, params),
-            bearerToken,
-        )
+        val root = browseOAuth(browseId, bearerToken, delegation) { config ->
+            postJsonOAuth(
+                "browse", config.context,
+                browseBodyFor(config.context, browseId, params, config.delegation),
+                bearerToken, config.delegation,
+            )
+        }
         return YoutubeiParsers.parseSections(root)
+    }
+
+    // ------------------------------------------------------------------
+    // The signed-in browse cascade (0.8.2)
+    //
+    // One presentation = one (context, delegation) pair. The order is
+    // the hunt's ranked hypotheses: the shipped pairing first (now
+    // with the brand delegation the owner was missing), then the same
+    // client without delegation, then WEB_REMIX — the presentation
+    // ytmusicapi proves for Bearer account calls — with and without
+    // delegation. The first presentation the server ACCEPTS is
+    // remembered and tried first next time; if it later refuses, the
+    // cascade re-probes the rest and re-caches. When every
+    // presentation fails, the caller sees the FIRST refusal if any
+    // attempt was refused (a refusal is information; a transport
+    // failure is weather), else the first failure.
+    // ------------------------------------------------------------------
+
+    /** One cascade presentation: a context, with or without delegation. */
+    private data class BrowseConfig(
+        val context: YoutubeiContext,
+        val delegation: BrowseDelegation?,
+    ) {
+        /** Log-safe label: client name plus the delegation marker. */
+        val label: String
+            get() = context.clientName +
+                if (delegation?.pageId != null) "+brand" else ""
+    }
+
+    private val browseWinnerLock = Any()
+
+    @Volatile
+    private var browseWinner: BrowseConfig? = null
+
+    private fun orderedBrowseConfigs(delegation: BrowseDelegation?): List<BrowseConfig> {
+        val canonical = listOf(
+            BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation),
+            BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, null),
+            BrowseConfig(YoutubeiContexts.WEB_REMIX, delegation),
+            BrowseConfig(YoutubeiContexts.WEB_REMIX, null),
+        ).distinct()
+        val winner = browseWinner ?: return canonical
+        if (winner !in canonical) return canonical
+        return listOf(winner) + (canonical - winner)
+    }
+
+    /**
+     * Runs [call] across the browse cascade for [surface] (a browse
+     * id — an identifier, never user data) until one presentation is
+     * accepted, logging every attempt through [browseAttemptLog].
+     */
+    private fun browseOAuth(
+        surface: String,
+        bearerToken: String,
+        delegation: BrowseDelegation?,
+        call: (BrowseConfig) -> JsonObject,
+    ): JsonObject {
+        var firstRejection: ContextRejected? = null
+        var firstFailure: OffleashException? = null
+        for (config in orderedBrowseConfigs(delegation)) {
+            try {
+                val root = call(config)
+                synchronized(browseWinnerLock) { browseWinner = config }
+                logBrowseAttempt(surface, config, "ok")
+                return root
+            } catch (e: ContextRejected) {
+                logBrowseAttempt(
+                    surface, config,
+                    "refused http=${e.httpStatus ?: "?"} " +
+                        "status=${e.serverStatus ?: "?"} reason=${e.serverReason ?: "?"}",
+                )
+                if (firstRejection == null) firstRejection = e
+                if (firstFailure == null) firstFailure = e
+            } catch (e: OffleashException) {
+                logBrowseAttempt(
+                    surface, config, "failed ${e.javaClass.simpleName}",
+                )
+                if (firstFailure == null) firstFailure = e
+            }
+        }
+        throw firstRejection ?: firstFailure
+            ?: ParseFailure("browse cascade for '$surface' made no attempt")
+    }
+
+    /** Diagnostics hook dispatch — a broken hook never breaks a load. */
+    private fun logBrowseAttempt(surface: String, config: BrowseConfig, outcome: String) {
+        val hook = browseAttemptLog ?: return
+        try {
+            hook("surface=$surface config=${config.label} outcome=$outcome")
+        } catch (t: Throwable) {
+            // Deliberately swallowed: diagnostics are a passenger.
+        }
     }
 
     /** A browse body on an explicit context (no visitor injection, ever). */
@@ -895,8 +1074,9 @@ class YoutubeiClient(
         context: YoutubeiContext,
         browseId: String,
         params: String?,
+        delegation: BrowseDelegation? = null,
     ): JsonObject = buildJsonObject {
-        put("context", context.toJson())
+        put("context", context.toJson(delegation))
         put("browseId", browseId)
         params?.let { put("params", it) }
     }
@@ -906,8 +1086,9 @@ class YoutubeiClient(
         context: YoutubeiContext,
         body: JsonObject,
         bearerToken: String,
+        delegation: BrowseDelegation? = null,
     ): JsonObject {
-        val raw = postRawOAuth(path, context, body, bearerToken)
+        val raw = postRawOAuth(path, context, body, bearerToken, delegation)
         return parseJsonObject(raw, path)
     }
 
@@ -947,7 +1128,11 @@ class YoutubeiClient(
             )
         } ?: throw ParseFailure("response for '$path' was not a JSON object")
         root.obj("error")?.let { error ->
-            throw ContextRejected(error.str("message") ?: "unknown server error")
+            throw ContextRejected(
+                error.str("message") ?: "unknown server error",
+                serverStatus = error.str("status"),
+                serverReason = error.arr("errors")?.firstOrNull().asObj().str("reason"),
+            )
         }
         return root
     }
@@ -955,15 +1140,24 @@ class YoutubeiClient(
     /**
      * [postRaw]'s twin for the token road: identical failure mapping,
      * but the headers are the context's own plus the Bearer token,
-     * and no session visitor data is ever injected.
+     * and no session visitor data is ever injected. With a
+     * [delegation], the identity headers ride along
+     * (`X-Goog-AuthUser`, plus `X-Goog-PageId` when a brand page id
+     * is known) — the headers YouTube's own clients send to act as a
+     * chosen identity (0.8.2).
      */
     private fun postRawOAuth(
         path: String,
         context: YoutubeiContext,
         body: JsonObject,
         bearerToken: String,
+        delegation: BrowseDelegation? = null,
     ): String {
-        val headers = context.headers() + ("Authorization" to "Bearer $bearerToken")
+        var headers = context.headers() + ("Authorization" to "Bearer $bearerToken")
+        if (delegation != null) {
+            headers = headers + ("X-Goog-AuthUser" to delegation.authUser.toString())
+            delegation.pageId?.let { headers = headers + ("X-Goog-PageId" to it) }
+        }
         val response = try {
             transport.post(context.endpointUrl(path), headers, body.toString())
         } catch (e: OffleashException) {
@@ -972,10 +1166,13 @@ class YoutubeiClient(
             throw NetworkFailure(e.message ?: e.javaClass.simpleName)
         }
         if (response.status != 200) {
-            val serverMessage = extractErrorMessage(response.body)
-                ?: "HTTP ${response.status}"
+            val serverError = parseServerError(response.body)
+            val serverMessage = serverError.message ?: "HTTP ${response.status}"
             if (response.status in 400..499) {
-                throw ContextRejected(serverMessage)
+                throw ContextRejected(
+                    serverMessage, response.status,
+                    serverError.status, serverError.reason,
+                )
             }
             throw NetworkFailure(serverMessage)
         }
@@ -1036,10 +1233,13 @@ class YoutubeiClient(
             throw NetworkFailure(e.message ?: e.javaClass.simpleName)
         }
         if (response.status != 200) {
-            val serverMessage = extractErrorMessage(response.body)
-                ?: "HTTP ${response.status}"
+            val serverError = parseServerError(response.body)
+            val serverMessage = serverError.message ?: "HTTP ${response.status}"
             if (response.status in 400..499) {
-                throw ContextRejected(serverMessage)
+                throw ContextRejected(
+                    serverMessage, response.status,
+                    serverError.status, serverError.reason,
+                )
             }
             throw NetworkFailure(serverMessage)
         }
@@ -1087,6 +1287,36 @@ class YoutubeiClient(
         // stack; the caller still owes the named HTTP failure, not
         // an escaping Error (round 2).
         null
+    }
+
+    /** Google's structured error fields, as parsed from a refusal body. */
+    private data class ServerError(
+        val message: String?,
+        val status: String?,
+        val reason: String?,
+    )
+
+    /**
+     * Parses a youtubei error body into its structured fields
+     * (0.8.2): `error.message`, `error.status` (UNAUTHENTICATED,
+     * PERMISSION_DENIED, FAILED_PRECONDITION, …) and
+     * `error.errors[0].reason` (authError, failedPrecondition, …).
+     * Total like [extractErrorMessage]: any junk body yields all-null
+     * fields, never a throw. Only enum-shaped server values are read;
+     * the message is the server's own refusal text, used exactly as
+     * [extractErrorMessage]'s result always was.
+     */
+    private fun parseServerError(body: String): ServerError = try {
+        val error = Json.parseToJsonElement(body).asObj().obj("error")
+        ServerError(
+            message = error.str("message"),
+            status = error.str("status"),
+            reason = error.arr("errors")?.firstOrNull().asObj().str("reason"),
+        )
+    } catch (e: Exception) {
+        ServerError(null, null, null)
+    } catch (t: Throwable) {
+        ServerError(null, null, null)
     }
 
     private companion object {

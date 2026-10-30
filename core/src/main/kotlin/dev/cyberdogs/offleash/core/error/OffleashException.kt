@@ -7,8 +7,25 @@ package dev.cyberdogs.offleash.core.error
  */
 sealed class OffleashException(message: String) : Exception(message)
 
-/** HTTP 4xx from youtubei with an error body — the API likely changed under us. */
-class ContextRejected(val serverMessage: String) : OffleashException(
+/**
+ * HTTP 4xx from youtubei with an error body — the API likely changed
+ * under us.
+ *
+ * The refusal is self-naming (0.8.2 browse hunt): besides the server's
+ * message it carries the HTTP status and Google's structured error
+ * fields (`error.status` such as UNAUTHENTICATED / PERMISSION_DENIED /
+ * FAILED_PRECONDITION, and `error.errors[0].reason` such as authError),
+ * parsed from the refusal body. All three are null when the body did
+ * not supply them (a 200 carrying an `error` object has no HTTP
+ * status). They hold only server-assigned enum/status values — never
+ * credentials — so they are safe to show in diagnostics.
+ */
+class ContextRejected(
+    val serverMessage: String,
+    val httpStatus: Int? = null,
+    val serverStatus: String? = null,
+    val serverReason: String? = null,
+) : OffleashException(
     "YouTube refused the app's request — the API has likely changed. (server said: $serverMessage)"
 )
 

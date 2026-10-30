@@ -1,5 +1,6 @@
 package dev.cyberdogs.offleash.data
 
+import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.DeviceCodeResult
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
@@ -939,6 +940,18 @@ class GoogleSessionManager(
                 "the account name couldn't be read yet — adopting unnamed"
             },
         )
+        // Brand capture (0.8.2): userinfo names only the bare
+        // Google identity; the account's brand channel — where the
+        // owner's playlists live — comes from the account menu.
+        // Best-effort by design: a miss stores no delegation, and
+        // signed-in browse runs its undelegated presentations. The
+        // epoch is re-checked after this second fetch by the locked
+        // save below, exactly as after the first.
+        val brand = if (lookup is IdentityLookup.Found) {
+            fetchBrandContext(tokens.accessToken)
+        } else {
+            null
+        }
         val now = nowMs()
         val toStore = StoredGoogleSession(
             accessToken = tokens.accessToken,
@@ -952,6 +965,8 @@ class GoogleSessionManager(
             identityName = selected?.name?.takeIf { it.isNotBlank() },
             identityEmail = selected?.email?.takeIf { it.isNotBlank() },
             avatarUrl = selected?.avatarUrl,
+            identityPageId = brand?.pageId,
+            identityAuthUser = brand?.authUser,
             grantedAtEpochMs = now,
             lastValidatedEpochMs = if (selected != null) now else 0L,
         )
@@ -1034,6 +1049,22 @@ class GoogleSessionManager(
      *
      * BLOCKING: call from an IO dispatcher.
      */
+    /**
+     * The stored brand delegation for signed-in browse (0.8.2), or
+     * null when signed out or when the account listed no brand
+     * identity at adoption. Cheap and non-blocking — a plain read
+     * of the standing session, no refresh: browse surfaces call it
+     * beside [currentBearer] on their IO dispatchers.
+     */
+    fun browseDelegation(): BrowseDelegation? {
+        val session = stored ?: return null
+        val pageId = session.identityPageId ?: return null
+        return BrowseDelegation(
+            authUser = session.identityAuthUser ?: 0,
+            pageId = pageId,
+        )
+    }
+
     fun currentBearer(): String? {
         val session = stored ?: return null
         if (session.accessTokenExpiresAtEpochMs - nowMs() > REFRESH_SKEW_MS) {
@@ -1209,6 +1240,47 @@ class GoogleSessionManager(
     }
 
     /**
+     * Best-effort brand capture (0.8.2): reads the account-menu
+     * identity list and returns the delegation signed-in browse
+     * should run as — the SELECTED identity when it carries a page
+     * id, else the first identity that does. Null when the menu
+     * can't be read or no identity carries a page id. Never throws
+     * (cancellation excepted) and never fails a sign-in: presence
+     * only is logged, never the channel's name or page id.
+     */
+    private suspend fun fetchBrandContext(bearer: String): BrowseDelegation? {
+        val lookup = try {
+            withContext(Dispatchers.IO) { client.accountIdentitiesOAuth(bearer) }
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            signInDiagnostics.log(
+                "identity",
+                "the account menu check failed unexpectedly " +
+                    "(${t.javaClass.simpleName}) — continuing without brand context",
+            )
+            return null
+        }
+        val identities = (lookup as? IdentityLookup.Found)?.identities.orEmpty()
+        val chosen = identities.firstOrNull { it.isSelected && it.pageId != null }
+            ?: identities.firstOrNull { it.pageId != null }
+        signInDiagnostics.log(
+            "identity",
+            when {
+                chosen != null ->
+                    "brand context captured — browse will run as the account's brand channel"
+                identities.isNotEmpty() ->
+                    "the account lists ${identities.size} identities, none a brand channel " +
+                        "— browse runs undelegated"
+                else ->
+                    "no brand context from the account menu — browse runs undelegated"
+            },
+        )
+        return chosen?.let {
+            BrowseDelegation(authUser = it.authUser, pageId = it.pageId)
+        }
+    }
+
+    /**
      * Re-reads the account identity for the stored session — the
      * token road's [SessionManager.validateNow]: healthy answers
      * refresh the stored name/avatar; a rejection ends the session
@@ -1242,6 +1314,12 @@ class GoogleSessionManager(
         when (lookup) {
             is IdentityLookup.Found -> {
                 val identity = lookup.identities.firstOrNull() ?: return
+                // Brand re-capture (0.8.2): the same best-effort
+                // account-menu read adoption performs, so a session
+                // adopted before brand capture existed (or whose
+                // channel set changed) gains its delegation at the
+                // next validation. A miss keeps the stored one.
+                val brand = fetchBrandContext(bearer)
                 synchronized(lock) {
                     if (epochAtStart != flowEpoch) return
                     val current = stored ?: return
@@ -1259,6 +1337,8 @@ class GoogleSessionManager(
                             ?: current.identityEmail,
                         avatarUrl = identity.avatarUrl?.takeIf { it.isNotBlank() }
                             ?: current.avatarUrl,
+                        identityPageId = brand?.pageId ?: current.identityPageId,
+                        identityAuthUser = brand?.authUser ?: current.identityAuthUser,
                         lastValidatedEpochMs = nowMs(),
                     )
                     try {

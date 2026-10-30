@@ -33,6 +33,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.core.auth.AuthSession
+import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.model.AlbumPage
 import dev.cyberdogs.offleash.core.model.ArtistPage
@@ -375,6 +376,11 @@ class PlaylistViewModel(
      * Songs take.
      */
     private val bearerProvider: () -> String? = { null },
+    /**
+     * The stored brand delegation (0.8.2), read beside the bearer:
+     * account playlists (Liked included) live on the brand channel.
+     */
+    private val delegationProvider: () -> BrowseDelegation? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<PlaylistPage>>(UiState.Loading)
@@ -414,7 +420,28 @@ class PlaylistViewModel(
             val result = try {
                 val bearer = bearerProvider()
                 val page = if (bearer != null) {
-                    client.playlistOAuth(bearer, browseId, params)
+                    try {
+                        client.playlistOAuth(
+                            bearer, browseId, params, delegationProvider(),
+                        )
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        // Degradation (0.8.2): the token road
+                        // refused — the cookie/anonymous road still
+                        // serves PUBLIC playlists, so a refused
+                        // account must not blank a page the public
+                        // can open. One dishonest shape is guarded:
+                        // the anonymous Liked page (VLLM) is an
+                        // empty shell (200, zero tracks), so an
+                        // empty VLLM fallback rethrows the token
+                        // road's refusal instead of presenting a
+                        // fake-empty Liked list.
+                        val fallback = client.playlist(
+                            browseId, params, auth = authProvider(),
+                        )
+                        if (browseId == "VLLM" && fallback.tracks.isEmpty()) throw e
+                        fallback
+                    }
                 } else {
                     client.playlist(browseId, params, auth = authProvider())
                 }
@@ -454,7 +481,7 @@ class PlaylistViewModel(
             try {
                 val bearer = bearerProvider()
                 val chunk = if (bearer != null) {
-                    client.playlistContinuationOAuth(bearer, token)
+                    client.playlistContinuationOAuth(bearer, token, delegationProvider())
                 } else {
                     client.playlistContinuation(token, auth = authProvider())
                 }
@@ -524,6 +551,7 @@ fun PlaylistScreen(
             params,
             authProvider = { container.sessionManager.currentAuthSession() },
             bearerProvider = { container.currentBearerToken() },
+            delegationProvider = { container.currentBrowseDelegation() },
         )
     }
     val state by viewModel.state.collectAsState()

@@ -26,6 +26,16 @@ data class StoredGoogleSession(
     val identityName: String? = null,
     val identityEmail: String? = null,
     val avatarUrl: String? = null,
+    /**
+     * Brand-channel delegation for signed-in browse (0.8.2): the
+     * page id + authUser index of the account identity browse runs
+     * as, captured from the account menu at adoption. Null when the
+     * account listed no brand identity (or predates 0.8.2 — the
+     * defaults keep older sealed records decoding exactly as
+     * before); browse then runs undelegated.
+     */
+    val identityPageId: String? = null,
+    val identityAuthUser: Int? = null,
     val grantedAtEpochMs: Long = 0L,
     val lastValidatedEpochMs: Long = 0L,
 )
