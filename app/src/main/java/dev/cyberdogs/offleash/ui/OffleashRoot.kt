@@ -67,6 +67,7 @@ import androidx.navigation.navArgument
 import dev.cyberdogs.offleash.AppContainer
 import kotlinx.coroutines.delay
 import dev.cyberdogs.offleash.playback.showLoadingIndicator
+import dev.cyberdogs.offleash.playback.HalloweenSplash
 import dev.cyberdogs.offleash.playback.SplashGate
 import dev.cyberdogs.offleash.ui.about.AboutScreen
 import dev.cyberdogs.offleash.ui.about.PlaybackDiagnosticsScreen
@@ -115,6 +116,12 @@ fun OffleashRoot(container: AppContainer) {
     // shown it or played anything — the gate's process-lifetime
     // flags decide, this state only drives the exit.
     var splashDismissed by remember { mutableStateOf(false) }
+    // Which splash: the Halloween window (device-local
+    // Oct 30 – Nov 1) swaps in the Moon Howl variant; the
+    // standard splash shows on every other date. Read once,
+    // here at launch; SplashGate still decides whether any
+    // splash shows at all.
+    val halloweenWindow = remember { HalloweenSplash.isActiveToday() }
     val showSplash = !splashDismissed && SplashGate.shouldShow(
         playerHasMedia = container.player.currentMediaItem != null,
     )
@@ -450,7 +457,11 @@ fun OffleashRoot(container: AppContainer) {
             visible = showSplash,
             exit = fadeOut(tween(SPLASH_EXIT_MS)),
         ) {
-            SplashScreen(onSkip = { splashDismissed = true })
+            if (halloweenWindow) {
+                HalloweenSplashScreen(onSkip = { splashDismissed = true })
+            } else {
+                SplashScreen(onSkip = { splashDismissed = true })
+            }
         }
 
         if (playerExpanded) {
