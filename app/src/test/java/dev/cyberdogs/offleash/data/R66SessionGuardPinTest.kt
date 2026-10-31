@@ -17,6 +17,7 @@ import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Round 66 pins (adversarial lane, charter 2): the
@@ -813,4 +814,132 @@ class R66SessionGuardPinTest {
             form.entered.await(4, TimeUnit.SECONDS),
         )
     }
+
+    /** A pending store holding one live resumed grant. */
+    private fun grantStore(intervalSeconds: Long): GooglePendingGrantStore {
+        val store = GooglePendingGrantStore(
+            InMemorySecretStorage(),
+            testSecretBox(),
+        )
+        val now = System.currentTimeMillis()
+        store.save(
+            StoredPendingGrant(
+                deviceCode = "dc-resumed",
+                userCode = "RESUMED-1",
+                verificationUrl = "https://www.google.com/device",
+                issuedAtEpochMs = now - 60_000L,
+                expiresAtEpochMs = now + 1_700_000L,
+                intervalSeconds = intervalSeconds,
+            ),
+        )
+        return store
+    }
+
+    // -- Round 73 neighbours on the round-72 wire pins --------
+    // Two more interleavings the twelve shipped pins did not
+    // construct. (a) A sign-out landing in the SECOND poll's
+    // publish / re-park gap (round 72 pinned the cancel there
+    // and the sign-out only in flight). (b) A cancel landing
+    // while a restore-resume is itself in flight: the resumed
+    // loop has launched, captured its grant in a local, and is
+    // inside its FIRST remaining-life computation (gated here
+    // through the injected clock's first off-thread read)
+    // when the cancel lands — before its first park and
+    // before any wire poll. The loop already holds the grant,
+    // so the cancel's grant wipe cannot answer for it; only
+    // the job cancel can. Both pass on the shipped code and
+    // are pinned so the legs cannot silently drop.
+    @Test
+    fun signOutInTheSecondPollPublishGapStillStopsPolling() {
+        val form = SecondPollTransport()
+        val pendingStore = grantStore(1L)
+        val tokenStore = GoogleTokenStore(
+            InMemorySecretStorage(),
+            testSecretBox(),
+        )
+        val manager = GoogleSessionManager(
+            store = tokenStore,
+            auth = GoogleDeviceAuth(form),
+            client = YoutubeiClient(UserinfoTransport()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            pendingGrantStore = pendingStore,
+            signInDiagnostics = SignInDiagnostics(),
+        )
+        assertTrue(form.secondPoll.await(10, TimeUnit.SECONDS))
+        Thread.sleep(300)
+        val signOutDone = CountDownLatch(1)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        scope.launch {
+            runBlocking { manager.signOut() }
+            signOutDone.countDown()
+        }
+        assertTrue(signOutDone.await(10, TimeUnit.SECONDS))
+        Thread.sleep(3_500)
+        assertEquals(2, form.polls.size)
+        assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
+        assertNull(pendingStore.load())
+        assertFalse(manager.uiState.value.signedIn)
+    }
+
+    @Test
+    fun cancelDuringRestoreResumeBeforeTheFirstPollStillStopsPolling() {
+        val form = PollCountingTransport()
+        val pendingStore = grantStore(1L)
+        val tokenStore = GoogleTokenStore(
+            InMemorySecretStorage(),
+            testSecretBox(),
+        )
+        // The resume itself in flight: the restored poll loop
+        // has launched and captured its grant, and is inside
+        // its FIRST remaining-life computation (the first
+        // nowMs call made off the constructing thread) when
+        // the cancel lands — before its first park and before
+        // any wire poll. The loop already holds the grant in a
+        // local, so cancel's grant wipe cannot answer for it;
+        // only the job cancel can.
+        val testThread = Thread.currentThread()
+        val loopEntered = CountDownLatch(1)
+        val loopRelease = CountDownLatch(1)
+        val gateUsed = AtomicBoolean(false)
+        val clock: () -> Long = {
+            if (Thread.currentThread() !== testThread &&
+                gateUsed.compareAndSet(false, true)
+            ) {
+                loopEntered.countDown()
+                loopRelease.await(10, TimeUnit.SECONDS)
+            }
+            System.currentTimeMillis()
+        }
+        val manager = GoogleSessionManager(
+            store = tokenStore,
+            auth = GoogleDeviceAuth(form),
+            client = YoutubeiClient(UserinfoTransport()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            pendingGrantStore = pendingStore,
+            signInDiagnostics = SignInDiagnostics(),
+            nowMs = clock,
+        )
+        assertTrue(
+            "the resumed loop must be in flight (inside its " +
+                "first clock call) before the cancel",
+            loopEntered.await(10, TimeUnit.SECONDS),
+        )
+        assertTrue(
+            "the phase stands at AwaitingApproval — the resume " +
+                "published before launching the loop",
+            manager.phase.value is GoogleSignInPhase.AwaitingApproval,
+        )
+        manager.cancelSignIn()
+        loopRelease.countDown()
+        Thread.sleep(3_500)
+        assertEquals(
+            "no poll may reach the wire after a cancel that " +
+                "lands while the restore-resume is in flight",
+            0,
+            form.polls.size,
+        )
+        assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
+        assertNull(pendingStore.load())
+    }
+
 }

@@ -818,6 +818,73 @@ class R66SweepContractTest {
                     "                    },",
             ),
         )
+        // Round 73: the comment-stripped view PRESERVES string
+        // contents, so the whole composition carried inside a
+        // raw string in the Found branch satisfied every
+        // assert above while the live legs stood swapped —
+        // GREEN across the full suite. The claims are therefore
+        // re-asserted on the CODE-ONLY view (comments stripped,
+        // string/char contents blanked, template code kept —
+        // the scanner of playback/R70SweepContractTest.kt),
+        // where a string-carried copy's text blanks to spaces
+        // and only the live composition's structure stands,
+        // and on the TEMPLATE-BLANKED view (data's round-71
+        // scanner: `${}` payloads blanked too), where a
+        // template-carried copy vanishes as well. On these
+        // views the attribution strings stand in blanked form:
+        // their literal contents are spaces, the template
+        // `${current.source}` is preserved (code-only) or
+        // blanked (template-blanked).
+        val codeFound = stripCommentsAndStrings(player)
+            .substringAfter("is LyricsUiState.Found")
+        assertTrue(
+            "in code-only form, the Found branch must render " +
+                "both attributions with no trailing period",
+            codeFound.contains(
+                "\"" + " ".repeat(16) + "\${current.source}\"",
+            ) &&
+                codeFound.contains(
+                    "\"" + " ".repeat(9) + "\${current.source}\"",
+                ) &&
+                !codeFound.contains(
+                    "\"" + " ".repeat(16) + "\${current.source} \"",
+                ) &&
+                !codeFound.contains(
+                    "\"" + " ".repeat(9) + "\${current.source} \"",
+                ),
+        )
+        assertTrue(
+            "in code-only form, the two Found legs must stand " +
+                "in THIS order, as one exact composition — a " +
+                "copy carried by a string is not the panel " +
+                "rendering",
+            codeFound.contains(
+                "text = if (current.synced) {\n" +
+                    "                        \"" + " ".repeat(16) +
+                    "\${current.source}\"\n" +
+                    "                    } else {\n" +
+                    "                        \"" + " ".repeat(9) +
+                    "\${current.source}\"\n" +
+                    "                    },",
+            ),
+        )
+        val templateFound = stripCommentsStringsAndTemplates(player)
+            .substringAfter("is LyricsUiState.Found")
+        assertTrue(
+            "in template-blanked form, the two Found legs " +
+                "must stand in THIS order, as one exact " +
+                "composition — a copy carried by a template " +
+                "is not the panel rendering",
+            templateFound.contains(
+                "text = if (current.synced) {\n" +
+                    "                        \"" + " ".repeat(16) +
+                    "\${" + " ".repeat(14) + "}\"\n" +
+                    "                    } else {\n" +
+                    "                        \"" + " ".repeat(9) +
+                    "\${" + " ".repeat(14) + "}\"\n" +
+                    "                    },",
+            ),
+        )
         // The premise, in core: exactly the two reason shapes.
         val repoRoot = File(locateAppJavaRoot(), "../../../..").canonicalFile
         val client = File(
@@ -836,6 +903,129 @@ class R66SweepContractTest {
                 "LyricsResult.Unavailable(\"Lyrics are unavailable for this track.\")",
             ),
         )
+    }
+
+    // -- the CODE-ONLY + TEMPLATE-BLANKED views (round 73,
+    // ported from playback/R70SweepContractTest.kt and
+    // data/R66SweepContractTest.kt): comments stripped and
+    // string/char contents blanked; the code-only view keeps
+    // `${}` template code verbatim, the template-blanked view
+    // blanks a template frame's payload too. ----------------
+
+    private fun stripCommentsAndStrings(text: String): String =
+        scanViews(text, blankTemplates = false)
+
+    private fun stripCommentsStringsAndTemplates(text: String): String =
+        scanViews(text, blankTemplates = true)
+
+    private fun scanViews(text: String, blankTemplates: Boolean): String {
+        val out = StringBuilder()
+        class Frame(val kind: Int, var templateDepth: Int = -1, val blank: Boolean = false)
+        val stack = mutableListOf(Frame(0))
+        fun top() = stack[stack.size - 1]
+        var i = 0
+        val n = text.length
+        while (i < n) {
+            val c = text[i]
+            val next = if (i + 1 < n) text[i + 1] else ' '
+            when (top().kind) {
+                1 -> when {
+                    c == '\\' && i + 1 < n -> {
+                        out.append(' '); out.append(' '); i += 2
+                    }
+                    c == '"' -> {
+                        stack.removeAt(stack.size - 1)
+                        out.append(c); i++
+                    }
+                    c == '$' && next == '{' -> {
+                        stack.add(Frame(0, 0, blank = blankTemplates))
+                        out.append(c); out.append(next); i += 2
+                    }
+                    else -> {
+                        out.append(if (c == '\n') '\n' else ' '); i++
+                    }
+                }
+                2 -> when {
+                    c == '"' && i + 2 < n &&
+                        text[i + 1] == '"' && text[i + 2] == '"' -> {
+                        stack.removeAt(stack.size - 1)
+                        out.append("\"\"\""); i += 3
+                    }
+                    c == '$' && next == '{' -> {
+                        stack.add(Frame(0, 0, blank = blankTemplates))
+                        out.append(c); out.append(next); i += 2
+                    }
+                    else -> {
+                        out.append(if (c == '\n') '\n' else ' '); i++
+                    }
+                }
+                3 -> when {
+                    c == '\\' && i + 1 < n -> {
+                        out.append(' '); out.append(' '); i += 2
+                    }
+                    else -> {
+                        if (c == '\'') {
+                            stack.removeAt(stack.size - 1)
+                            out.append(c)
+                        } else {
+                            out.append(' ')
+                        }
+                        i++
+                    }
+                }
+                else -> when {
+                    c == '/' && next == '/' -> {
+                        out.append(' '); i += 2
+                        while (i < n && text[i] != '\n') i++
+                    }
+                    c == '/' && next == '*' -> {
+                        out.append(' '); i += 2
+                        var depth = 1
+                        while (i < n && depth > 0) {
+                            if (text[i] == '/' && i + 1 < n && text[i + 1] == '*') {
+                                depth++; i += 2
+                            } else if (text[i] == '*' && i + 1 < n && text[i + 1] == '/') {
+                                depth--; i += 2
+                            } else {
+                                if (text[i] == '\n') out.append('\n')
+                                i++
+                            }
+                        }
+                    }
+                    c == '"' && i + 2 < n &&
+                        text[i + 1] == '"' && text[i + 2] == '"' -> {
+                        stack.add(Frame(2))
+                        out.append("\"\"\""); i += 3
+                    }
+                    c == '"' -> {
+                        stack.add(Frame(1))
+                        out.append(c); i++
+                    }
+                    c == '\'' -> {
+                        stack.add(Frame(3))
+                        out.append(c); i++
+                    }
+                    c == '{' && top().templateDepth >= 0 -> {
+                        top().templateDepth++
+                        out.append(c); i++
+                    }
+                    c == '}' && top().templateDepth >= 0 -> {
+                        if (top().templateDepth == 0) {
+                            stack.removeAt(stack.size - 1)
+                        } else {
+                            top().templateDepth--
+                        }
+                        out.append(c); i++
+                    }
+                    else -> {
+                        out.append(
+                            if (top().blank && c != '\n') ' ' else c,
+                        ); i++
+                    }
+                }
+            }
+        }
+        return out.toString()
     }
 
 }

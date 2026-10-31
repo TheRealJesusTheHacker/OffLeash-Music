@@ -123,6 +123,66 @@ class R70SweepContractTest {
             !body.contains("val autoplayJob") &&
                 !body.contains("var autoplayJob"),
         )
+        // Round 73: two more respells kept the block verbatim
+        // and ran GREEN across the full suite against the
+        // round-72 form. (a) The code-only view PRESERVES
+        // template code, so the whole block carried inside a
+        // raw string's never-evaluated `${ if (false) { … } }`
+        // template satisfied the raw AND code assertions while
+        // the live cancel was deleted — the block and its
+        // count are therefore re-asserted on the
+        // TEMPLATE-BLANKED view (the data pins' round-71
+        // scanner: `${}` payloads blanked too), where a
+        // template-carried copy vanishes. (b) The shadow ban
+        // named only the `val autoplayJob` / `var autoplayJob`
+        // spellings: a destructured `var (autoplayJob, …)`
+        // local and a backticked `var `autoplayJob`` local
+        // both shadow the field without either spelling (a
+        // lambda parameter cannot shadow it here — the block
+        // assigns the name, and a lambda parameter is a val;
+        // compiler-proven). The shipped slice names the field
+        // exactly twice — the block's two lines — so the name
+        // is COUNTED on every view: any local declaration of
+        // it, in any spelling, adds an occurrence.
+        val templateBody = stripCommentsStringsAndTemplates(source)
+            .substringAfter("private fun resetAutoplayChain()")
+            .substringBefore("\n    fun playTracks(")
+        assertTrue(
+            "the reset body must stand as its exact shipped " +
+                "block in template-blanked code — a copy carried " +
+                "by a string template is not the reset doing " +
+                "anything",
+            templateBody.contains(
+                "        autoplayJob?.cancel()\n" +
+                    "        autoplayJob = null\n" +
+                    "        autoplayTrackIds.clear()\n" +
+                    "        consecutiveAutoplayFailures = 0\n",
+            ),
+        )
+        assertEquals(
+            "the template-blanked slice must hold exactly one " +
+                "autoplayJob?.cancel()",
+            1,
+            occurrences(templateBody, "autoplayJob?.cancel()"),
+        )
+        assertEquals(
+            "the slice must name autoplayJob exactly twice " +
+                "(the block's two lines) — any shadowing local " +
+                "adds a third naming",
+            2,
+            occurrences(body, "autoplayJob"),
+        )
+        assertEquals(
+            "the code slice must name autoplayJob exactly twice",
+            2,
+            occurrences(codeBody, "autoplayJob"),
+        )
+        assertEquals(
+            "the template-blanked slice must name autoplayJob " +
+                "exactly twice",
+            2,
+            occurrences(templateBody, "autoplayJob"),
+        )
     }
 
     @Test
@@ -205,6 +265,56 @@ class R70SweepContractTest {
                 "while the superseded resolve runs on",
             !body.contains("val resolveJob") &&
                 !body.contains("var resolveJob"),
+        )
+        // Round 73: the round-72 form fell to the same two
+        // respell classes as the reset pin above — the exact
+        // adjacency carried inside a raw string's
+        // never-evaluated template (the code-only view
+        // preserves template code), and a backticked
+        // `var `resolveJob`` local shadowing the field
+        // without either banned spelling. The adjacency and
+        // its count are re-asserted on the TEMPLATE-BLANKED
+        // view, and the field's name is counted on every
+        // view: the shipped slice names resolveJob exactly
+        // three times (the cancel, the relaunch assignment,
+        // and the completion handler's identity check), so
+        // any shadowing local adds a fourth naming.
+        val templateBody = stripCommentsStringsAndTemplates(source)
+            .substringAfter("private fun resolveAndPlay(")
+            .substringBefore("\n    private fun handToPlayer(")
+        assertTrue(
+            "the cancel must stand directly before the " +
+                "relaunch as one exact adjacency in " +
+                "template-blanked code — a copy carried by a " +
+                "string template supersedes nothing",
+            templateBody.contains(
+                "        resolveJob?.cancel()\n" +
+                    "        resolveJob = scope.launch {",
+            ),
+        )
+        assertEquals(
+            "the template-blanked slice must hold exactly " +
+                "one resolveJob?.cancel()",
+            1,
+            occurrences(templateBody, "resolveJob?.cancel()"),
+        )
+        assertEquals(
+            "the slice must name resolveJob exactly three " +
+                "times — any shadowing local adds a fourth",
+            3,
+            occurrences(body, "resolveJob"),
+        )
+        assertEquals(
+            "the code slice must name resolveJob exactly " +
+                "three times",
+            3,
+            occurrences(codeBody, "resolveJob"),
+        )
+        assertEquals(
+            "the template-blanked slice must name " +
+                "resolveJob exactly three times",
+            3,
+            occurrences(templateBody, "resolveJob"),
         )
     }
 
@@ -340,6 +450,124 @@ class R70SweepContractTest {
                     }
                     else -> {
                         out.append(c); i++
+                    }
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    // -- the TEMPLATE-BLANKED view (round 73, ported from
+    // data/R66SweepContractTest.kt's round-71 scanner): the
+    // code-only scanner with one change — a `${}` template
+    // frame's contents are blanked too (structure still
+    // tracked, so the frame stack never desyncs; only the
+    // emitted text is spaces). A block that exists only as a
+    // template's payload is not code doing anything. --------
+
+    private fun stripCommentsStringsAndTemplates(text: String): String {
+        val out = StringBuilder()
+        class Frame(val kind: Int, var templateDepth: Int = -1, val blank: Boolean = false)
+        val stack = mutableListOf(Frame(0))
+        fun top() = stack[stack.size - 1]
+        var i = 0
+        val n = text.length
+        while (i < n) {
+            val c = text[i]
+            val next = if (i + 1 < n) text[i + 1] else ' '
+            when (top().kind) {
+                1 -> when {
+                    c == '\\' && i + 1 < n -> {
+                        out.append(' '); out.append(' '); i += 2
+                    }
+                    c == '"' -> {
+                        stack.removeAt(stack.size - 1)
+                        out.append(c); i++
+                    }
+                    c == '$' && next == '{' -> {
+                        stack.add(Frame(0, 0, blank = true))
+                        out.append(c); out.append(next); i += 2
+                    }
+                    else -> {
+                        out.append(if (c == '\n') '\n' else ' '); i++
+                    }
+                }
+                2 -> when {
+                    c == '"' && i + 2 < n &&
+                        text[i + 1] == '"' && text[i + 2] == '"' -> {
+                        stack.removeAt(stack.size - 1)
+                        out.append("\"\"\""); i += 3
+                    }
+                    c == '$' && next == '{' -> {
+                        stack.add(Frame(0, 0, blank = true))
+                        out.append(c); out.append(next); i += 2
+                    }
+                    else -> {
+                        out.append(if (c == '\n') '\n' else ' '); i++
+                    }
+                }
+                3 -> when {
+                    c == '\\' && i + 1 < n -> {
+                        out.append(' '); out.append(' '); i += 2
+                    }
+                    else -> {
+                        if (c == '\'') {
+                            stack.removeAt(stack.size - 1)
+                            out.append(c)
+                        } else {
+                            out.append(' ')
+                        }
+                        i++
+                    }
+                }
+                else -> when {
+                    c == '/' && next == '/' -> {
+                        out.append(' '); i += 2
+                        while (i < n && text[i] != '\n') i++
+                    }
+                    c == '/' && next == '*' -> {
+                        out.append(' '); i += 2
+                        var depth = 1
+                        while (i < n && depth > 0) {
+                            if (text[i] == '/' && i + 1 < n && text[i + 1] == '*') {
+                                depth++; i += 2
+                            } else if (text[i] == '*' && i + 1 < n && text[i + 1] == '/') {
+                                depth--; i += 2
+                            } else {
+                                if (text[i] == '\n') out.append('\n')
+                                i++
+                            }
+                        }
+                    }
+                    c == '"' && i + 2 < n &&
+                        text[i + 1] == '"' && text[i + 2] == '"' -> {
+                        stack.add(Frame(2))
+                        out.append("\"\"\""); i += 3
+                    }
+                    c == '"' -> {
+                        stack.add(Frame(1))
+                        out.append(c); i++
+                    }
+                    c == '\'' -> {
+                        stack.add(Frame(3))
+                        out.append(c); i++
+                    }
+                    c == '{' && top().templateDepth >= 0 -> {
+                        top().templateDepth++
+                        out.append(c); i++
+                    }
+                    c == '}' && top().templateDepth >= 0 -> {
+                        if (top().templateDepth == 0) {
+                            stack.removeAt(stack.size - 1)
+                        } else {
+                            top().templateDepth--
+                        }
+                        out.append(c); i++
+                    }
+                    else -> {
+                        out.append(
+                            if (top().blank && c != '\n') ' ' else c,
+                        ); i++
                     }
                 }
             }

@@ -182,4 +182,116 @@ class R10GooglePersistRaceTest {
             delay(25)
         }
     }
+
+    // -- Round 73 sibling: signOut's FIRST epoch bump -----------
+    // The pin above covers cancelSignIn's bump at this seam.
+    // signOut carries TWO bumps — one at entry, one inside its
+    // wipe lock (round 8) — and dropping the FIRST ran GREEN
+    // across the whole suite: no construction held an issuance
+    // tail inside the window between them. That window is the
+    // grant wipe itself (sealed-store IO in production): a
+    // runSignIn tail reaching its persist while signOut is
+    // parked inside the wipe is refused by the first bump
+    // alone — the wipe-lock bump has not happened yet, and the
+    // tail's own job was cancelled by the same signOut, so
+    // only the epoch stands. Without the first bump the tail
+    // seals its grant AFTER sign-out cleared, and the next
+    // startSignIn resumes a code from a signed-out manager.
+    // The construction gates signOut inside the wipe through
+    // a SecretStorage whose clear() parks, and holds the
+    // issuance tail at grant construction through the
+    // injected clock — the round-10 seam.
+    /** SecretStorage whose clear() parks until released. */
+    private class GatedStorage : SecretStorage {
+        private val inner = InMemorySecretStorage()
+        val clearEntered = CountDownLatch(1)
+        val clearRelease = CountDownLatch(1)
+        @Volatile var gateArmed = false
+
+        override fun read(): ByteArray? = inner.read()
+        override fun write(bytes: ByteArray) = inner.write(bytes)
+        override fun clear() {
+            if (gateArmed) {
+                clearEntered.countDown()
+                clearRelease.await(15, TimeUnit.SECONDS)
+            }
+            inner.clear()
+        }
+    }
+
+    @Test
+    fun signOutParkedInItsGrantWipeStillRefusesAnIssuancePersist() {
+        val tokenStore = GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
+        val gated = GatedStorage()
+        val pendingStore = GooglePendingGrantStore(gated, testSecretBox())
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val managerRef = AtomicReference<GoogleSessionManager?>(null)
+        val injected = AtomicBoolean(false)
+        val signOutParked = CountDownLatch(1)
+        val signOutDone = CountDownLatch(1)
+        // First clock read after issuance = grant construction,
+        // the seam between runSignIn's epoch capture and its
+        // persist (the round-10 seam). There, launch signOut
+        // on its own thread and hold this tail until signOut
+        // is parked inside its grant wipe — past its first
+        // epoch bump and its job cancel, before its wipe-lock
+        // bump.
+        val racingClock: () -> Long = {
+            if (injected.compareAndSet(false, true)) {
+                val m = managerRef.get()
+                if (m != null) {
+                    gated.gateArmed = true
+                    val t = Thread {
+                        runBlocking { m.signOut() }
+                        signOutDone.countDown()
+                    }
+                    t.start()
+                    if (gated.clearEntered.await(15, TimeUnit.SECONDS)) {
+                        signOutParked.countDown()
+                    }
+                }
+            }
+            System.currentTimeMillis()
+        }
+        val manager = GoogleSessionManager(
+            store = tokenStore,
+            auth = GoogleDeviceAuth(ImmediateIssueTransport()),
+            client = YoutubeiClient(UserinfoTransport()),
+            scope = scope,
+            pendingGrantStore = pendingStore,
+            signInDiagnostics = SignInDiagnostics(),
+            nowMs = racingClock,
+        )
+        managerRef.set(manager)
+        manager.startSignIn()
+        assertTrue(
+            "signOut must park inside its grant wipe while " +
+                "the issuance tail is held at grant construction",
+            signOutParked.await(15, TimeUnit.SECONDS),
+        )
+        // The tail has run on by now (the clock returned once
+        // signOut parked): give its persist its moment, then
+        // release signOut's wipe and let it finish.
+        Thread.sleep(500)
+        gated.clearRelease.countDown()
+        assertTrue(signOutDone.await(15, TimeUnit.SECONDS))
+        assertNull(
+            "no grant may stand after a sign-out that began " +
+                "before the issuance persisted — the first " +
+                "epoch bump is the only refusal the tail can " +
+                "see from inside the wipe window",
+            pendingStore.load(),
+        )
+        assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
+        // And the zombie check: a fresh startSignIn must ISSUE
+        // (phase stays non-Awaiting until issuance lands), not
+        // resume a sealed leftover. With no leftover it issues
+        // a new grant whose code then awaits — indistinguishable
+        // by phase alone, so the store read above is the pin;
+        // this step only proves the manager still functions.
+        manager.startSignIn()
+        Thread.sleep(500)
+        gated.gateArmed = false
+    }
+
 }
