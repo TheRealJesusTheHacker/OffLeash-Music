@@ -127,6 +127,28 @@ class AppContainer(app: OffleashApp) {
     private var googleSessionManagerRef: GoogleSessionManager? = null
 
     /**
+     * The same late-bound arrangement for the core client itself,
+     * for the visitor-data provider (0.8.4): the client wants the
+     * provider at construction, but the fetch the provider wraps
+     * is a method ON the client (its anonymous `sw.js_data` read,
+     * over the client's own transport). The provider delegates
+     * through this reference, assigned in the init block below,
+     * before anything can make a request.
+     */
+    @Volatile
+    private var clientRef: YoutubeiClient? = null
+
+    /**
+     * The visitor data the OAuth road binds into signed-in browse
+     * (0.8.4): fetched anonymously through the client's own
+     * transport and cached for the process lifetime — see
+     * [VisitorDataCache] for the failure discipline.
+     */
+    private val visitorDataCache: VisitorDataCache = VisitorDataCache(
+        fetcher = { clientRef?.fetchVisitorData() },
+    )
+
+    /**
      * The encrypted session store: a Keystore-sealed file in the
      * app's no-backup directory. Built before the transport so the
      * manager can be assembled as soon as the client exists.
@@ -227,6 +249,10 @@ class AppContainer(app: OffleashApp) {
         // lines carry surface, client config, and refusal class —
         // statuses only, never tokens or server text.
         browseAttemptLog = { line -> playbackDiagnostics.log("browse", line) },
+        // The visitor-data binding for the OAuth road's browse
+        // cascade (0.8.4): anonymous material, fetched and cached
+        // by [visitorDataCache] through the late-bound client ref.
+        visitorDataProvider = { visitorDataCache.get() },
     )
 
     /**
@@ -324,6 +350,7 @@ class AppContainer(app: OffleashApp) {
         // Close the wiring cycle described on [sessionManagerRef].
         sessionManagerRef = sessionManager
         googleSessionManagerRef = googleSessionManager
+        clientRef = client
         // No legacy keep-alive is enqueued (0.8.3): the WebView-era
         // session it used to validate no longer exists — a stored
         // one is discarded by the session manager at construction.

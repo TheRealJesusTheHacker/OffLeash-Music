@@ -99,6 +99,18 @@ class ManifestPlaybackContractTest {
         }
         assertTrue(
             "missing MediaSessionService action",
+            "androidx.media3.session.MediaSessionService" in actions,
+        )
+        // The near-miss string (no "3") must NOT be what the service
+        // declares (0.8.4 hunt): the library's SERVICE_INTERFACE is
+        // androidx.media3.session.MediaSessionService, and with the
+        // near-miss declared, SessionToken's type inference finds no
+        // session service and MediaController.Builder throws
+        // IllegalArgumentException — the owner's 0.8.3 diagnostics
+        // carried exactly that failure at every launch. This test
+        // previously PINNED the near-miss: it certified the defect.
+        assertFalse(
+            "the near-miss action string (missing the media3 marker) must not be declared",
             "androidx.media.session.MediaSessionService" in actions,
         )
         assertTrue(

@@ -350,6 +350,7 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/data/SessionStore.kt",
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt",
             "dev/cyberdogs/offleash/data/Stores.kt",
+            "dev/cyberdogs/offleash/data/VisitorDataCache.kt",
             "dev/cyberdogs/offleash/playback/BatteryOptimization.kt",
             "dev/cyberdogs/offleash/playback/LikeState.kt",
             "dev/cyberdogs/offleash/playback/LyricsSync.kt",

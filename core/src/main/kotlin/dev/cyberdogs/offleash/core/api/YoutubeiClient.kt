@@ -79,6 +79,26 @@ class YoutubeiClient(
      * hook failures are swallowed at the call site.
      */
     private val browseAttemptLog: ((String) -> Unit)? = null,
+    /**
+     * Supplies the session visitor data for the OAuth road (0.8.4
+     * browse hunt). Visitor data is anonymous material — the same
+     * value [fetchVisitorData] reads from `sw.js_data` with no auth
+     * — but real signed-in clients bind it into every authenticated
+     * request (`context.visitorData` + the `X-Goog-Visitor-Id`
+     * header), and the OAuth road shipped without it: the cookie
+     * road injected the session's visitor data into every body,
+     * the token road never carried any. The owner's 0.8.3 device
+     * run refused EVERY signed-in browse with HTTP 400
+     * INVALID_ARGUMENT / badRequest under both client contexts
+     * while the identical envelope answered 200 anonymously and
+     * 401 with a garbage Bearer — a post-auth request-shape
+     * verdict, not an auth verdict. The provider is supplied (and
+     * cached) by the app layer; null means visitor legs are
+     * skipped and the cascade is exactly the 0.8.2 one. A throwing
+     * provider reads as absent: diagnostics' passenger rules apply
+     * to it too.
+     */
+    private val visitorDataProvider: (() -> String?)? = null,
 ) {
 
     fun home(auth: AuthSession? = null): List<Section> =
@@ -801,12 +821,26 @@ class YoutubeiClient(
      * capture as best-effort enrichment, not a sign-in gate.
      */
     fun accountIdentitiesOAuth(bearerToken: String): IdentityLookup {
+        // The visitor binding rides here too (0.8.4): the account
+        // menu is an authenticated youtubei call of exactly the
+        // class the 0.8.3 device run refused, and brand capture is
+        // the load it carries.
+        val visitorData = currentVisitorData()
         val body = buildJsonObject {
-            put("context", YoutubeiContexts.WEB_REMIX.toJson())
+            val base = YoutubeiContexts.WEB_REMIX.toJson()
+            put(
+                "context",
+                if (visitorData != null && !base.containsKey("visitorData")) {
+                    JsonObject(base + ("visitorData" to JsonPrimitive(visitorData)))
+                } else {
+                    base
+                },
+            )
         }
         val root = try {
             postJsonOAuth(
                 "account/account_menu", YoutubeiContexts.WEB_REMIX, body, bearerToken,
+                visitorData = visitorData,
             )
         } catch (e: ContextRejected) {
             val status = e.httpStatus ?: -1
@@ -838,11 +872,13 @@ class YoutubeiClient(
         delegation: BrowseDelegation? = null,
     ): HomeFeed {
         val browseId = chip?.browseId ?: "FEmusic_home"
-        val root = browseOAuth(browseId, bearerToken, delegation) { config ->
+        val root = browseOAuth(browseId, bearerToken, delegation) { config, visitorData ->
             postJsonOAuth(
                 "browse", config.context,
-                browseBodyFor(config.context, browseId, chip?.params, config.delegation),
+                browseBodyFor(config, browseId, chip?.params, visitorData),
                 bearerToken, config.delegation,
+                shapeVisitorData(config, visitorData),
+                config.shape == AuthShape.VISITOR_API,
             )
         }
         return YoutubeiParsers.parseHome(root)
@@ -871,12 +907,16 @@ class YoutubeiClient(
         continuation: String,
         delegation: BrowseDelegation? = null,
     ): TrackContinuation {
-        val root = browseOAuth("continuation", bearerToken, delegation) { config ->
+        val root = browseOAuth("continuation", bearerToken, delegation) { config, visitorData ->
             val body = buildJsonObject {
-                put("context", config.context.toJson(config.delegation))
+                put("context", contextWithVisitor(config, visitorData))
                 put("continuation", continuation)
             }
-            postJsonOAuth("browse", config.context, body, bearerToken, config.delegation)
+            postJsonOAuth(
+                "browse", config.context, body, bearerToken, config.delegation,
+                shapeVisitorData(config, visitorData),
+                config.shape == AuthShape.VISITOR_API,
+            )
         }
         return YoutubeiParsers.parsePlaylistContinuation(root)
     }
@@ -888,11 +928,13 @@ class YoutubeiClient(
         params: String? = null,
         delegation: BrowseDelegation? = null,
     ): PlaylistPage {
-        val root = browseOAuth(browseId, bearerToken, delegation) { config ->
+        val root = browseOAuth(browseId, bearerToken, delegation) { config, visitorData ->
             postJsonOAuth(
                 "browse", config.context,
-                browseBodyFor(config.context, browseId, params, config.delegation),
+                browseBodyFor(config, browseId, params, visitorData),
                 bearerToken, config.delegation,
+                shapeVisitorData(config, visitorData),
+                config.shape == AuthShape.VISITOR_API,
             )
         }
         return YoutubeiParsers.parsePlaylist(root, browseId)
@@ -967,41 +1009,69 @@ class YoutubeiClient(
         params: String? = null,
         delegation: BrowseDelegation? = null,
     ): List<Section> {
-        val root = browseOAuth(browseId, bearerToken, delegation) { config ->
+        val root = browseOAuth(browseId, bearerToken, delegation) { config, visitorData ->
             postJsonOAuth(
                 "browse", config.context,
-                browseBodyFor(config.context, browseId, params, config.delegation),
+                browseBodyFor(config, browseId, params, visitorData),
                 bearerToken, config.delegation,
+                shapeVisitorData(config, visitorData),
+                config.shape == AuthShape.VISITOR_API,
             )
         }
         return YoutubeiParsers.parseSections(root)
     }
 
     // ------------------------------------------------------------------
-    // The signed-in browse cascade (0.8.2)
+    // The signed-in browse cascade (0.8.2; shapes added 0.8.4)
     //
-    // One presentation = one (context, delegation) pair. The order is
-    // the hunt's ranked hypotheses: the shipped pairing first (now
-    // with the brand delegation the owner was missing), then the same
-    // client without delegation, then WEB_REMIX — the presentation
-    // ytmusicapi proves for Bearer account calls — with and without
-    // delegation. The first presentation the server ACCEPTS is
-    // remembered and tried first next time; if it later refuses, the
-    // cascade re-probes the rest and re-caches. When every
+    // One presentation = one (context, delegation, shape) triple.
+    // The order is the hunts' ranked hypotheses: 0.8.2 led with the
+    // shipped pairing plus the brand delegation, then the same
+    // client without delegation, then WEB_REMIX with and without.
+    // The 0.8.3 device run refused every one of those with the same
+    // 400 INVALID_ARGUMENT, so 0.8.4 leads with the shape those
+    // legs lacked — the visitor-data binding real signed-in
+    // clients carry — and keeps the 0.8.2 legs behind as the
+    // control group. The first presentation the server ACCEPTS is
+    // remembered and tried first next time; if it later refuses,
+    // the cascade re-probes the rest and re-caches. When every
     // presentation fails, the caller sees the FIRST refusal if any
     // attempt was refused (a refusal is information; a transport
     // failure is weather), else the first failure.
     // ------------------------------------------------------------------
 
-    /** One cascade presentation: a context, with or without delegation. */
+    /**
+     * The authenticated-shape dimension of one cascade leg (0.8.4):
+     * what the request carries BEYOND context + Bearer + delegation.
+     * [PLAIN] is the 0.8.2 shape — nothing more. [VISITOR] binds
+     * the session visitor data (`context.visitorData` in the body,
+     * `X-Goog-Visitor-Id` as a header) the way real signed-in
+     * clients present it. [VISITOR_API] adds the API-format
+     * headers (`X-Goog-Api-Format-Version` + the
+     * `X-YouTube-Client-Name`/`-Version` pair) that Google API
+     * clients present alongside an OAuth token.
+     */
+    private enum class AuthShape {
+        PLAIN,
+        VISITOR,
+        VISITOR_API,
+    }
+
+    /** One cascade presentation: a context, a delegation, a shape. */
     private data class BrowseConfig(
         val context: YoutubeiContext,
         val delegation: BrowseDelegation?,
+        val shape: AuthShape = AuthShape.PLAIN,
     ) {
-        /** Log-safe label: client name plus the delegation marker. */
+        /** Log-safe label: client name plus the markers. */
         val label: String
             get() = context.clientName +
-                if (delegation?.pageId != null) "+brand" else ""
+                (if (delegation?.pageId != null) "+brand" else "") +
+                when (shape) {
+                    AuthShape.PLAIN -> ""
+                    AuthShape.VISITOR -> "+vd"
+                    AuthShape.VISITOR_API -> "+vd+api"
+                }
     }
 
     private val browseWinnerLock = Any()
@@ -1009,16 +1079,63 @@ class YoutubeiClient(
     @Volatile
     private var browseWinner: BrowseConfig? = null
 
-    private fun orderedBrowseConfigs(delegation: BrowseDelegation?): List<BrowseConfig> {
-        val canonical = listOf(
-            BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation),
-            BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, null),
-            BrowseConfig(YoutubeiContexts.WEB_REMIX, delegation),
-            BrowseConfig(YoutubeiContexts.WEB_REMIX, null),
-        ).distinct()
+    /**
+     * The cascade's ranked presentations (0.8.4). The visitor legs
+     * lead: the 0.8.3 device run convicted BOTH plain contexts
+     * (HTTP 400 INVALID_ARGUMENT on every surface) while the same
+     * envelopes answer anonymously, and the one authenticated-shape
+     * element every real Bearer client carries and this road never
+     * did is the visitor-data binding — WEB_REMIX first within
+     * each shape (its Bearer pairing is the one with a public
+     * existence proof for library surfaces), then ANDROID_MUSIC.
+     * The 0.8.2 legs follow in their original order as the control
+     * group: if they ever start answering, the winner cache crowns
+     * them and the hunt's earlier theory was the right one after
+     * all. Visitor legs exist only when a provider yielded data
+     * for this run — a "vd" leg without the data would be a plain
+     * leg wearing a false label, and the diagnostics stay honest.
+     */
+    private fun orderedBrowseConfigs(
+        delegation: BrowseDelegation?,
+        visitorData: String?,
+    ): List<BrowseConfig> {
+        val canonical = buildList {
+            if (visitorData != null) {
+                add(BrowseConfig(YoutubeiContexts.WEB_REMIX, delegation, AuthShape.VISITOR))
+                add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation, AuthShape.VISITOR))
+                add(BrowseConfig(YoutubeiContexts.WEB_REMIX, delegation, AuthShape.VISITOR_API))
+                add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation, AuthShape.VISITOR_API))
+            }
+            add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation))
+            add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, null))
+            add(BrowseConfig(YoutubeiContexts.WEB_REMIX, delegation))
+            add(BrowseConfig(YoutubeiContexts.WEB_REMIX, null))
+        }.distinct()
         val winner = browseWinner ?: return canonical
         if (winner !in canonical) return canonical
         return listOf(winner) + (canonical - winner)
+    }
+
+    /** The provider's current visitor data; any failure reads absent. */
+    private fun currentVisitorData(): String? {
+        val provider = visitorDataProvider ?: return null
+        return try {
+            provider()
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** [visitorData] when [config]'s shape binds it, else null. */
+    private fun shapeVisitorData(config: BrowseConfig, visitorData: String?): String? =
+        if (config.shape == AuthShape.PLAIN) null else visitorData
+
+    /** [config]'s context JSON, with the visitor binding applied. */
+    private fun contextWithVisitor(config: BrowseConfig, visitorData: String?): JsonObject {
+        val base = config.context.toJson(config.delegation)
+        val bound = shapeVisitorData(config, visitorData) ?: return base
+        if (base.containsKey("visitorData")) return base
+        return JsonObject(base + ("visitorData" to JsonPrimitive(bound)))
     }
 
     /**
@@ -1030,13 +1147,14 @@ class YoutubeiClient(
         surface: String,
         bearerToken: String,
         delegation: BrowseDelegation?,
-        call: (BrowseConfig) -> JsonObject,
+        call: (BrowseConfig, String?) -> JsonObject,
     ): JsonObject {
+        val visitorData = currentVisitorData()
         var firstRejection: ContextRejected? = null
         var firstFailure: OffleashException? = null
-        for (config in orderedBrowseConfigs(delegation)) {
+        for (config in orderedBrowseConfigs(delegation, visitorData)) {
             try {
-                val root = call(config)
+                val root = call(config, visitorData)
                 synchronized(browseWinnerLock) { browseWinner = config }
                 logBrowseAttempt(surface, config, "ok")
                 return root
@@ -1069,14 +1187,18 @@ class YoutubeiClient(
         }
     }
 
-    /** A browse body on an explicit context (no visitor injection, ever). */
+    /**
+     * A browse body for one cascade [config]: its context JSON
+     * (delegation applied), the visitor binding when the config's
+     * shape carries it, the browse id, and any params.
+     */
     private fun browseBodyFor(
-        context: YoutubeiContext,
+        config: BrowseConfig,
         browseId: String,
         params: String?,
-        delegation: BrowseDelegation? = null,
+        visitorData: String?,
     ): JsonObject = buildJsonObject {
-        put("context", context.toJson(delegation))
+        put("context", contextWithVisitor(config, visitorData))
         put("browseId", browseId)
         params?.let { put("params", it) }
     }
@@ -1087,8 +1209,12 @@ class YoutubeiClient(
         body: JsonObject,
         bearerToken: String,
         delegation: BrowseDelegation? = null,
+        visitorData: String? = null,
+        apiFormatHeaders: Boolean = false,
     ): JsonObject {
-        val raw = postRawOAuth(path, context, body, bearerToken, delegation)
+        val raw = postRawOAuth(
+            path, context, body, bearerToken, delegation, visitorData, apiFormatHeaders,
+        )
         return parseJsonObject(raw, path)
     }
 
@@ -1139,12 +1265,14 @@ class YoutubeiClient(
 
     /**
      * [postRaw]'s twin for the token road: identical failure mapping,
-     * but the headers are the context's own plus the Bearer token,
-     * and no session visitor data is ever injected. With a
-     * [delegation], the identity headers ride along
+     * but the headers are the context's own plus the Bearer token.
+     * With a [delegation], the identity headers ride along
      * (`X-Goog-AuthUser`, plus `X-Goog-PageId` when a brand page id
-     * is known) — the headers YouTube's own clients send to act as a
-     * chosen identity (0.8.2).
+     * is known) — the headers YouTube's own clients send to act as
+     * a chosen identity (0.8.2). With a [visitorData], its header
+     * twin `X-Goog-Visitor-Id` rides (the body carries the value
+     * itself, in the context), and [apiFormatHeaders] adds the
+     * Google API presentation headers (0.8.4).
      */
     private fun postRawOAuth(
         path: String,
@@ -1152,6 +1280,8 @@ class YoutubeiClient(
         body: JsonObject,
         bearerToken: String,
         delegation: BrowseDelegation? = null,
+        visitorData: String? = null,
+        apiFormatHeaders: Boolean = false,
     ): String {
         var headers = context.headers() + ("Authorization" to "Bearer $bearerToken")
         if (delegation != null) {
@@ -1160,6 +1290,15 @@ class YoutubeiClient(
             if (pageId != null) {
                 headers = headers + ("X-Goog-PageId" to pageId)
             }
+        }
+        if (visitorData != null) {
+            headers = headers + ("X-Goog-Visitor-Id" to visitorData)
+        }
+        if (apiFormatHeaders) {
+            headers = headers +
+                ("X-Goog-Api-Format-Version" to "1") +
+                ("X-YouTube-Client-Name" to context.clientName) +
+                ("X-YouTube-Client-Version" to context.clientVersion)
         }
         val response = try {
             transport.post(context.endpointUrl(path), headers, body.toString())

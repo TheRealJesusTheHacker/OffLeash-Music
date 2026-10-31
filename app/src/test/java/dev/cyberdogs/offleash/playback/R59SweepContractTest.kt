@@ -552,6 +552,7 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/data/SessionStore.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/SignInDiagnostics.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/Stores.kt",
+                "app/src/main/java/dev/cyberdogs/offleash/data/VisitorDataCache.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/BatteryOptimization.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/LikeState.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/LyricsSync.kt",
