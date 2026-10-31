@@ -110,7 +110,7 @@ class R52SweepContractTest {
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_phase" to 10, "_uiState" to 9),
             "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 6),
+            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
             "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3),
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to mapOf("_snapshot" to 1),
@@ -128,7 +128,7 @@ class R52SweepContractTest {
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 19,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 6,
+            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/data/Stores.kt" to 6,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
@@ -176,13 +176,12 @@ class R52SweepContractTest {
             assertEquals(
                 "$path must hold exactly its shipped COMBINED " +
                     "`.value` write total over any receiver " +
-                    "(the totals sum to the true 112: 111 plain " +
-                    "+ 1 compound as shipped since round 61 " +
-                    "added the sign-out presentation publish in " +
-                    "GoogleSessionManager and 0.8.2 added Home's " +
-                    "two feedNote writes; the plain rewrite " +
-                    "of the compound line is 112 + 0 and holds " +
-                    "the same totals)",
+                    "(the totals sum to the true 107: 106 plain " +
+                    "+ 1 compound; the total was 112 through " +
+                    "0.8.2, and 0.8.3's removal of the legacy " +
+                    "session road took the old SessionManager's " +
+                    "five extra _uiState writes with it, leaving " +
+                    "the one sign-out write)",
                 expectedTotals[path] ?: 0,
                 anyReceiverCombined.findAll(text).count(),
             )
@@ -201,11 +200,10 @@ class R52SweepContractTest {
         }
         assertEquals(
             "the module's true shipped StateFlow write total, " +
-                "plain and compound together, is 112 (109 at " +
-                "round 52; round 61's sign-out presentation " +
-                "publish in GoogleSessionManager is +1 and " +
-                "0.8.2's Home feedNote reset + publish is +2)",
-            112,
+                "plain and compound together, is 107 (112 " +
+                "through 0.8.2; 0.8.3's legacy-road removal " +
+                "is -5 — see the per-file note above)",
+            107,
             grandCombined,
         )
     }

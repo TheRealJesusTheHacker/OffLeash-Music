@@ -3,24 +3,12 @@ package dev.cyberdogs.offleash.data
 import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebStorage
-import dev.cyberdogs.offleash.core.auth.IdentityLookup
-import dev.cyberdogs.offleash.core.auth.SessionValidation
-import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.AuthSession
-import dev.cyberdogs.offleash.core.auth.SESSION_COOKIE_NAMES
-import dev.cyberdogs.offleash.core.auth.SessionCookies
-import dev.cyberdogs.offleash.core.model.AccountIdentity
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 /** What the app currently knows about the stored session's health. */
 enum class SessionHealth { UNKNOWN, HEALTHY, NEEDS_SIGN_IN }
@@ -35,83 +23,58 @@ data class SessionUiState(
     val lastEndReason: String? = null,
 )
 
-/** The outcome of one sign-in attempt, in plain language. */
-sealed interface SignInAttempt {
-    data class Success(val identityName: String) : SignInAttempt
-    data class Failed(val reason: String) : SignInAttempt
-}
-
 /**
- * Owns the signed-in session: the encrypted [SessionStore] on disk,
- * an in-memory [AuthSession] snapshot for the API layer, and the
- * [uiState] the account screens render.
+ * The legacy (0.6.x, WebView/cookie) session's remains — since
+ * 0.8.3, ONLY its remains.
  *
- * Rollback is by construction: a new sign-in is validated against
- * YouTube BEFORE anything is persisted, so a failed attempt leaves
- * the previously stored session byte-for-byte untouched.
+ * The road this class used to own is REMOVED, on the owner's
+ * verdict of 2026-10-30: sign-in is the Google device-code flow
+ * ([GoogleSessionManager]) and nothing else. The WebView sign-in
+ * screen was disconnected from navigation in 0.7.0, but the
+ * machinery behind it stayed in the tree "for one release as a
+ * safety net" — completion from a captured or pasted cookie
+ * string, the ~30-second identity-confirmation window against
+ * YouTube's account-switcher endpoint, adoption into the sealed
+ * store, and periodic re-validation of the stored session. That
+ * machinery is what bounced the owner's real, visibly-signed-in
+ * brand session in October 2026 ("YouTube didn't confirm a
+ * signed-in account for that session"), and a stale copy of the
+ * old screen is what he was routed back to on 0.8.2 test night.
+ * The safety net's release has long passed; 0.8.3 deletes it:
  *
- * A session YouTube says is dead is destroyed, not kept — a stored
- * credential that no longer works is only a liability. A session
- * that merely couldn't be reached (no network, server trouble) is
- * kept: network trouble is not a dead session.
+ *  - No sign-in can be completed from cookies: there is no
+ *    completion entry point left on this class at all.
+ *  - No stored legacy session is ever presented: construction
+ *    DISCARDS one left by an older build (wiped from the sealed
+ *    store, named in the sign-in diagnostics — presence only,
+ *    never values) instead of loading it, so an upgraded phone
+ *    can never resurrect a WebView-era session as "signed in".
+ *  - Nothing validates, refreshes, or rotates a legacy session:
+ *    the keep-alive worker is deleted and the transport's cookie
+ *    rotation callback is a documented no-op.
  *
- * Legacy-generation semantics (H4, 0.7.2 sweep — the final word on
- * how this 0.6.x cookie session coexists with the 0.7.0 Google
- * sign-in): this session is a FALLBACK ONLY until a Google session
- * exists. While a Google session is stored, this one is DORMANT:
- * the keep-alive worker does not validate it (see
- * [legacySessionValidationShouldRun]), the container's presented
- * account state prefers the Google session, and nothing here may
- * refresh, rotate, or re-validate it back to life behind the
- * Google session's back. A total sign-out (the container's
- * signOutOfAccount) wipes BOTH generations, so "signed out" never
- * falls back to a cookie session the owner believes is gone. The
- * remaining case — a Google session that EXISTED and was then
- * revoked or wiped on its own — is covered by the container's
- * GoogleSignInSeenMarker (bug sweep round 1): the presented state
- * never falls back once the marker is set (see
- * [legacyFallbackApplies]), and this worker's gate takes the
- * marker as an input too, so validation stays dormant for the
- * zombie session as well.
+ * What remains is the slot the rest of the app still reads
+ * through: [currentAuthSession] (always null now — the resolver,
+ * browse, and library roads take the Google session or the
+ * anonymous road), the generation counter the download worker's
+ * consistency pair reads, the presented [uiState] (always signed
+ * out), and [signOut] — the legacy leg of the container's total
+ * sign-out, which still wipes the sealed store so "signed out"
+ * leaves nothing of either generation behind.
  */
 class SessionManager(
     private val store: SessionStore,
-    private val client: YoutubeiClient,
-    private val scope: CoroutineScope,
     private val signInDiagnostics: SignInDiagnostics = SignInDiagnostics(),
-    /**
-     * The settling window for sign-in confirmation: delays BETWEEN
-     * confirmation attempts (the attempt count is delays + 1).
-     * Completing Google's login must converge to signed-in (owner
-     * directive, 2026-10-24): a fresh session can take seconds to
-     * finish landing on YouTube's side — cookies still being minted,
-     * the session not yet recognized by the identity endpoint — and
-     * a one-shot check bounces real logins. Confirmation therefore
-     * re-reads the cookie source and re-asks YouTube across this
-     * window before it is allowed to fail. Injectable so tests run
-     * the window instantly.
-     */
-    private val confirmationDelaysMs: List<Long> = DEFAULT_CONFIRMATION_DELAYS_MS,
 ) {
 
     private val mutex = Mutex()
 
     /**
-     * The session's generation (bug sweep round 8): bumped ONLY
-     * when the session itself turns over — a sign-in is adopted,
-     * YouTube ends the session, or the owner signs out. Cookie
-     * rotation and revalidation of the same session replace the
-     * [snapshot] instance without touching this counter, because
-     * they are the same session continuing, not a new one. This is
-     * the discriminator a caller that captured the session before
-     * a blocking fetch must re-check afterwards: instance identity
-     * (`===`) cannot serve, since rotation swaps the instance for
-     * the same account as a matter of routine (the
-     * AutoDownloadLikedWorker's round-7 re-check misfired on
-     * exactly that), while the credential bytes cannot serve
-     * either, since rotation legitimately changes them. Mirrors
-     * LikeController's sessionGeneration discipline (round 6).
-     * Mutated only under [mutex]; read volatile.
+     * The session generation (bug sweep round 8's discipline,
+     * kept for the readers that pair it with a session read —
+     * see [currentSessionWithGeneration]). With the legacy road
+     * removed the only turnover left is [signOut]: no session can
+     * be adopted or ended underneath a reader any more.
      */
     @Volatile
     private var sessionGeneration: Long = 0L
@@ -120,558 +83,81 @@ class SessionManager(
     fun sessionGeneration(): Long = sessionGeneration
 
     /**
-     * The current session snapshot AND its generation, read as
-     * one consistent pair (bug sweep round 9). Reading the two
-     * separately — session first, generation second — can pair a
-     * PRE-turnover session with the POST-turnover generation when
-     * a sign-out + sign-in lands between the two reads: the
-     * caller then holds the old account's session under the new
-     * generation, and a later generation re-check passes for a
-     * list fetched under a session that is no longer current
-     * (the AutoDownloadLikedWorker's capture did exactly this).
-     * The generation is monotonic and turns over on every
-     * adoption / end / sign-out, so bracketing the snapshot read
-     * with two generation reads that AGREE proves no turnover
-     * happened while the snapshot was read: the pair belongs
-     * together. (Rotation between the reads replaces the
-     * snapshot with the same session continuing — same
-     * generation, correctly paired.)
+     * The current session snapshot AND its generation, read as one
+     * consistent pair (bug sweep round 9). The snapshot is always
+     * null since 0.8.3 (see the class doc), so the pair is
+     * trivially consistent; the shape stays for the callers built
+     * on it (the auto-download worker's capture/re-check).
      */
-    fun currentSessionWithGeneration(): Pair<AuthSession?, Long> {
-        while (true) {
-            val before = sessionGeneration
-            val session = snapshot
-            val after = sessionGeneration
-            if (before == after) return session to before
-        }
-    }
+    fun currentSessionWithGeneration(): Pair<AuthSession?, Long> =
+        null to sessionGeneration
 
-    /** The last stored DTO, kept so updates can preserve its fields. */
-    @Volatile
-    private var stored: StoredSession? = null
-
-    /** In-memory auth snapshot; the credential itself never leaves here + the encrypted store. */
-    @Volatile
-    private var snapshot: AuthSession? = null
+    /** The legacy session, for the API layer's fallback reads. Always null since 0.8.3. */
+    fun currentAuthSession(): AuthSession? = null
 
     private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))
     val uiState: StateFlow<SessionUiState> = _uiState.asStateFlow()
 
     init {
-        // Totality (H3): a store whose read fails at the very first
-        // load reads as "no session", never a crash in the
-        // container build. (The store's load is itself total; this
-        // is the belt to its braces, for Errors.)
+        // A stored legacy session is DISCARDED, never loaded
+        // (0.8.3 removal — see the class doc). The load itself is
+        // total by the store's contract; the catch is the belt to
+        // its braces, for Errors at the very first read.
         val loaded = try {
             store.load()
         } catch (t: Throwable) {
             signInDiagnostics.log(
                 "store",
-                "the saved session couldn't be read (${t.javaClass.simpleName}) — starting signed out",
+                "the saved WebView-era session couldn't be read " +
+                    "(${t.javaClass.simpleName}) — starting signed out",
             )
             null
         }
-        stored = loaded
-        snapshot = loaded?.toAuthSession()
         if (loaded != null) {
-            _uiState.value = SessionUiState(
-                signedIn = true,
-                identityName = loaded.identityName,
-                identityEmail = loaded.identityEmail,
-                avatarUrl = loaded.avatarUrl,
-                health = SessionHealth.UNKNOWN,
-            )
-        }
-    }
-
-    fun currentAuthSession(): AuthSession? = snapshot
-
-    /**
-     * Completes a sign-in from a raw cookie string (manual paste —
-     * the string is all there is, so the provider is constant; the
-     * confirmation window still applies to the identity stage,
-     * because YouTube-side settling is not about our capture).
-     *
-     * Nothing is stored until YouTube itself confirms which account
-     * the session belongs to.
-     */
-    suspend fun completeSignIn(rawCookieString: String): SignInAttempt =
-        completeSignIn(cookieProvider = { rawCookieString })
-
-    /**
-     * Completes a sign-in, re-reading the session cookies from
-     * [cookieProvider] on every confirmation attempt (the WebView
-     * path passes a provider that re-reads the view's cookie jar, so
-     * cookies Google mints in the seconds after landing are picked
-     * up instead of bouncing the login on a half-landed capture).
-     *
-     * The window: attempt, then re-read + re-ask after each delay in
-     * [confirmationDelaysMs]. The first confirmed identity wins and
-     * is adopted (rollback intact — nothing is persisted before
-     * confirmation, so an exhausted window leaves any previously
-     * stored session byte-for-byte untouched). One stage is exempt
-     * from patience: if the capture CONTAINS session material — at
-     * least one session cookie carrying a value — yet is still
-     * implausible, AND the re-read string is byte-identical to the
-     * previous attempt's, waiting cannot change it, so the attempt
-     * fails at the subset stage immediately rather than spinning
-     * the window out. The exemption requires that material
-     * (2026-10-27 0.6.7 hunt, refining the cookie hunt's rule): a
-     * capture whose session subset is entirely MISSING is a
-     * not-yet-landed capture, not an impossible one, and always
-     * runs the full window — however the raw string looks. The raw
-     * string can be non-blank and byte-stable while no session
-     * cookie in it carries a value: blank-valued placeholders the
-     * store holds mid-landing, non-session cookies riding along,
-     * or a pasted text the subset stage cannot read at all. The
-     * pre-0.6.7 gate keyed on the raw string being non-blank, and
-     * fired in ~2s on exactly those shapes — 0.6.4's empty reads
-     * first, then the owner's 14:22 panel, where a subset-less
-     * capture was sealed as "unchanged" while the session was
-     * still landing (or still unread). Identical reads of NOTHING
-     * are not evidence of impossibility.
-     *
-     * Every stage of every attempt is recorded in [signInDiagnostics]
-     * (cookie names and outcome classes only — never values), so a
-     * failure that survives the window still names its stage.
-     */
-    suspend fun completeSignIn(cookieProvider: suspend () -> String): SignInAttempt = mutex.withLock {
-        signInDiagnostics.startAttempt()
-        val maxAttempts = confirmationDelaysMs.size + 1
-        var lastFailure: SignInAttempt.Failed = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
-        var previousRaw: String? = null
-        for (attempt in 1..maxAttempts) {
-            if (attempt > 1) {
-                delay(confirmationDelaysMs[attempt - 2])
-                signInDiagnostics.log(
-                    "retry",
-                    "attempt $attempt of $maxAttempts — re-reading the session and asking YouTube again",
-                )
-            }
-            val raw = try {
-                cookieProvider()
-            } catch (e: Exception) {
-                ""
-            }
-            val cookies = SessionCookies.extractSubset(raw)
-            signInDiagnostics.recordCookieStage(cookies)
-            if (!SessionCookies.isPlausibleSession(cookies)) {
-                lastFailure = SignInAttempt.Failed(SUBSET_REASON)
-                // The early stop requires session MATERIAL in the
-                // capture (see the window KDoc above): a subset-less
-                // capture — blank, placeholder-only, or unreadable —
-                // always runs the full window, whatever the raw
-                // string's shape or stability.
-                val subsetPresent = cookies.values.any { it.isNotBlank() }
-                if (subsetPresent && raw == previousRaw) {
-                    signInDiagnostics.log(
-                        "cookies",
-                        "capture unchanged between attempts — the window cannot change these cookies; stopping at the subset stage",
-                    )
-                    break
-                }
-                previousRaw = raw
-                continue
-            }
-            previousRaw = raw
-            // authUser starts at 0 for validation only; the identity
-            // answer below supplies the real index (assuming 0 for a
-            // brand channel on a later account answers as signed out).
-            val tentative = AuthSession(
-                cookies = cookies,
-                authUser = 0,
-                pageId = null,
-                visitorData = null,
-            )
-            // The confirmation corridor is TOTAL (2026-10-27 crash
-            // hunt): the client contract says the lookup never
-            // throws, and adoption below is wrapped the same way —
-            // but this flow runs inside the sign-in screen's launch,
-            // which has no exception handler, so anything that still
-            // escapes from here kills the process. That is exactly
-            // what 0.6.3 did on the owner's phone: the first real
-            // identity answer reached adoption, the on-device seal
-            // threw, and the app vanished ~1s after Google's prompt.
-            // An unexpected throw is not a settling problem, so it
-            // fails the attempt at once, naming its stage — it does
-            // not spin the patience window.
-            val lookup = try {
-                withContext(Dispatchers.IO) { client.accountIdentities(tentative) }
+            try {
+                store.wipe()
             } catch (t: Throwable) {
-                if (t is CancellationException) throw t
                 signInDiagnostics.log(
-                    "identity",
-                    "attempt $attempt: the identity check failed unexpectedly " +
-                        "(${t.javaClass.simpleName})",
+                    "store",
+                    "the WebView-era session couldn't be discarded " +
+                        "(${t.javaClass.simpleName}) — it is not in use " +
+                        "and sign-out will wipe it",
                 )
-                return@withLock SignInAttempt.Failed(UNEXPECTED_REASON)
             }
-            when (lookup) {
-                is IdentityLookup.Found -> {
-                    val identities = lookup.identities
-                    val shape = lookup.shapeSummary?.let { " — shape: $it" } ?: ""
-                    if (identities.isEmpty()) {
-                        signInDiagnostics.log(
-                            "identity",
-                            "attempt $attempt: YouTube answered but listed no account — " +
-                                "the session is not recognized yet$shape",
-                        )
-                        lastFailure = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
-                    } else {
-                        signInDiagnostics.log(
-                            "identity",
-                            "attempt $attempt: YouTube confirmed ${identities.size} account(s)$shape",
-                        )
-                        val selected = identities.firstOrNull { it.isSelected == true }
-                            ?: identities.first()
-                        return@withLock try {
-                            adoptIdentifiedSession(cookies, selected)
-                        } catch (t: Throwable) {
-                            if (t is CancellationException) throw t
-                            signInDiagnostics.log(
-                                "sign-in",
-                                "adopting the confirmed session failed unexpectedly " +
-                                    "(${t.javaClass.simpleName}) — nothing was stored",
-                            )
-                            SignInAttempt.Failed(UNEXPECTED_REASON)
-                        }
-                    }
-                }
-                is IdentityLookup.Rejected -> {
-                    signInDiagnostics.log(
-                        "identity",
-                        "attempt $attempt: the session was refused (HTTP ${lookup.httpStatus})",
-                    )
-                    lastFailure = SignInAttempt.Failed(NOT_CONFIRMED_REASON)
-                }
-                is IdentityLookup.Failed -> {
-                    signInDiagnostics.log(
-                        "identity",
-                        "attempt $attempt: couldn't reach YouTube (${lookup.detail ?: "no detail"})",
-                    )
-                    lastFailure = SignInAttempt.Failed(REACH_REASON)
-                }
-            }
-        }
-        signInDiagnostics.log(
-            "sign-in",
-            "confirmation window exhausted after $maxAttempts attempt(s) — nothing was stored",
-        )
-        lastFailure
-    }
-
-    /** Persists a session whose identity YouTube has confirmed. Caller holds [mutex]. */
-    private suspend fun adoptIdentifiedSession(
-        cookies: Map<String, String>,
-        selected: AccountIdentity,
-    ): SignInAttempt {
-        val visitorData = try {
-            withContext(Dispatchers.IO) { client.fetchVisitorData() }
-        } catch (e: Exception) {
-            null
-        }
-        val now = System.currentTimeMillis()
-        val toStore = StoredSession(
-            cookies = cookies,
-            authUser = selected.authUser,
-            pageId = selected.pageId,
-            visitorData = visitorData,
-            identityName = selected.name,
-            identityEmail = selected.email,
-            avatarUrl = selected.avatarUrl,
-            capturedAtEpochMs = now,
-            lastValidatedEpochMs = now,
-        )
-        // The first save of the app's life happens HERE, on the
-        // first confirmed sign-in — which makes the Keystore seal
-        // and the file write first-time operations at exactly this
-        // moment (before any session exists, startup's load never
-        // reaches the seal at all). Their failures are device
-        // failures, not sign-in failures: name the store stage and
-        // fail the attempt politely, with rollback intact — an
-        // unstored confirmation is not a sign-in (2026-10-27 crash
-        // hunt: unwrapped, this throw escaped into the screen's
-        // handler-less launch and crashed the app).
-        try {
-            store.save(toStore)
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
             signInDiagnostics.log(
-                "store",
-                "the confirmed session couldn't be saved on this device " +
-                    "(${t.javaClass.simpleName}) — nothing was stored",
+                "legacy-session",
+                "a WebView-era session left by an older build was " +
+                    "found on this device and discarded — that " +
+                    "sign-in road was removed in 0.8.3; the Google " +
+                    "sign-in is the only road now",
             )
-            return SignInAttempt.Failed(STORE_REASON)
-        }
-        stored = toStore
-        snapshot = toStore.toAuthSession()
-        // A new session begins: the generation turns over (round 8).
-        sessionGeneration++
-        val displayName = selected.name?.takeIf { it.isNotBlank() } ?: "Your account"
-        _uiState.value = SessionUiState(
-            signedIn = true,
-            identityName = displayName,
-            identityEmail = selected.email,
-            avatarUrl = selected.avatarUrl,
-            health = SessionHealth.HEALTHY,
-            lastEndReason = null,
-        )
-        return SignInAttempt.Success(displayName)
-    }
-
-    /**
-     * Checks the stored session against YouTube and applies the
-     * result: healthy sessions get their identity's real
-     * authUser/pageId adopted (the switcher's enumeration corrects
-     * any drift), dead sessions are wiped, unreachable ones are kept.
-     */
-    suspend fun validateNow(): SessionHealth {
-        if (snapshot == null) return SessionHealth.UNKNOWN
-        return mutex.withLock {
-            val current = snapshot ?: return@withLock SessionHealth.UNKNOWN
-            val validation = withContext(Dispatchers.IO) { client.validateSession(current) }
-        when (validation) {
-            is SessionValidation.Healthy -> {
-                val identities = validation.identities
-                if (identities.isEmpty()) {
-                    endSessionLocked()
-                } else {
-                    val previous = stored
-                    val matched = matchIdentity(identities, previous) ?: identities.first()
-                    val now = System.currentTimeMillis()
-                    val updated = StoredSession(
-                        cookies = previous?.cookies ?: current.cookies,
-                        authUser = matched.authUser,
-                        pageId = matched.pageId,
-                        visitorData = previous?.visitorData ?: current.visitorData,
-                        identityName = matched.name,
-                        identityEmail = matched.email,
-                        avatarUrl = matched.avatarUrl,
-                        capturedAtEpochMs = previous?.capturedAtEpochMs ?: now,
-                        lastValidatedEpochMs = now,
-                    )
-                    // Persisting the refreshed identity is the same
-                    // seal corridor as adoption (2026-10-27 crash
-                    // hunt): a device-side seal failure must not
-                    // escape validation — the in-memory state below
-                    // still updates, and the next launch re-reads
-                    // the stored copy and re-validates.
-                    try {
-                        store.save(updated)
-                    } catch (e: Throwable) {
-                        signInDiagnostics.log(
-                            "store",
-                            "the refreshed session couldn't be saved (${e.javaClass.simpleName}) — " +
-                                "the stored copy stands",
-                        )
-                    }
-                    stored = updated
-                    snapshot = updated.toAuthSession()
-                    _uiState.value = SessionUiState(
-                        signedIn = true,
-                        identityName = updated.identityName,
-                        identityEmail = updated.identityEmail,
-                        avatarUrl = updated.avatarUrl,
-                        health = SessionHealth.HEALTHY,
-                        lastEndReason = null,
-                    )
-                    SessionHealth.HEALTHY
-                }
-            }
-            is SessionValidation.NeedsSignIn -> endSessionLocked()
-            is SessionValidation.Unreachable -> {
-                val state = _uiState.value
-                if (state.signedIn) {
-                    _uiState.value = state.copy(health = SessionHealth.UNKNOWN)
-                }
-                SessionHealth.UNKNOWN
-            }
-            }
         }
     }
 
     /**
-     * The stored identity's match in a fresh enumeration.
-     *
-     * The ROUTING keys win first (bug sweep round 6): the stored
-     * session carries the identity's authUser + pageId, and those —
-     * not the email — are what distinguish identities. Every
-     * identity in one account section shares the section header's
-     * email (the parser's own rule: brand identities have no email
-     * of their own), so the old email-first match returned the
-     * FIRST identity carrying that email — the personal identity,
-     * in enumeration order — for a session that had been adopted
-     * as a brand channel, and validation then silently overwrote
-     * the stored pageId/authUser/name with the personal identity's.
-     * A brand session's pageId is unique to it, so it matches
-     * exactly; a personal session (no pageId) matches the
-     * pageId-less identity at its own authUser index. Only when no
-     * routing match exists (the enumeration's routing drifted —
-     * the case the health test pins) do name, then avatar, then
-     * email, then the selected identity decide (round 7 reversed
-     * the textual pair: the section email is shared by every
-     * identity in the section, so email-first was
-     * first-in-enumeration and could still cross-match brand ↔
-     * personal; the name is per-identity. Round 8 added the
-     * avatar stage: a name is per-identity but not UNIQUE, and
-     * the avatar is the last discriminator the data carries —
-     * see the collision note at the fallback itself).
-     */
-    private fun matchIdentity(
-        identities: List<AccountIdentity>,
-        previous: StoredSession?,
-    ): AccountIdentity? {
-        if (previous == null) return null
-        val previousPageId = previous.pageId
-        if (previousPageId != null) {
-            identities.firstOrNull { it.pageId == previousPageId }?.let { return it }
-        } else {
-            identities.firstOrNull {
-                it.pageId == null && it.authUser == previous.authUser
-            }?.let { return it }
-        }
-        // The drift fallback tries the NAME before the email (bug
-        // sweep round 7): the email is the section header's, shared
-        // by EVERY identity the parser enumerates in that section
-        // (brand identities carry the section email too — see
-        // parseSwitcherIdentities), so an email-first fallback is
-        // first-in-enumeration in disguise and re-runs the round-6
-        // bug through the fallback door whenever the routing keys
-        // drift (a stored pageId the server re-indexed away, a
-        // personal session whose authUser moved): a brand session
-        // re-matched to the personal identity enumerated first, or
-        // a personal session to a brand channel enumerated first.
-        // The name is per-identity, so it discriminates where the
-        // email cannot; the email remains only as the last textual
-        // fallback (both name and routing gone), ahead of the
-        // server-selected identity.
-        previous.identityName?.takeIf { it.isNotBlank() }?.let { name ->
-            val named = identities.filter { it.name == name }
-            if (named.size == 1) return named.first()
-            if (named.isNotEmpty()) {
-                // A name COLLISION (bug sweep round 8): the name
-                // is per-identity but not unique — a personal
-                // identity and a brand channel can share one
-                // display name, as can two brand channels — so
-                // first-in-enumeration would cross-match exactly
-                // as the shared email did. The stored avatar is
-                // the remaining per-identity discriminator (the
-                // parser reads each identity's own account photo,
-                // and adoption stored this session's): a namesake
-                // carrying it wins. Failing that, the
-                // server-selected namesake (the enumeration's own
-                // active-identity flag) beats enumeration order.
-                // The documented remainder: namesakes that share
-                // the name AND carry no distinguishing avatar
-                // (both avatars blank, or both changed since
-                // adoption) leave NO discriminating signal in the
-                // data at all — that case falls to the selected
-                // namesake, then first namesake, and is unwinnable
-                // by construction rather than silently "solved".
-                previous.avatarUrl?.takeIf { it.isNotBlank() }?.let { avatar ->
-                    // Only a UNIQUE avatar match within the
-                    // collision may decide (bug sweep round 9):
-                    // round 8 took the FIRST namesake carrying the
-                    // stored avatar, but an avatar several
-                    // namesakes share — a default letter/photo
-                    // avatar can be byte-identical across channels
-                    // — discriminates nothing, and first-match
-                    // pre-empted the server-selected namesake
-                    // below, leaving the outcome WORSE than the
-                    // round-7 order it replaced (avatar leg
-                    // skipped -> selected namesake). A shared
-                    // avatar now falls through to that same
-                    // selected-then-first order, exactly as when
-                    // no avatar matches at all.
-                    named.filter { it.avatarUrl == avatar }
-                        .singleOrNull()?.let { return it }
-                }
-                named.firstOrNull { it.isSelected == true }?.let { return it }
-                return named.first()
-            }
-        }
-        // The name itself drifted (a rename since adoption, round
-        // 8): a UNIQUE avatar match still identifies the session's
-        // own identity ahead of the shared email. Uniqueness is
-        // required — an avatar several identities carry (or the
-        // parser's placeholder) discriminates nothing.
-        previous.avatarUrl?.takeIf { it.isNotBlank() }?.let { avatar ->
-            identities.filter { it.avatarUrl == avatar }
-                .singleOrNull()?.let { return it }
-        }
-        previous.identityEmail?.takeIf { it.isNotBlank() }?.let { email ->
-            identities.firstOrNull { it.email == email }?.let { return it }
-        }
-        return identities.firstOrNull { it.isSelected == true }
-    }
-
-    /** Destroys a session YouTube has declared dead. Caller holds [mutex]. */
-    private fun endSessionLocked(): SessionHealth {
-        store.wipe()
-        stored = null
-        snapshot = null
-        // The session is over: the generation turns over (round 8).
-        sessionGeneration++
-        _uiState.value = SessionUiState(
-            signedIn = false,
-            health = SessionHealth.NEEDS_SIGN_IN,
-            lastEndReason = "Your YouTube session ended. Sign in again to see your library.",
-        )
-        return SessionHealth.NEEDS_SIGN_IN
-    }
-
-    /**
-     * Cookie rotation from the transport: responses on YouTube hosts
-     * may carry fresh values for the session cookies. Only the named
-     * session cookies are ever merged, and the store is only touched
-     * when a value actually changed.
-     *
-     * [rotated] arrives as raw name/value pairs (already split from
-     * Set-Cookie headers by the transport); subset filtering happens
-     * here, by name, against the session-cookie set.
+     * Cookie rotation from the transport — a deliberate no-op
+     * since 0.8.3. Responses on YouTube hosts may still carry
+     * fresh values for the old session cookies, but there is no
+     * legacy session to rotate them into: the wiring stays so the
+     * transport's contract is unchanged, and the pairs are dropped
+     * here, at the one door they ever entered through.
      */
     fun onResponseCookies(rotated: Map<String, String>) {
-        if (snapshot == null || rotated.isEmpty()) return
-        val filtered = rotated.filterKeys { name -> name in SESSION_COOKIE_NAMES }
-        if (filtered.isEmpty()) return
-        scope.launch(Dispatchers.IO) {
-            // Rotation is best-effort bookkeeping riding on the
-            // transport: a seal failure here (the same corridor as
-            // adoption, 2026-10-27 crash hunt) must never take down
-            // the browsing that carried the cookies in. The in-memory
-            // session keeps the pre-rotation values; the next
-            // response offers them again.
-            try {
-                mutex.withLock {
-                    val current = snapshot ?: return@withLock
-                    val previous = stored ?: return@withLock
-                    val merged = current.cookies + filtered
-                    if (merged == current.cookies) return@withLock
-                    val updated = previous.copy(cookies = merged)
-                    store.save(updated)
-                    stored = updated
-                    snapshot = updated.toAuthSession()
-                }
-            } catch (e: Exception) {
-                // Deliberately silent: rotation retries itself on
-                // the next response by construction.
-            }
-        }
+        // No-op by design (see above). The parameter is the
+        // transport callback's shape, kept intentionally.
     }
 
     /**
-     * Signs out: the stored credential is wiped AND the wipe is
-     * verified before the UI reports signed out. WebView data is the
-     * caller's job — see [wipeWebViewData]; the container's
-     * signOutOfAccount (the one sign-out path every screen uses)
-     * performs it right after this wipe.
+     * The legacy leg of the container's total sign-out: the sealed
+     * store is wiped so nothing of the WebView generation survives
+     * a sign-out, and the generation turns over so any reader
+     * holding a pre-sign-out pair sees the change. WebView data is
+     * the caller's job — see [wipeWebViewData]; the container's
+     * signOutOfAccount performs it right after this wipe.
      */
     suspend fun signOut() {
         mutex.withLock {
             store.wipe()
-            stored = null
-            snapshot = null
-            // The session is over: the generation turns over (round 8).
             sessionGeneration++
             _uiState.value = SessionUiState(
                 signedIn = false,
@@ -680,87 +166,7 @@ class SessionManager(
             )
         }
     }
-
-    private fun StoredSession.toAuthSession(): AuthSession = AuthSession(
-        cookies = cookies,
-        authUser = authUser,
-        pageId = pageId,
-        visitorData = visitorData,
-    )
-
-    private companion object {
-        // Copy discipline (2026-10-27 sign-in hunt): when confirmation
-        // exhausts its window, the diagnostics have already shown the
-        // cookies complete and the sign-in page finished — the old
-        // text blamed an unloaded page, which sent the owner to fix
-        // a thing that was never broken. The message names the class
-        // that actually failed: YouTube would not confirm the session
-        // to the app.
-        const val NOT_CONFIRMED_REASON =
-            "YouTube didn't confirm a signed-in account for that session, " +
-                "even though the sign-in page finished and the session " +
-                "cookies were all there. Nothing was saved. Try signing in again."
-
-        // Copy discipline (2026-10-27 cookie hunt): this card is
-        // shown when the app's own reads never found the session —
-        // including 0.6.4's run, where the page HAD finished loading,
-        // signed in, while the capture read empty and this card told
-        // the owner to let the page finish loading. The message now
-        // names what the APP did and what it found, never a page
-        // state the diagnostics themselves contradict.
-        const val SUBSET_REASON =
-            "That sign-in didn't give the app a usable YouTube session. " +
-                "The app kept re-reading the sign-in window and never " +
-                "found YouTube's session cookies in it — nothing was " +
-                "stored. Sign in again, or paste a cookie from " +
-                "music.youtube.com."
-
-        const val REACH_REASON =
-            "Couldn't reach YouTube to verify the sign-in — " +
-                "check your connection and try again."
-
-        // Copy discipline (2026-10-27 crash hunt): a confirmed
-        // sign-in whose save failed on the device is its own class —
-        // YouTube said yes; the phone couldn't keep it. The message
-        // says exactly that, and the diagnostics name the store
-        // stage with the failure's class.
-        const val STORE_REASON =
-            "YouTube confirmed your account, but the app couldn't " +
-                "save the session on this device, so nothing was " +
-                "stored. Try signing in again."
-
-        const val UNEXPECTED_REASON =
-            "Something went wrong while confirming the sign-in. " +
-                "Nothing was saved. Try signing in again."
-
-        /**
-         * The production confirmation window: five attempts across
-         * ~30 seconds (0s, +2s, +6s, +14s, +30s). Long enough for a
-         * WebView login's cookies to finish landing and for YouTube
-         * to recognize the session; short enough that a genuinely
-         * dead session still fails while the user is looking at the
-         * sign-in screen.
-         */
-        val DEFAULT_CONFIRMATION_DELAYS_MS: List<Long> =
-            listOf(2_000L, 4_000L, 8_000L, 16_000L)
-    }
 }
-
-/**
- * Whether the legacy cookie session's keep-alive may validate it
- * on this run (H4, 0.7.2 sweep — see the legacy-generation
- * semantics on [SessionManager]): only while a legacy session is
- * actually stored AND no Google session exists. Once a Google
- * session exists, the legacy session is dormant — validating it
- * would burn battery and network keeping a superseded credential
- * fresh, and a "healthy" answer would persist rotated cookies for
- * a session that no longer drives anything.
- */
-fun legacySessionValidationShouldRun(
-    legacySessionPresent: Boolean,
-    googleSessionPresent: Boolean,
-    googleSignInSeen: Boolean = false,
-): Boolean = legacySessionPresent && !googleSessionPresent && !googleSignInSeen
 
 /**
  * Clears everything the sign-in WebView may have left behind: its

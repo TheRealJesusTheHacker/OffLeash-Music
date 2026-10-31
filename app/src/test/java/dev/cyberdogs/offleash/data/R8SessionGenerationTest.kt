@@ -3,100 +3,58 @@ package dev.cyberdogs.offleash.data
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Round 8 (break the round-7 AutoDownloadLikedWorker credential
  * re-check): the cookie road compared the AuthSession by
- * REFERENCE (`===`), but the session instance is replaced for the
- * SAME account as a matter of routine — every YouTube response
- * can rotate session cookies (OkHttpTransport hands them to
- * [SessionManager.onResponseCookies]; the rotating names include
- * the short-lived SIDCC / PSIDTS family), and each rotation swaps
- * `snapshot` for a fresh instance. The liked-list fetch rides
- * that very transport, so its own response could rotate the
- * session before the re-check ran: the guard then read a healthy
- * same-account session as "no longer current" and the worker
- * silently never enqueued — potentially on every run. The
- * credential's identity is a GENERATION that turns over only when
- * the session itself is adopted, ended, or signed out — never on
- * rotation or revalidation of the same session (the
- * LikeController sessionGeneration discipline, round 6).
+ * REFERENCE (`===`), but the session instance was replaced for
+ * the SAME account as a matter of routine — every YouTube
+ * response could rotate session cookies, and each rotation
+ * swapped `snapshot` for a fresh instance, so the worker's
+ * reference guard read a healthy same-account session as "no
+ * longer current". The fix was a GENERATION that turned over
+ * only when the session itself was adopted, ended, or signed
+ * out — never on rotation or revalidation.
+ *
+ * 0.8.3 re-base (the WebView/cookie road is REMOVED — see
+ * [SessionManager]): adoption, ending, rotation, and
+ * revalidation no longer exist, because no legacy session can
+ * exist. What this file still pins is the surviving discipline
+ * for the readers built on the pair (the auto-download worker's
+ * capture/re-check): the generation is stable across every
+ * no-session read, the transport's rotation callback changes
+ * nothing, and sign-out — the one turnover left — turns it over.
  */
 class R8SessionGenerationTest {
 
     @Test
-    fun cookieRotationReplacesTheInstanceButNotTheGeneration() {
+    fun rotationCallbackChangesNothingWithoutASession() {
         val store = testSessionStore()
-        store.save(seededStoredSession(authUser = 0, pageId = null))
-        val manager = testSessionManager(store, FakeAccountTransport())
-        val before = manager.currentAuthSession()
+        val manager = testSessionManager(store)
         val generationBefore = manager.sessionGeneration()
 
         manager.onResponseCookies(mapOf("SID" to "rotated-sid-value"))
 
-        val deadline = System.currentTimeMillis() + 10_000
-        var after = manager.currentAuthSession()
-        while (after === before && System.currentTimeMillis() < deadline) {
-            Thread.sleep(10)
-            after = manager.currentAuthSession()
-        }
-        assertNotSame(
-            "rotation replaces the AuthSession instance — the round-7 " +
-                "reference guard could not survive its own fetch's response",
-            before,
-            after,
+        assertNull(
+            "no legacy session can be rotated into existence",
+            manager.currentAuthSession(),
         )
-        assertEquals("rotated-sid-value", after?.cookies?.get("SID"))
-        assertEquals(before?.authUser, after?.authUser)
         assertEquals(
-            "the same account's session, rotated, is the same generation",
+            "the rotation callback is a no-op: the generation stands",
             generationBefore,
             manager.sessionGeneration(),
         )
     }
 
     @Test
-    fun revalidationOfTheSameSessionKeepsTheGeneration() = runBlocking {
+    fun signOutTurnsTheGenerationOver() = runBlocking {
         val store = testSessionStore()
-        store.save(seededStoredSession(authUser = 0, pageId = null))
-        val manager = testSessionManager(store, FakeAccountTransport())
+        val manager = testSessionManager(store)
         val before = manager.sessionGeneration()
-        assertEquals(SessionHealth.HEALTHY, manager.validateNow())
-        assertEquals(before, manager.sessionGeneration())
-    }
-
-    @Test
-    fun sessionEndAndSignOutAndAdoptionEachTurnTheGenerationOver() = runBlocking {
-        // End (YouTube says the session is dead):
-        val endStore = testSessionStore()
-        endStore.save(seededStoredSession())
-        val endManager = testSessionManager(
-            endStore,
-            FakeAccountTransport(FakeAccountTransport.Behavior.REJECTED),
-        )
-        val endBefore = endManager.sessionGeneration()
-        assertEquals(SessionHealth.NEEDS_SIGN_IN, endManager.validateNow())
-        assertNull(endManager.currentAuthSession())
-        assertNotEquals(endBefore, endManager.sessionGeneration())
-
-        // Sign-out:
-        val outStore = testSessionStore()
-        outStore.save(seededStoredSession())
-        val outManager = testSessionManager(outStore, FakeAccountTransport())
-        val outBefore = outManager.sessionGeneration()
-        outManager.signOut()
-        assertNotEquals(outBefore, outManager.sessionGeneration())
-
-        // Adoption of a (new) sign-in:
-        val adoptStore = testSessionStore()
-        val adoptManager = testSessionManager(adoptStore, FakeAccountTransport())
-        val adoptBefore = adoptManager.sessionGeneration()
-        val attempt = adoptManager.completeSignIn(FakeAccountTransport.RAW_COOKIE)
-        assertTrue(attempt is SignInAttempt.Success)
-        assertNotEquals(adoptBefore, adoptManager.sessionGeneration())
+        manager.signOut()
+        assertNotEquals(before, manager.sessionGeneration())
+        assertNull(manager.currentAuthSession())
     }
 }

@@ -199,7 +199,6 @@ class R54SweepContractTest {
         val expectedLet: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt" to 1,
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 2,
-            "app:dev/cyberdogs/offleash/data/SessionManager.kt" to 11,
             "app:dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 7,
             "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 1,

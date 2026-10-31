@@ -305,12 +305,20 @@ class R66SweepContractTest {
     }
 
     @Test
-    fun appStartValidationGateIsPinnedVerbatim() {
-        // Comment-stripped and counted, for the round-67 reason
-        // on the worker pin above: a dead-branch copy of this
-        // gate (empty launch body and all) satisfied the
-        // round-66 form — contains plus launch adjacency —
-        // while the live gate's dormancy legs were dropped.
+    fun appStartValidationGateIsRemovedWithTheLegacyRoad() {
+        // 0.8.3 re-base: this pin guarded the dormancy gate on
+        // the app-start legacy validation for rounds 66-71 —
+        // verbatim gate text, live-span adjacency, and exactly
+        // two validateNow call sites (app-start + revalidate),
+        // receiver-bound, string-masked, and template-masked.
+        // The gate's whole purpose was rationing validation of
+        // the WebView-era session, and 0.8.3 REMOVES that road
+        // (owner's verdict, 2026-10-30): there is no legacy
+        // session to validate — the session manager discards a
+        // stored one at construction — so every form of the pin
+        // inverts to ZERO. The multi-view counting stays: a
+        // validateNow surviving only inside a comment, a string,
+        // or a template is a road not fully removed.
         val app = stripComments(
             mainSource(
                 "java/dev/cyberdogs/offleash/OffleashApp.kt",
@@ -321,140 +329,49 @@ class R66SweepContractTest {
                 "            !googleSessionManager.hasStoredSession() &&\n" +
                 "            !googleSignInSeenMarker.seen()\n" +
                 "        ) {"
-        assertTrue(
-            "app-start legacy validation must be gated on the " +
-                "legacy session being the ONLY sign-in generation: " +
-                "no stored Google session and no Google sign-in " +
-                "ever seen — dropping either leg ran green across " +
-                "the full suite, and the legs are not redundant " +
-                "(the marker's mark is best-effort; its failure " +
-                "window beside a stored Google session is exactly " +
-                "what the hasStoredSession leg covers)",
-            app.contains(gate),
-        )
-        assertTrue(
-            "the gate must guard the app-start validateNow launch",
-            app.substringAfter(gate).trimStart()
-                .startsWith("sessionScope.launch {"),
-        )
         assertEquals(
-            "the gate's verbatim text must occur exactly once " +
-                "in the comment-stripped container — a second " +
-                "occurrence is a parked copy covering a neutered " +
-                "live gate",
-            1,
+            "the app-start dormancy gate must be GONE with the " +
+                "legacy road it rationed (0.8.3)",
+            0,
             occurrences(app, gate),
         )
-        // Liveness, as on the worker pin: the gate must stand
-        // in its live span — guarding the validateNow launch
-        // itself, not an empty launch in a parked copy — and
-        // the stripped container must hold no `if (false)`.
-        val gateSpan = Regex(
-            Regex.escape(gate) +
-                "\\s+sessionScope\\.launch \\{\\s+try \\{\\s+" +
-                Regex.escape("sessionManager.validateNow()"),
-        )
-        assertTrue(
-            "the app-start gate must stand in its live span: " +
-                "gate, launch, and the validateNow call it guards",
-            gateSpan.containsMatchIn(app),
-        )
-        assertTrue(
-            "the container must hold no `if (false)` dead branch " +
-                "for a parked gate copy to hide inside",
-            !app.contains("if (false)"),
-        )
-        // Round 68: the gate and its span can stand verbatim
-        // while a SECOND, ungated validateNow launch beside
-        // them defeats the dormancy rule — that respell kept
-        // every round-67 assert green across the full suite.
-        // The container holds exactly two legitimate
-        // validateNow call sites: this app-start gate and the
-        // revalidate gate (itself dormancy-gated, pinned
-        // verbatim by round 59). A third is an ungated road.
         assertEquals(
-            "the container must hold exactly two validateNow " +
-                "call sites (the app-start gate and the " +
-                "revalidate gate) — a third launch is ungated " +
-                "legacy validation behind a standing gate",
-            2,
+            "the container must hold no validateNow call sites — " +
+                "legacy validation is removed, not gated (0.8.3)",
+            0,
             occurrences(app, "sessionManager.validateNow()"),
         )
-        // Round 69: that count is RECEIVER-bound too. A third,
-        // ungated launch spelled `sessionManager?.validateNow()`,
-        // as a method reference (`sessionManager::validateNow`
-        // passed to a launcher), through a same-file helper
-        // whose parameter renames the receiver
-        // (`sm.validateNow()`), or through an extension
-        // wrapper (bare `validateNow()` on the receiver) each
-        // kept the count at two and ran GREEN across the full
-        // suite. The bare method-name token is receiver-blind:
-        // every one of those spellings still names the method.
         assertEquals(
-            "the container must hold exactly two validateNow " +
-                "method-name tokens — a third call spelled " +
-                "through a safe call, a method reference, a " +
-                "renamed-receiver helper, or an extension " +
-                "wrapper defeats the receiver-bound count above",
-            2,
+            "the container must hold no validateNow method-name " +
+                "tokens in any spelling (0.8.3)",
+            0,
             occurrences(app, "validateNow"),
         )
-        // Round 70: the same string-mask as on the worker pin —
-        // the revalidate gate's validateNow() deleted while its
-        // exact call text survived as a line inside a raw string
-        // in the same lambda kept both counts above (and the
-        // round-59 slice, whose trimmed-line set the raw-string
-        // content line satisfies verbatim) and ran GREEN across
-        // the full suite. Re-asserted on the CODE-ONLY view:
         val codeApp = stripCommentsAndStrings(
             mainSource(
                 "java/dev/cyberdogs/offleash/OffleashApp.kt",
             ),
         )
         assertEquals(
-            "the container must hold exactly two validateNow " +
-                "tokens in CODE — a validation deleted while its " +
-                "call text survives inside a string is still a " +
-                "deleted validation",
-            2,
+            "no validateNow token may survive in CODE behind a " +
+                "string mask (0.8.3)",
+            0,
             occurrences(codeApp, "validateNow"),
         )
-        assertEquals(
-            "the container must hold exactly two " +
-                "sessionManager.validateNow() call sites in CODE, " +
-                "for the same string-mask reason",
-            2,
-            occurrences(codeApp, "sessionManager.validateNow()"),
-        )
-        // Round 71: the template-carried variant of the same
-        // mask (see the worker pin above) — the revalidate
-        // gate's validateNow() deleted while its exact call
-        // text survived as code inside a raw string's
-        // never-evaluated `${}` template kept both code-only
-        // counts (and round 59's trimmed-line slice, whose
-        // needle the template's own line satisfies verbatim)
-        // and ran GREEN across the full suite. Re-asserted on
-        // the TEMPLATE-BLANKED view:
         val plainApp = stripCommentsStringsAndTemplates(
             mainSource(
                 "java/dev/cyberdogs/offleash/OffleashApp.kt",
             ),
         )
         assertEquals(
-            "the container must hold exactly two validateNow " +
-                "tokens outside any string template — a " +
-                "validation deleted while its call text survives " +
-                "inside a never-evaluated template expression " +
-                "is still a deleted validation",
-            2,
+            "no validateNow token may survive inside a string " +
+                "template (0.8.3)",
+            0,
             occurrences(plainApp, "validateNow"),
         )
-        assertEquals(
-            "the container must hold exactly two " +
-                "sessionManager.validateNow() call sites outside " +
-                "any string template, for the same reason",
-            2,
-            occurrences(plainApp, "sessionManager.validateNow()"),
+        assertTrue(
+            "the container must hold no `if (false)` dead branch",
+            !app.contains("if (false)"),
         )
     }
 

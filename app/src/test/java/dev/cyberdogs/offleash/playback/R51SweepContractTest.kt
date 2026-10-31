@@ -100,7 +100,7 @@ class R51SweepContractTest {
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 19,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 6,
+            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/data/Stores.kt" to 6,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,

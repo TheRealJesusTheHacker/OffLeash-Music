@@ -125,7 +125,7 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_phase" to 10, "_uiState" to 9),
             "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 6),
+            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
             "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3),
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to mapOf("_snapshot" to 1),
@@ -143,7 +143,7 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 19,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 6,
+            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/data/Stores.kt" to 6,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
@@ -238,8 +238,10 @@ class R63SweepContractTest {
         }
         assertEquals(
             "the module's shipped StateFlow write total on " +
-                "the normalized view is 112, as on raw text",
-            112,
+                "the normalized view is 107, as on raw text " +
+                "(112 through 0.8.2; -5 at 0.8.3's legacy-road " +
+                "removal)",
+            107,
             grandTotal,
         )
         assertEquals(
@@ -317,8 +319,6 @@ class R63SweepContractTest {
             "app:dev/cyberdogs/offleash/data/DownloadManager.kt" to 2,
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/SessionManager.kt" to 3,
-            "app:dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "core:dev/cyberdogs/offleash/core/api/YoutubeiClient.kt" to 3,
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 1,

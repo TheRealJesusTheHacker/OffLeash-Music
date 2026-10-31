@@ -174,9 +174,6 @@ class R59SweepContractTest {
             "var mediaController: MediaController?",
             listOf(
                 "revalidateSession = {",
-                "if (!googleSessionManager.hasStoredSession() &&",
-                "!googleSignInSeenMarker.seen()",
-                "sessionManager.validateNow()",
                 "sessionManager.currentAuthSession()",
                 "qualityProvider = { appPreferences.streamQuality }",
                 "localFileProvider = { track -> downloadManager.downloadedPlayback(track.videoId) }",
@@ -535,7 +532,6 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/OffleashApp.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/account/GoogleSessionKeepAliveWorker.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/account/SessionKeepAliveWorker.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/AppPreferences.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/AtomicFileWrite.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/BearerRetryTransport.kt",

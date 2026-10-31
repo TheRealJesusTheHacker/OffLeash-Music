@@ -2,19 +2,18 @@ package dev.cyberdogs.offleash.data
 
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
-import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import java.security.SecureRandom
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
 /**
  * A fake [HttpTransport] that answers the account calls the way
- * YouTube's shapes suggest, so SessionManager can be driven end to
- * end on the JVM: the real [YoutubeiClient] runs against this, and
- * only the wire is faked.
+ * YouTube's shapes suggest, so the account machinery can be
+ * driven end to end on the JVM: the real client runs against
+ * this, and only the wire is faked. (Through 0.8.2 it drove the
+ * legacy SessionManager's sign-in confirmation; since 0.8.3's
+ * removal of that road it serves the surviving store/manager
+ * totality tests.)
  *
  * Behavior switch:
  * - [Behavior.IDENTITIES]: account calls answer 200 with the account
@@ -27,8 +26,8 @@ import javax.crypto.SecretKey
  *
  * Also carries the small builders the manager tests share: a
  * JVM-keyed [AesGcmSecretBox], a [SessionStore] over in-memory
- * storage, a [SessionManager] over a real client + this transport,
- * and a seeded [StoredSession].
+ * storage, a [SessionManager] over the store, and a seeded
+ * [StoredSession].
  */
 class FakeAccountTransport(
     var behavior: Behavior = Behavior.IDENTITIES,
@@ -184,16 +183,11 @@ fun testSessionStore(storage: SecretStorage = InMemorySecretStorage()): SessionS
 
 fun testSessionManager(
     store: SessionStore,
-    transport: FakeAccountTransport,
-    confirmationDelaysMs: List<Long> = emptyList(),
     signInDiagnostics: SignInDiagnostics = SignInDiagnostics(),
 ): SessionManager =
     SessionManager(
         store = store,
-        client = YoutubeiClient(transport),
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
         signInDiagnostics = signInDiagnostics,
-        confirmationDelaysMs = confirmationDelaysMs,
     )
 
 /** A plausible stored session, as a previous successful sign-in would have left it. */

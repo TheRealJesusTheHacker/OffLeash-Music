@@ -125,14 +125,12 @@ class R55SweepContractTest {
         val dotSingleOrNull = Regex("""\.singleOrNull\(""")
         val expectedFirst: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/SessionManager.kt" to 4,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 1,
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 2,
             "core:dev/cyberdogs/offleash/core/playback/StreamResolver.kt" to 4,
         )
         val expectedFirstOrNull: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 5,
-            "app:dev/cyberdogs/offleash/data/SessionManager.kt" to 6,
             "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 2,
@@ -144,7 +142,6 @@ class R55SweepContractTest {
             "core:dev/cyberdogs/offleash/core/playback/PlayQueue.kt" to 2,
         )
         val expectedSingleOrNull: Map<String, Int> = mapOf(
-            "app:dev/cyberdogs/offleash/data/SessionManager.kt" to 2,
         )
         for ((label, sources) in listOf(
             "app" to moduleSources(),

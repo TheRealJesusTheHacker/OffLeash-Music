@@ -64,7 +64,11 @@ class GoogleSignInSeenMarkerTest {
 
     @Test
     fun legacyFallbackAppliesOnlyBeforeAnyGoogleSignIn() {
-        // Never had Google: the cookie session names the account.
+        // The pure rule (its presented-state effect is inert since
+        // 0.8.3 — the session manager discards any stored legacy
+        // session at construction, so the state it would fall back
+        // TO is always signed out — but the rule itself stands):
+        // never had Google: the fallback applies.
         assertTrue(legacyFallbackApplies(googleSignedIn = false, googleSignInSeen = false))
         // Google live: no fallback (and no need of one).
         assertFalse(legacyFallbackApplies(googleSignedIn = true, googleSignInSeen = false))
@@ -80,13 +84,18 @@ class GoogleSignInSeenMarkerTest {
         // The snapshot decides through the pure rule.
         assertTrue(app.contains("legacyFallbackApplies(google.signedIn, googleSignInSeenMarker.seen())"))
         // Adoption marks (collector), a stored session at start
-        // marks (init), and both legacy refresh paths are gated.
+        // marks (init), and the presented-state snapshot consults
+        // the pure rule. (Through 0.8.2 both legacy refresh paths
+        // were dormancy-gated on the marker too; 0.8.3 removed
+        // that road entirely — there is no legacy validation left
+        // to gate, so the marker's remaining container consultee
+        // is the snapshot, and the worker keeps its own.)
         assertTrue(app.contains("if (it.signedIn) googleSignInSeenMarker.mark()"))
         assertTrue(app.contains("googleSignInSeenMarker.mark()"))
         assertTrue(
-            "app-start legacy validation must be dormancy-gated",
-            app.contains("!googleSessionManager.hasStoredSession() &&") &&
-                app.contains("!googleSignInSeenMarker.seen()"),
+            "0.8.3: no dormancy-gated legacy validation may remain in the container",
+            !app.contains("!googleSignInSeenMarker.seen()") &&
+                !app.contains("validateNow"),
         )
     }
 

@@ -1,41 +1,40 @@
 package dev.cyberdogs.offleash.data
 
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Sign-out is a verified wipe (SimpMusic's sign-out left its
- * plaintext cookie copies behind — this suite pins that ours does
- * not), and a failed sign-in attempt rolls back by construction:
- * the previously stored session survives byte-for-byte.
+ * plaintext cookie copies behind — this suite pins that ours
+ * does not).
  *
- * Driven through a fake [FakeAccountTransport] behind the real
- * client, per the Phase 2 test plan.
+ * 0.8.3 re-base (the WebView/cookie road is REMOVED — see
+ * [SessionManager]): the old legs drove a real sign-in through
+ * the fake transport and then signed out, and pinned rollback
+ * for failed attempts. Sign-in attempts no longer exist, so
+ * what remains pinnable is the wipe itself: bytes placed in the
+ * legacy store (as an older build could have left them) are
+ * gone after sign-out, and the presented state is signed out.
+ * The construction-time discard of a pre-existing stored
+ * session is pinned in LegacyRoadRemovedTest.
  */
 class SignOutWipeTest {
 
     @Test
-    fun signInThenSignOutLeavesNothingBehind() = runBlocking {
+    fun signOutLeavesNothingBehind() = runBlocking {
         val storage = InMemorySecretStorage()
         val store = testSessionStore(storage)
-        val transport = FakeAccountTransport()
-        val manager = testSessionManager(store, transport)
+        val manager = testSessionManager(store)
 
-        val result = manager.completeSignIn(FakeAccountTransport.RAW_COOKIE)
-        assertTrue("expected Success, was $result", result is SignInAttempt.Success)
-        assertEquals(
-            FakeAccountTransport.IDENTITY_NAME,
-            (result as SignInAttempt.Success).identityName,
-        )
-        assertFalse("store must be non-empty while signed in", store.isWipedClean())
-        assertNotNull(store.load())
-        assertNotNull(manager.currentAuthSession())
-        assertTrue(manager.uiState.value.signedIn)
+        // Bytes in the legacy store, as an older build or a
+        // half-finished state could have left them (seeded AFTER
+        // construction — construction's own discard is the other
+        // test file's pin).
+        store.save(seededStoredSession())
+        assertFalse("store must be non-empty before sign-out", store.isWipedClean())
 
         manager.signOut()
 
@@ -44,47 +43,5 @@ class SignOutWipeTest {
         assertNull(manager.currentAuthSession())
         assertFalse(manager.uiState.value.signedIn)
         assertNull(manager.uiState.value.lastEndReason)
-    }
-
-    @Test
-    fun rejectedSignInLeavesThePreviousSessionExactlyAsItWas() = runBlocking {
-        val storage = InMemorySecretStorage()
-        val store = testSessionStore(storage)
-        val seeded = seededStoredSession()
-        store.save(seeded)
-
-        val transport = FakeAccountTransport(behavior = FakeAccountTransport.Behavior.REJECTED)
-        val manager = testSessionManager(store, transport)
-        assertNotNull(manager.currentAuthSession())
-
-        val result = manager.completeSignIn(FakeAccountTransport.RAW_COOKIE)
-        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
-
-        // Rollback by construction: nothing was persisted before the
-        // identity answer, so the old session loads identically.
-        assertEquals(seeded, store.load())
-        assertEquals(seeded.cookies, manager.currentAuthSession()?.cookies)
-        assertEquals(seeded.authUser, manager.currentAuthSession()?.authUser)
-        assertTrue(manager.uiState.value.signedIn)
-        assertEquals(seeded.identityEmail, manager.uiState.value.identityEmail)
-    }
-
-    @Test
-    fun implausibleCookieIsRefusedWithoutStoringAnything() = runBlocking {
-        val storage = InMemorySecretStorage()
-        val store = testSessionStore(storage)
-        val transport = FakeAccountTransport()
-        val manager = testSessionManager(store, transport)
-
-        val result = manager.completeSignIn("CONSENT=YES+; PREF=f1=50000000")
-        assertTrue("expected Failed, was $result", result is SignInAttempt.Failed)
-        assertTrue(
-            (result as SignInAttempt.Failed).reason.startsWith(
-                "That sign-in didn't give the app a usable YouTube session",
-            ),
-        )
-        assertTrue(store.isWipedClean())
-        assertNull(manager.currentAuthSession())
-        assertFalse(manager.uiState.value.signedIn)
     }
 }

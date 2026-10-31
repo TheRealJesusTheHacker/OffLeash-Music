@@ -81,7 +81,7 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to (2 to 0),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to (4 to 0),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to (4 to 0),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to (0 to 6),
+            "dev/cyberdogs/offleash/data/SessionManager.kt" to (0 to 1),
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to (0 to 9),
         )
         for ((path, text) in files) {
@@ -330,7 +330,6 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt",
             "dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
             "dev/cyberdogs/offleash/account/GoogleSessionKeepAliveWorker.kt",
-            "dev/cyberdogs/offleash/account/SessionKeepAliveWorker.kt",
             "dev/cyberdogs/offleash/data/AppPreferences.kt",
             "dev/cyberdogs/offleash/data/AtomicFileWrite.kt",
             "dev/cyberdogs/offleash/data/BearerRetryTransport.kt",

@@ -85,8 +85,6 @@ class StoreTotalityTest {
 
         val sessionManager = SessionManager(
             store = SessionStore(ThrowingStorage(), testSecretBox()),
-            client = client,
-            scope = scope,
             signInDiagnostics = SignInDiagnostics(),
         )
         assertFalse(sessionManager.uiState.value.signedIn)

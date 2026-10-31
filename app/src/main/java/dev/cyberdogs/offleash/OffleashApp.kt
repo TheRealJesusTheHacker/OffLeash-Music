@@ -19,7 +19,6 @@ import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
 import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.account.GoogleSessionKeepAlive
-import dev.cyberdogs.offleash.account.SessionKeepAlive
 import dev.cyberdogs.offleash.data.AesGcmSecretBox
 import dev.cyberdogs.offleash.data.AppPreferences
 import dev.cyberdogs.offleash.data.DownloadManager
@@ -175,9 +174,12 @@ class AppContainer(app: OffleashApp) {
 
     /**
      * The "a Google sign-in has happened here" marker (bug sweep
-     * round 1): once set, the legacy cookie session never drives the
-     * presented account state or gets validated again — see
-     * [GoogleSignInSeenMarker] for the resurrection it prevents.
+     * round 1): once set, the legacy cookie session never drives
+     * the auto-download worker's decisions — see
+     * [GoogleSignInSeenMarker]. (Its original resurrection watch —
+     * the presented account state — is moot since 0.8.3: the
+     * session manager discards any stored legacy session at
+     * construction, so there is nothing left to resurrect.)
      */
     val googleSignInSeenMarker: GoogleSignInSeenMarker =
         GoogleSignInSeenMarker(googleSignInSeenFileIn(app))
@@ -228,13 +230,14 @@ class AppContainer(app: OffleashApp) {
     )
 
     /**
-     * Owns the signed-in session (encrypted store + in-memory
-     * snapshot + UI state). Constructing it loads any stored session.
+     * The legacy session's remains (0.8.3): constructing it
+     * DISCARDS any WebView-era session an older build left in the
+     * sealed store — the cookie sign-in road is removed, and this
+     * manager now only answers the app's legacy reads (always
+     * signed out) and performs total sign-out's legacy wipe.
      */
     val sessionManager: SessionManager = SessionManager(
         store = sessionStore,
-        client = client,
-        scope = sessionScope,
         signInDiagnostics = signInDiagnostics,
     )
 
@@ -263,14 +266,16 @@ class AppContainer(app: OffleashApp) {
     )
 
     /**
-     * The account state the UI presents: the Google session when one
-     * exists; otherwise the cookie session's state — but ONLY on a
-     * device that has never had a Google sign-in (a pre-0.7.0 stored
-     * cookie session still names its account there). Once a Google
-     * sign-in has happened ([googleSignInSeenMarker]), a Google store
-     * wiped on its own must land on the honest Google signed-out
-     * state, never resurrect the dormant cookie session. Kept
-     * current by the collectors in the wiring init below.
+     * The account state the UI presents: the Google session's
+     * state. The legacy fallback shape is kept (the round-1 rule:
+     * the cookie session's state only on a device that has never
+     * had a Google sign-in), but since 0.8.3 the cookie session's
+     * state is permanently signed out — the session manager
+     * discards any stored legacy session at construction — so the
+     * presented state is the Google state in every case, and a
+     * Google store wiped on its own lands on the honest Google
+     * signed-out state. Kept current by the collectors in the
+     * wiring init below.
      */
     private val _accountUiState = MutableStateFlow(accountUiStateSnapshot())
     val accountUiState: StateFlow<SessionUiState> = _accountUiState.asStateFlow()
@@ -319,10 +324,10 @@ class AppContainer(app: OffleashApp) {
         // Close the wiring cycle described on [sessionManagerRef].
         sessionManagerRef = sessionManager
         googleSessionManagerRef = googleSessionManager
-        // Periodic validation (12h, connected) for as long as the app
-        // is installed; the manager decides what each result means.
-        SessionKeepAlive.enqueue(app)
-        // The same periodic care for the Google sign-in: identity
+        // No legacy keep-alive is enqueued (0.8.3): the WebView-era
+        // session it used to validate no longer exists — a stored
+        // one is discarded by the session manager at construction.
+        // The Google sign-in's periodic care: identity
         // re-read + proactive token refresh.
         GoogleSessionKeepAlive.enqueue(app)
         // Auto-download of Liked (parity step 2): the worker itself
@@ -334,26 +339,9 @@ class AppContainer(app: OffleashApp) {
         if (googleSessionManager.hasStoredSession()) {
             googleSignInSeenMarker.mark()
         }
-        // App-start validation when a stored session exists: a dead
-        // session is found — and wiped, with a plain explanation in
-        // the UI state — at launch, not mid-playlist. The legacy
-        // session is validated only while it is the ONLY sign-in
-        // generation this device has ever had (the dormancy rule —
-        // the keep-alive worker applies the same gate).
-        if (sessionManager.currentAuthSession() != null &&
-            !googleSessionManager.hasStoredSession() &&
-            !googleSignInSeenMarker.seen()
-        ) {
-            sessionScope.launch {
-                try {
-                    sessionManager.validateNow()
-                } catch (e: Exception) {
-                    // validateNow maps its own outcomes; anything that
-                    // still escapes leaves the stored session in place
-                    // for the next attempt rather than crashing startup.
-                }
-            }
-        }
+        // No app-start validation of a legacy session (0.8.3): the
+        // session manager discarded any stored one at construction,
+        // and there is nothing left to validate.
         // App-start identity refresh for a stored Google session:
         // names the account fresh, and discovers a revoked grant at
         // launch rather than mid-playlist.
@@ -502,15 +490,10 @@ class AppContainer(app: OffleashApp) {
         // the next track without rebuilding the controller.
         bearerProvider = { googleSessionManager.currentBearer() },
         revalidateSession = {
-            // The dormancy rule applies here too: once a Google
-            // session exists (or has existed), the cookie session is
-            // never actively refreshed again — the stored session is
-            // still returned for the resolver's fallback road.
-            if (!googleSessionManager.hasStoredSession() &&
-                !googleSignInSeenMarker.seen()
-            ) {
-                sessionManager.validateNow()
-            }
+            // The resolver's fallback-road revalidation hook: since
+            // 0.8.3 there is no legacy session to revalidate — the
+            // read is the whole answer (always null; the Google
+            // bearer road and the anonymous road carry playback).
             sessionManager.currentAuthSession()
         },
         // The shared client runs the anonymous-road probe ladder, so a

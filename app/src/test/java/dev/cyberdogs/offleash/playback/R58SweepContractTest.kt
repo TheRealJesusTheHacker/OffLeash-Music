@@ -211,8 +211,6 @@ class R58SweepContractTest {
             "val googleAuth",
             listOf(
                 "store = sessionStore,",
-                "client = client,",
-                "scope = sessionScope,",
                 "signInDiagnostics = signInDiagnostics,",
             ),
             "sessionManager construction",
