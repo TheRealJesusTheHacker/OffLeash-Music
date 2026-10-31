@@ -112,10 +112,10 @@ class R4FreshEyesContractTest {
         assertTrue(
             "About renders the package versionName — the ship must not " +
                 "label itself with the pre-release sign-in-fix name " +
-                "(coordinator naming: base \"0.8.4-sweep\" + the hunt flavor's " +
-                "\"-hunt1\" suffix = the shipped 0.8.4-sweep-hunt1; the pin " +
-                "was re-based from 0.8.3 at the 0.8.4 browse-hunt ship)",
-            gradle.contains("versionName = \"0.8.4-sweep\""),
+                "(coordinator naming: base \"0.8.5-sweep\" + the hunt flavor's " +
+                "\"-hunt1\" suffix = the shipped 0.8.5-sweep-hunt1; the pin " +
+                "was re-based from 0.8.4 at the 0.8.5 Halloween-splash ship)",
+            gradle.contains("versionName = \"0.8.5-sweep\""),
         )
         assertFalse(
             "the pre-release version name must not survive into the ship build",
