@@ -717,8 +717,7 @@ class YoutubeiClient(
                 null
             } ?: continue
             root.obj("responseContext").str("visitorData")
-                ?.takeIf { it.isNotBlank() }
-                ?.let { return it }
+                ?.let { if (it.isNotBlank()) return it }
         }
         return null
     }
