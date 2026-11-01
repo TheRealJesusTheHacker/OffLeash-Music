@@ -716,8 +716,9 @@ class YoutubeiClient(
             } catch (t: Throwable) {
                 null
             } ?: continue
-            val value = root.obj("responseContext").str("visitorData")
-            if (!value.isNullOrBlank()) return value
+            root.obj("responseContext").str("visitorData")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
         }
         return null
     }
