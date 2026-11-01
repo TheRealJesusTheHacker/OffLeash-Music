@@ -7,8 +7,8 @@ package dev.cyberdogs.offleash.data
  * `visitorDataProvider`).
  *
  * Visitor data is NOT account data: the fetcher reads it with no
- * auth from YouTube's public `sw.js_data`, exactly the call the
- * core client already made for the cookie road. It is long-lived
+ * auth from YouTube's `visitor_id` endpoint, via the core
+ * client's own fetch. It is long-lived
  * material, so a success is cached for the process lifetime. A
  * failure is NOT cached as a value — [get] returns null (the
  * browse cascade then runs its non-visitor legs) and the next

@@ -105,11 +105,53 @@ class AuthedBrowseTest {
         assertEquals("Los Himnos", playlists.last().title)
     }
 
+    /**
+     * Routes visitor_id POSTs by the body's client name and
+     * records the URLs hit (0.8.5: [YoutubeiClient.fetchVisitorData]
+     * reads the `visitor_id` endpoint, not `sw.js_data`).
+     */
+    private class VisitorIdTransport(
+        private val script: (clientName: String) -> HttpResponse,
+    ) : HttpTransport {
+        val urls = mutableListOf<String>()
+
+        override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse {
+            urls += url
+            val clientName = when {
+                body.contains("\"ANDROID_MUSIC\"") -> "ANDROID_MUSIC"
+                body.contains("\"WEB_REMIX\"") -> "WEB_REMIX"
+                else -> "?"
+            }
+            return script(clientName)
+        }
+    }
+
     @Test
-    fun fetchVisitorDataExtractsAndUnescapes() {
-        val body = ")]}'\n{\"visitorData\":\"CgTest\\u003d\\u003dValue\"}"
+    fun fetchVisitorDataReadsTheVisitorIdAnswer() {
+        // The live visitor_id answer's shape, captured 2026-11-01:
+        // a responseContext object carrying the visitorData —
+        // the fixture keeps exactly that key structure.
+        val body = """{"responseContext":{"visitorData":"CgtFixtureVisitorData0123456789=="}}"""
         val client = YoutubeiClient(GetTransport(body = body))
-        assertEquals("CgTest==Value", client.fetchVisitorData())
+        assertEquals("CgtFixtureVisitorData0123456789==", client.fetchVisitorData())
+    }
+
+    @Test
+    fun fetchVisitorDataFallsBackToTheSecondContext() {
+        val transport = VisitorIdTransport { clientName ->
+            if (clientName == "ANDROID_MUSIC") {
+                HttpResponse(500, "{}")
+            } else {
+                HttpResponse(
+                    200,
+                    """{"responseContext":{"visitorData":"CgtWebRemixValue=="}}""",
+                )
+            }
+        }
+        val client = YoutubeiClient(transport)
+        assertEquals("CgtWebRemixValue==", client.fetchVisitorData())
+        assertEquals(2, transport.urls.size)
+        assertTrue(transport.urls.all { it.contains("visitor_id") })
     }
 
     @Test

@@ -82,7 +82,8 @@ class YoutubeiClient(
     /**
      * Supplies the session visitor data for the OAuth road (0.8.4
      * browse hunt). Visitor data is anonymous material — the same
-     * value [fetchVisitorData] reads from `sw.js_data` with no auth
+     * value [fetchVisitorData] reads from the `visitor_id`
+     * endpoint with no auth
      * — but real signed-in clients bind it into every authenticated
      * request (`context.visitorData` + the `X-Goog-Visitor-Id`
      * header), and the OAuth road shipped without it: the cookie
@@ -683,23 +684,42 @@ class YoutubeiClient(
     }
 
     /**
-     * Fetches the anonymous visitor data from `sw.js_data`. Visitor data
-     * is not account data: this call is deliberately made with no auth
-     * headers. Any failure yields null — it never throws.
+     * Fetches the anonymous visitor data from the youtubei
+     * `visitor_id` endpoint. Visitor data is not account data: this
+     * call is deliberately made with no auth headers. The answer
+     * is structured JSON — `responseContext.visitorData` — read
+     * from the ANDROID_MUSIC presentation first (its answer is the
+     * long-form value, the same species a signed-in web session
+     * carries), then WEB_REMIX. Any failure yields null — it
+     * never throws.
+     *
+     * History (0.8.5 hunt): this used to GET `sw.js_data` and
+     * regex a `"visitorData":"…"` key out of it. The endpoint's
+     * live answer is a positional WIZ array with no such key —
+     * the value rides inside it as a URL-encoded token — so the
+     * regex matched nothing on any network and this returned null
+     * deterministically, everywhere. On the owner's phone that
+     * single dead read silently starved the whole 0.8.4 fix: no
+     * visitor legs were ever built, and the account menu ran
+     * without the binding too. The old test passed because its
+     * fixture body was hand-shaped with the key the endpoint
+     * never serves; the replacement tests pin THIS endpoint's
+     * real answer shape, captured live.
      */
-    fun fetchVisitorData(): String? = try {
-        val response = transport.get(VISITOR_DATA_URL, emptyMap())
-        if (response.status != 200) {
-            null
-        } else {
-            val match = VISITOR_DATA_REGEX.find(stripXssiPrefix(response.body))
-            val captured = match?.groupValues?.get(1)
-            captured?.let {
-                (Json.parseToJsonElement("\"$it\"") as? JsonPrimitive)?.content
-            }
+    fun fetchVisitorData(): String? {
+        for (context in listOf(YoutubeiContexts.ANDROID_MUSIC, YoutubeiContexts.WEB_REMIX)) {
+            val root = try {
+                postJson(
+                    "visitor_id", context,
+                    buildJsonObject { put("context", context.toJson()) },
+                )
+            } catch (t: Throwable) {
+                null
+            } ?: continue
+            val value = root.obj("responseContext").str("visitorData")
+            if (!value.isNullOrBlank()) return value
         }
-    } catch (e: Exception) {
-        null
+        return null
     }
 
     /**
@@ -837,12 +857,25 @@ class YoutubeiClient(
                 },
             )
         }
+        // The attempt is logged with its outcome (0.8.5): until
+        // now this call failed in total silence — adoption folded
+        // every non-Found result into "no brand context", so the
+        // refusal that starved brand capture (the same HTTP 400
+        // class as browse) never reached any diagnostics. The log
+        // line carries the surface, the config, and the outcome
+        // class — statuses and counts only, never a value.
+        val menuConfig = BrowseConfig(YoutubeiContexts.WEB_REMIX, null)
         val root = try {
             postJsonOAuth(
                 "account/account_menu", YoutubeiContexts.WEB_REMIX, body, bearerToken,
                 visitorData = visitorData,
             )
         } catch (e: ContextRejected) {
+            logBrowseAttempt(
+                "account_menu", menuConfig,
+                "refused http=${e.httpStatus ?: "?"} " +
+                    "status=${e.serverStatus ?: "?"} reason=${e.serverReason ?: "?"}",
+            )
             val status = e.httpStatus ?: -1
             return if (status == 401 || status == 403) {
                 IdentityLookup.Rejected(status)
@@ -850,19 +883,38 @@ class YoutubeiClient(
                 IdentityLookup.Failed("account menu refused (HTTP $status)")
             }
         } catch (e: NetworkFailure) {
+            logBrowseAttempt(
+                "account_menu", menuConfig,
+                "failed ${e.javaClass.simpleName}",
+            )
             return IdentityLookup.Failed("account menu unreachable")
         } catch (e: OffleashException) {
+            logBrowseAttempt(
+                "account_menu", menuConfig,
+                "failed ${e.javaClass.simpleName}",
+            )
             return IdentityLookup.Failed(
                 "account menu failed (${e.javaClass.simpleName})"
             )
         }
-        return try {
+        val lookup = try {
             IdentityLookup.Found(parseSwitcherIdentities(root), switcherShapeSummary(root))
         } catch (t: Throwable) {
-            IdentityLookup.Failed(
+            logBrowseAttempt(
+                "account_menu", menuConfig,
+                "failed ${t.javaClass.simpleName}",
+            )
+            return IdentityLookup.Failed(
                 "account menu unreadable (${t.javaClass.simpleName})"
             )
         }
+        val identities = (lookup as IdentityLookup.Found).identities
+        logBrowseAttempt(
+            "account_menu", menuConfig,
+            "ok identities=${identities.size} " +
+                "brand=${if (identities.any { it.pageId != null }) "yes" else "no"}",
+        )
+        return lookup
     }
 
     /** The personalized home feed under the token session. */
@@ -1080,20 +1132,33 @@ class YoutubeiClient(
     private var browseWinner: BrowseConfig? = null
 
     /**
-     * The cascade's ranked presentations (0.8.4). The visitor legs
-     * lead: the 0.8.3 device run convicted BOTH plain contexts
-     * (HTTP 400 INVALID_ARGUMENT on every surface) while the same
-     * envelopes answer anonymously, and the one authenticated-shape
-     * element every real Bearer client carries and this road never
-     * did is the visitor-data binding — WEB_REMIX first within
-     * each shape (its Bearer pairing is the one with a public
-     * existence proof for library surfaces), then ANDROID_MUSIC.
-     * The 0.8.2 legs follow in their original order as the control
-     * group: if they ever start answering, the winner cache crowns
-     * them and the hunt's earlier theory was the right one after
-     * all. Visitor legs exist only when a provider yielded data
-     * for this run — a "vd" leg without the data would be a plain
-     * leg wearing a false label, and the diagnostics stay honest.
+     * The cascade's ranked presentations (0.8.4; decoupled 0.8.5).
+     * The visitor legs lead: the 0.8.3 device run convicted BOTH
+     * plain contexts (HTTP 400 INVALID_ARGUMENT on every surface)
+     * while the same envelopes answer anonymously, and the one
+     * authenticated-shape element every real Bearer client carries
+     * and this road never did is the visitor-data binding — WEB
+     * REMIX first within each shape (its Bearer pairing is the one
+     * with a public existence proof for library surfaces), then
+     * ANDROID_MUSIC. The 0.8.2 legs follow in their original order
+     * as the control group: if they ever start answering, the
+     * winner cache crowns them and the hunt's earlier theory was
+     * the right one after all. Visitor legs exist only when a
+     * provider yielded data for this run — a "vd" leg without the
+     * data would be a plain leg wearing a false label, and the
+     * diagnostics stay honest.
+     *
+     * 0.8.5 decoupling: the SHAPE legs are built for the
+     * undelegated presentation too, not only for the delegated
+     * one. In 0.8.4 a captured delegation meant only delegated
+     * shape legs ran — the shape theory and the identity theory
+     * were chained, so a delegation the server disliked could
+     * veto the shape fix (and on the owner's phone the chain
+     * broke earlier still: the visitor provider itself was
+     * starved, so no shape leg of either kind was ever built).
+     * Delegation is an identity refinement applied to a leg when
+     * it exists; it is not a prerequisite for request shape.
+     * Order: delegated shapes, undelegated shapes, plain legs.
      */
     private fun orderedBrowseConfigs(
         delegation: BrowseDelegation?,
@@ -1105,6 +1170,12 @@ class YoutubeiClient(
                 add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation, AuthShape.VISITOR))
                 add(BrowseConfig(YoutubeiContexts.WEB_REMIX, delegation, AuthShape.VISITOR_API))
                 add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation, AuthShape.VISITOR_API))
+                if (delegation != null) {
+                    add(BrowseConfig(YoutubeiContexts.WEB_REMIX, null, AuthShape.VISITOR))
+                    add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, null, AuthShape.VISITOR))
+                    add(BrowseConfig(YoutubeiContexts.WEB_REMIX, null, AuthShape.VISITOR_API))
+                    add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, null, AuthShape.VISITOR_API))
+                }
             }
             add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, delegation))
             add(BrowseConfig(YoutubeiContexts.ANDROID_MUSIC, null))
@@ -1150,6 +1221,13 @@ class YoutubeiClient(
         call: (BrowseConfig, String?) -> JsonObject,
     ): JsonObject {
         val visitorData = currentVisitorData()
+        // The cascade's state, on the record before any attempt
+        // (0.8.5): the 0.8.4 device run's diagnostics showed two
+        // plain legs and nothing else, and whether the delegation
+        // and the visitor binding had been present had to be
+        // INFERRED from the leg count. This line states both, so
+        // the next screenshot reads at a glance.
+        logBrowseState(surface, delegation, visitorData)
         var firstRejection: ContextRejected? = null
         var firstFailure: OffleashException? = null
         for (config in orderedBrowseConfigs(delegation, visitorData)) {
@@ -1182,6 +1260,28 @@ class YoutubeiClient(
         val hook = browseAttemptLog ?: return
         try {
             hook("surface=$surface config=${config.label} outcome=$outcome")
+        } catch (t: Throwable) {
+            // Deliberately swallowed: diagnostics are a passenger.
+        }
+    }
+
+    /**
+     * The cascade state line (0.8.5): whether this run carries a
+     * brand delegation and whether the visitor provider yielded
+     * data — presence only, never a value. Same dispatch and the
+     * same passenger rules as [logBrowseAttempt].
+     */
+    private fun logBrowseState(
+        surface: String,
+        delegation: BrowseDelegation?,
+        visitorData: String?,
+    ) {
+        val hook = browseAttemptLog ?: return
+        try {
+            hook(
+                "surface=$surface state delegation=${if (delegation != null) "yes" else "no"} " +
+                    "visitor=${if (visitorData != null) "yes" else "no"}"
+            )
         } catch (t: Throwable) {
             // Deliberately swallowed: diagnostics are a passenger.
         }
@@ -1473,10 +1573,8 @@ class YoutubeiClient(
             "https://www.youtube.com/getAccountSwitcherEndpoint"
         const val ACCOUNT_SWITCHER_ORIGIN = "https://www.youtube.com"
         val AUTHUSER_PARAM_REGEX = Regex("""[?&]authuser=(\d+)""")
-        const val VISITOR_DATA_URL = "https://music.youtube.com/sw.js_data"
         const val LRCLIB_GET_URL = "https://lrclib.net/api/get"
         const val NO_LYRICS_REASON = "YouTube offers no lyrics for this track"
-        val VISITOR_DATA_REGEX = Regex("\"visitorData\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
         val LRC_TIMESTAMP_REGEX = Regex("""\[(\d+):(\d{2})(?:\.(\d+))?\]""")
         val LRC_OFFSET_REGEX = Regex("""\[offset:\s*([+-]?\d+)\s*\]""")
     }

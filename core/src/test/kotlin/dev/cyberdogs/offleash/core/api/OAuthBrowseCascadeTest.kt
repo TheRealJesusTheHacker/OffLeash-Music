@@ -5,6 +5,7 @@ import dev.cyberdogs.offleash.core.auth.IdentityLookup
 import dev.cyberdogs.offleash.core.error.ContextRejected
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -86,7 +87,10 @@ class OAuthBrowseCascadeTest {
         assertEquals("page-123", call.headers["X-Goog-PageId"])
         assertTrue(call.body.contains("\"onBehalfOfUser\":\"page-123\""))
         assertEquals(
-            listOf("surface=FEmusic_home config=ANDROID_MUSIC+brand outcome=ok"),
+            listOf(
+                "surface=FEmusic_home state delegation=yes visitor=no",
+                "surface=FEmusic_home config=ANDROID_MUSIC+brand outcome=ok",
+            ),
             log,
         )
     }
@@ -161,9 +165,14 @@ class OAuthBrowseCascadeTest {
         assertEquals("UNAUTHENTICATED", thrown.serverStatus)
         assertEquals("authError", thrown.serverReason)
         assertEquals(4, transport.calls.size)
-        assertEquals(4, log.size)
-        assertTrue(log[0].contains("config=ANDROID_MUSIC+brand"))
-        assertTrue(log[0].contains("refused http=401 status=UNAUTHENTICATED reason=authError"))
+        // 0.8.5: the state line precedes the four attempt lines.
+        assertEquals(5, log.size)
+        assertEquals(
+            "surface=VLLM state delegation=yes visitor=no",
+            log[0],
+        )
+        assertTrue(log[1].contains("config=ANDROID_MUSIC+brand"))
+        assertTrue(log[1].contains("refused http=401 status=UNAUTHENTICATED reason=authError"))
         // The log is diagnostics-safe: statuses and class names only.
         for (line in log) {
             assertFalse(line.contains(bearer))
@@ -217,8 +226,13 @@ class OAuthBrowseCascadeTest {
         val feed = client.homeFeedOAuth(bearer)
 
         assertTrue(feed.sections.isNotEmpty())
-        assertTrue(log[0].contains("failed NetworkFailure"))
-        assertTrue(log[1].contains("outcome=ok"))
+        // 0.8.5: the state line precedes the attempt lines.
+        assertEquals(
+            "surface=FEmusic_home state delegation=no visitor=no",
+            log[0],
+        )
+        assertTrue(log[1].contains("failed NetworkFailure"))
+        assertTrue(log[2].contains("outcome=ok"))
     }
 
     @Test
@@ -254,6 +268,14 @@ class OAuthBrowseCascadeTest {
         val brand = identities.single { it.name == "Sentinel Brand Channel" }
         assertEquals("987654321098765432109", brand.pageId)
         assertTrue(brand.isSelected)
+        // The two-identity discrimination, explicit (0.8.5): the
+        // PERSONAL identity is listed first in the fixture and
+        // carries NO page id — a capture that took the first
+        // identity, or stamped the brand's page id onto both,
+        // would hand browse the wrong delegation.
+        val personal = identities.single { it.name == "Skyler Example" }
+        assertNull(personal.pageId)
+        assertFalse(personal.isSelected)
         val call = transport.calls.single()
         assertTrue(call.url.contains("account/account_menu"))
         assertEquals("Bearer $bearer", call.headers["Authorization"])

@@ -108,7 +108,10 @@ class OAuthVisitorShapeTest {
         assertEquals("1", call.headers["X-Goog-AuthUser"])
         assertEquals("page-123", call.headers["X-Goog-PageId"])
         assertEquals(
-            listOf("surface=FEmusic_home config=WEB_REMIX+brand+vd outcome=ok"),
+            listOf(
+                "surface=FEmusic_home state delegation=yes visitor=yes",
+                "surface=FEmusic_home config=WEB_REMIX+brand+vd outcome=ok",
+            ),
             log,
         )
     }
@@ -156,13 +159,69 @@ class OAuthVisitorShapeTest {
         val feed = client.homeFeedOAuth(bearer, delegation = delegation)
 
         assertTrue(feed.sections.isNotEmpty())
-        // 4 visitor legs (WR/AM x vd/vd+api), then the first plain leg.
-        assertEquals(5, transport.calls.size)
+        // 0.8.5 decoupled order: 4 delegated visitor legs, then 4
+        // UNDELEGATED visitor legs, then the first plain leg.
+        assertEquals(9, transport.calls.size)
+        val undelegatedShape = transport.calls[4]
+        assertTrue(undelegatedShape.hasVisitor)
+        assertFalse(undelegatedShape.delegated)
         val winning = transport.calls.last()
         assertFalse(winning.hasVisitor)
         assertFalse(winning.headers.containsKey("X-Goog-Visitor-Id"))
         assertEquals("ANDROID_MUSIC", winning.clientName)
         assertTrue(winning.delegated)
+    }
+
+    @Test
+    fun undelegatedVisitorLegWinsWhenEveryDelegatedShapeRefuses() {
+        val transport = ShapeTransport { call ->
+            if (call.hasVisitor && !call.delegated && !call.hasApiHeaders) {
+                homeOk()
+            } else {
+                HttpResponse(400, badRequestBody)
+            }
+        }
+        val client = vdClient(transport)
+        val delegation = BrowseDelegation(authUser = 1, pageId = "page-123")
+
+        val feed = client.homeFeedOAuth(bearer, delegation = delegation)
+
+        assertTrue(feed.sections.isNotEmpty())
+        // Delegated vd pair + delegated vd+api pair refuse; the
+        // first undelegated vd leg (WEB_REMIX) is accepted. In the
+        // 0.8.4 cascade this leg did not exist — a delegation the
+        // server disliked vetoed the shape fix entirely.
+        assertEquals(5, transport.calls.size)
+        val winning = transport.calls.last()
+        assertEquals("WEB_REMIX", winning.clientName)
+        assertTrue(winning.hasVisitor)
+        assertFalse(winning.delegated)
+    }
+
+    @Test
+    fun stateLineNamesWhatTheCascadeIsMissing() {
+        val log = mutableListOf<String>()
+        val transport = ShapeTransport { HttpResponse(400, badRequestBody) }
+        val client = YoutubeiClient(
+            transport,
+            browseAttemptLog = { line: String -> log += line },
+        )
+
+        try {
+            client.homeFeedOAuth(bearer)
+            throw AssertionError("expected the cascade to throw")
+        } catch (e: ContextRejected) {
+            assertEquals(400, e.httpStatus)
+        }
+
+        // The 0.8.4 device screenshot in one line: no delegation,
+        // no visitor data — the state the next screenshot must
+        // never again leave to inference from the leg count.
+        assertEquals(
+            "surface=FEmusic_home state delegation=no visitor=no",
+            log.first(),
+        )
+        assertTrue(log.drop(1).all { it.contains(" config=") })
     }
 
     @Test
@@ -283,5 +342,47 @@ class OAuthVisitorShapeTest {
         assertTrue(call.url.contains("account/account_menu"))
         assertTrue(call.body.contains("\"visitorData\":\"visitor-data-xyz\""))
         assertEquals("visitor-data-xyz", call.headers["X-Goog-Visitor-Id"])
+    }
+
+    @Test
+    fun accountMenuRefusalIsLoggedWithItsStatusAndReason() {
+        val log = mutableListOf<String>()
+        val transport = ShapeTransport { HttpResponse(400, badRequestBody) }
+        val client = vdClient(transport, log)
+
+        val lookup = client.accountIdentitiesOAuth(bearer)
+
+        assertTrue(lookup is IdentityLookup.Failed)
+        // 0.8.5: the menu attempt is on the diagnostics record —
+        // in 0.8.4 this exact refusal folded silently into
+        // "no brand context" and the hunt had to infer it.
+        assertEquals(
+            listOf(
+                "surface=account_menu config=WEB_REMIX outcome=refused " +
+                    "http=400 status=INVALID_ARGUMENT reason=badRequest"
+            ),
+            log,
+        )
+    }
+
+    @Test
+    fun accountMenuAnswerIsLoggedWithIdentityCounts() {
+        val log = mutableListOf<String>()
+        val transport = ShapeTransport {
+            HttpResponse(200, Fixtures.load("derived_account_switcher.json"))
+        }
+        val client = vdClient(transport, log)
+
+        val lookup = client.accountIdentitiesOAuth(bearer)
+
+        assertTrue(lookup is IdentityLookup.Found)
+        // Counts and presence only — never a name or a page id.
+        assertEquals(
+            listOf(
+                "surface=account_menu config=WEB_REMIX outcome=ok " +
+                    "identities=2 brand=yes"
+            ),
+            log,
+        )
     }
 }

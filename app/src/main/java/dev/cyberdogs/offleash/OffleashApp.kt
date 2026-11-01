@@ -131,7 +131,7 @@ class AppContainer(app: OffleashApp) {
      * The same late-bound arrangement for the core client itself,
      * for the visitor-data provider (0.8.4): the client wants the
      * provider at construction, but the fetch the provider wraps
-     * is a method ON the client (its anonymous `sw.js_data` read,
+     * is a method ON the client (its anonymous `visitor_id` read,
      * over the client's own transport). The provider delegates
      * through this reference, assigned in the init block below,
      * before anything can make a request.

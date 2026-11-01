@@ -1280,6 +1280,17 @@ class GoogleSessionManager(
             when {
                 chosen != null ->
                     "brand context captured — browse will run as the account's brand channel"
+                // The menu attempt's own outcome, named (0.8.5):
+                // before this, a refused or failed menu folded
+                // into the same "no brand context" line as an
+                // empty one, and the HTTP status that explained
+                // the empty capture reached no diagnostics.
+                lookup is IdentityLookup.Rejected ->
+                    "the account menu rejected the check " +
+                        "(HTTP ${lookup.httpStatus}) — browse runs undelegated"
+                lookup is IdentityLookup.Failed ->
+                    "the account menu check failed (${lookup.detail}) " +
+                        "— browse runs undelegated"
                 identities.isNotEmpty() ->
                     "the account lists ${identities.size} identities, none a brand channel " +
                         "— browse runs undelegated"
