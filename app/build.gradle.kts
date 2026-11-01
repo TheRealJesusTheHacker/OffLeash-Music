@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -21,7 +23,7 @@ val ciDebugKeystore: String? = providers.gradleProperty("offleashDebugKeystore")
 // else working — until the owner sets up their own key in the
 // app. The values land only in the generated BuildConfig.
 val oauthPropsFile = rootProject.file("offleash-oauth.properties")
-val oauthProps = java.util.Properties()
+val oauthProps = Properties()
 if (oauthPropsFile.isFile) {
     oauthPropsFile.inputStream().use { oauthProps.load(it) }
 }
