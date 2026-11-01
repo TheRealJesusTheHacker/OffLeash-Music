@@ -68,11 +68,13 @@ fun SignInScreen(
     container: AppContainer,
     onSignedIn: () -> Unit,
     onBack: () -> Unit,
+    onOwnKeyClick: () -> Unit,
 ) {
     val context = LocalContext.current
     val manager = container.googleSessionManager
     val phase by manager.phase.collectAsState()
     val sessionState by manager.uiState.collectAsState()
+    val ownKeyState by container.ownKeySetup.state.collectAsState()
 
     // The last crash the app recorded, if any: after a crash this
     // screen is where the owner lands to retry, so this is where
@@ -171,6 +173,30 @@ fun SignInScreen(
 
         when (val current = phase) {
             GoogleSignInPhase.Idle -> {
+                // The standing end reason, when there is one
+                // (0.8.6): a session the client-change gate ended
+                // lands here with its honest explanation — shown
+                // until the owner signs in again, never as an
+                // error loop.
+                val endReason = sessionState.lastEndReason
+                if (endReason != null) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme.surfaceVariant,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                text = endReason,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
                 Button(
                     onClick = { manager.startSignIn() },
                     modifier = Modifier.fillMaxWidth(),
@@ -345,6 +371,86 @@ fun SignInScreen(
                             onClick = { manager.startSignIn() },
                         ) { Text("Try again") }
                     }
+                }
+            }
+        }
+
+        // The own-key entry (0.8.6): Google limits what the
+        // shared sign-in can reach, and this is the fix the app
+        // offers for it — the guided setup wizard. When a key is
+        // already saved this is its management door instead.
+        Spacer(Modifier.height(24.dp))
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                if (ownKeyState.hasOwnKey) {
+                    Text(
+                        text = "You're using your own Google key " +
+                            "for sign-in.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onOwnKeyClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Manage your Google key") }
+                } else if (container.googleAuth.identity == null) {
+                    Text(
+                        text = "Sign-in needs your own Google key",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "This build of OffLeash doesn't " +
+                            "carry a shared sign-in, so signing in " +
+                            "starts with your own Google key. It's " +
+                            "free, takes about 10 minutes, and you " +
+                            "only set it up once.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onOwnKeyClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Set up your own Google key") }
+                } else {
+                    Text(
+                        text = "Your library isn't loading?",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Google limits what OffLeash's " +
+                            "shared sign-in can reach, so your " +
+                            "playlists and liked songs may not " +
+                            "load. Setting up your own Google key " +
+                            "fixes that — it's free, takes about " +
+                            "10 minutes, and you only do it once.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onOwnKeyClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Set up your own Google key") }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Rather not? The sign-in above " +
+                            "still works — some libraries just " +
+                            "may not load.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color =
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

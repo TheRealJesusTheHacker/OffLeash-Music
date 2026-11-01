@@ -73,7 +73,7 @@ class GoogleSessionManagerTest {
         userinfoStatus: Int = 200,
     ): GoogleSessionManager = GoogleSessionManager(
         store = store,
-        auth = GoogleDeviceAuth(formTransport),
+        auth = GoogleDeviceAuth(formTransport, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(UserinfoTransport(status = userinfoStatus)),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         signInDiagnostics = SignInDiagnostics(),

@@ -16,3 +16,7 @@ local.properties
 *.keystore
 keystore.properties
 ci-debug/
+
+# The build-supplied sign-in client pair (0.8.6) — never committed;
+# CI supplies it from Actions secrets as Gradle properties instead.
+offleash-oauth.properties

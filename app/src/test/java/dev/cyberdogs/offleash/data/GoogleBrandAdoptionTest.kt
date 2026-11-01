@@ -73,7 +73,7 @@ class GoogleBrandAdoptionTest {
         clientTransport: HttpTransport = IdentityTransport(),
     ): GoogleSessionManager = GoogleSessionManager(
         store = store,
-        auth = GoogleDeviceAuth(formTransport),
+        auth = GoogleDeviceAuth(formTransport, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(clientTransport),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         signInDiagnostics = SignInDiagnostics(),

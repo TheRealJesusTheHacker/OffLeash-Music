@@ -333,6 +333,7 @@ class R48SweepContractTest {
                         "                    SettingsScreen(\n" +
                         "                        container = container,\n" +
                         "                        onSignInClick = { navController.navigate(\"signin\") },\n" +
+                        "                        onOwnKeyClick = { navController.navigate(\"ownkey\") },\n" +
                         "                    )\n" +
                         "                }\n"),
         )
@@ -344,6 +345,7 @@ class R48SweepContractTest {
                         "                        container = container,\n" +
                         "                        onSignedIn = { navController.popBackStack() },\n" +
                         "                        onBack = { navController.popBackStack() },\n" +
+                        "                        onOwnKeyClick = { navController.navigate(\"ownkey\") },\n" +
                         "                    )\n" +
                         "                }\n"),
         )

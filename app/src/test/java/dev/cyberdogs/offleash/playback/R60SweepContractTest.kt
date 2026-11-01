@@ -93,12 +93,15 @@ class R60SweepContractTest {
             "googlePendingGrantStore box",
         )
         assertEquals(
-            "exactly the three sealed stores may open the " +
-                "session key alias — a fourth getOrCreate or " +
+            "exactly the five sealed stores may open the " +
+                "session key alias — a sixth getOrCreate or " +
                 "a re-pointed literal alias (round-60 F1 " +
                 "doctor, GREEN across the full suite) moves " +
-                "no slice",
-            3,
+                "no slice (0.8.6 census event: the own-key " +
+                "and wizard-progress stores joined the three " +
+                "standing stores on the same alias, by the " +
+                "house's one-key custody design)",
+            5,
             occurrences(
                 app,
                 "KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS)",

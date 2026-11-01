@@ -92,7 +92,7 @@ class StoreTotalityTest {
 
         val googleManager = GoogleSessionManager(
             store = GoogleTokenStore(ThrowingStorage(), testSecretBox()),
-            auth = GoogleDeviceAuth(transport),
+            auth = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED),
             client = client,
             scope = scope,
             pendingGrantStore = GooglePendingGrantStore(ThrowingStorage(), testSecretBox()),

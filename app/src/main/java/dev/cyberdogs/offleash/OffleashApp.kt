@@ -16,6 +16,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.OAuthClientIdentity
+import dev.cyberdogs.offleash.core.auth.OAuthClientResolution
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
 import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.account.GoogleSessionKeepAlive
@@ -33,6 +35,12 @@ import dev.cyberdogs.offleash.data.GoogleTokenStore
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
 import dev.cyberdogs.offleash.data.OkHttpTransport
+import dev.cyberdogs.offleash.data.OwnKeySetup
+import dev.cyberdogs.offleash.data.OwnKeyStore
+import dev.cyberdogs.offleash.data.OwnKeyWizardStore
+import dev.cyberdogs.offleash.data.ownKeyFileIn
+import dev.cyberdogs.offleash.data.ownKeyWizardFileIn
+import dev.cyberdogs.offleash.data.storedOwnKeyIdentity
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.data.SessionManager
 import dev.cyberdogs.offleash.data.SessionStore
@@ -196,6 +204,30 @@ class AppContainer(app: OffleashApp) {
         )
 
     /**
+     * The owner's own Google key store (0.8.6): the pair the owner
+     * entered in the setup wizard, sealed with the same box into
+     * its own file. Read at startup BEFORE the build-supplied pair
+     * is resolved — a key entered on this device outranks anything
+     * a build carried in (see [ownKeySetup]).
+     */
+    val ownKeyStore: OwnKeyStore = OwnKeyStore(
+        storage = FileSecretStorage(ownKeyFileIn(app)),
+        box = AesGcmSecretBox(
+            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
+        ),
+    )
+
+    /** The own-key wizard's progress store (0.8.6): same seal. */
+    val ownKeyWizardStore: OwnKeyWizardStore = OwnKeyWizardStore(
+        storage = FileSecretStorage(ownKeyWizardFileIn(app)),
+        box = AesGcmSecretBox(
+            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
+        ),
+    )
+
+    /**
      * The "a Google sign-in has happened here" marker (bug sweep
      * round 1): once set, the legacy cookie session never drives
      * the auto-download worker's decisions — see
@@ -269,6 +301,46 @@ class AppContainer(app: OffleashApp) {
     )
 
     /**
+     * The client pair this build itself was supplied with (0.8.6):
+     * injected at build time (Gradle properties / the release
+     * workflow's secrets — see app/build.gradle.kts), resolved
+     * through the core resolver. A malformed supply is a build
+     * defect: logged in plain words, treated as no pair — never
+     * half-used.
+     */
+    val buildOAuthIdentity: OAuthClientIdentity? = resolveBuildOAuthIdentity()
+
+    private fun resolveBuildOAuthIdentity(): OAuthClientIdentity? {
+        val resolution = OAuthClientIdentity.resolve(
+            BuildConfig.OAUTH_CLIENT_ID,
+            BuildConfig.OAUTH_CLIENT_SECRET,
+            BuildConfig.OAUTH_CLIENT_KIND,
+        )
+        return when (resolution) {
+            is OAuthClientResolution.Configured -> resolution.identity
+            is OAuthClientResolution.Malformed -> {
+                signInDiagnostics.log(
+                    "signin",
+                    "the build's supplied sign-in key is malformed " +
+                        "(${resolution.detail}) — sign-in runs " +
+                        "unconfigured until a key is set up in the app",
+                )
+                null
+            }
+            OAuthClientResolution.Absent -> null
+        }
+    }
+
+    /**
+     * The identity sign-in starts under (0.8.6): the owner's own
+     * key when one is saved on this device — it outranks the
+     * build's pair, always — else the build-supplied pair, else
+     * none (sign-in unavailable; the wizard is the road in).
+     */
+    val startupOAuthIdentity: OAuthClientIdentity? =
+        storedOwnKeyIdentity(ownKeyStore) ?: buildOAuthIdentity
+
+    /**
      * The Google OAuth client (device-code flow), riding its own
      * transport instance over the shared OkHttp client — no cookie
      * rotation callback: OAuth responses carry no session cookies
@@ -276,6 +348,7 @@ class AppContainer(app: OffleashApp) {
      */
     val googleAuth: GoogleDeviceAuth = GoogleDeviceAuth(
         OkHttpTransport(okHttpClient),
+        startupOAuthIdentity,
     )
 
     /**
@@ -291,6 +364,33 @@ class AppContainer(app: OffleashApp) {
         pendingGrantStore = googlePendingGrantStore,
         signInDiagnostics = signInDiagnostics,
     )
+
+    /**
+     * The own-key setup wizard's brain (0.8.6): step machine,
+     * sealed progress + draft, the live key test, and the save
+     * that switches sign-in to the owner's pair through the
+     * session manager's client-change gate.
+     */
+    val ownKeySetup: OwnKeySetup = OwnKeySetup(
+        keyStore = ownKeyStore,
+        wizardStore = ownKeyWizardStore,
+        transport = OkHttpTransport(okHttpClient),
+        auth = googleAuth,
+        sessionManager = googleSessionManager,
+        buildIdentity = buildOAuthIdentity,
+        scope = sessionScope,
+        signInDiagnostics = signInDiagnostics,
+    )
+
+    init {
+        // The client-change gate (0.8.6) runs before any account
+        // state is read: a session sealed under a different client
+        // class than this build's live identity ends here, once,
+        // cleanly — so the account snapshot below (and every first
+        // frame) already shows the honest signed-out state with
+        // its reason.
+        googleSessionManager.applyClientGate()
+    }
 
     /**
      * The account state the UI presents: the Google session's

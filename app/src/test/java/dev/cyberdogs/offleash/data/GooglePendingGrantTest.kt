@@ -107,7 +107,7 @@ class GooglePendingGrantTest {
         nowMs: () -> Long = { System.currentTimeMillis() },
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form),
+        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(UserinfoTransport()),
         scope = scope,
         pendingGrantStore = pendingStore,

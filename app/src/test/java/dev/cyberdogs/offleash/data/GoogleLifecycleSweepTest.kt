@@ -161,7 +161,7 @@ class GoogleLifecycleSweepTest {
         nowMs: () -> Long = { System.currentTimeMillis() },
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form),
+        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(UserinfoTransport(body = userinfoBody)),
         scope = scope,
         pendingGrantStore = pendingStore,

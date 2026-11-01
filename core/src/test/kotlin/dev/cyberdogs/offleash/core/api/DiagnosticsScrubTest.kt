@@ -7,6 +7,7 @@ import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.auth.IdentityLookup
 import dev.cyberdogs.offleash.core.auth.RefreshResult
 import dev.cyberdogs.offleash.core.auth.SessionCookies
+import dev.cyberdogs.offleash.core.auth.TestOAuthIdentity
 import dev.cyberdogs.offleash.core.auth.TokenPollResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -84,7 +85,10 @@ class DiagnosticsScrubTest {
         repeat(5000) { sb.append("{\"a\":") }
         sb.append("{}")
         repeat(5000) { sb.append("}") }
-        val auth = GoogleDeviceAuth(FormTransport(200, sb.toString()))
+        val auth = GoogleDeviceAuth(
+            FormTransport(200, sb.toString()),
+            TestOAuthIdentity.SHARED,
+        )
         var escaped: Throwable? = null
         var device: DeviceCodeResult? = null
         var poll: TokenPollResult? = null

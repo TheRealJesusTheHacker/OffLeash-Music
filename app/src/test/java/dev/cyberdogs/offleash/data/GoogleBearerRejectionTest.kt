@@ -125,7 +125,7 @@ class GoogleBearerRejectionTest {
         )
         return GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UnusedTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,
@@ -228,7 +228,7 @@ class GoogleBearerRejectionTest {
         val form = RoutingFormTransport()
         val manager = GoogleSessionManager(
             store = testTokenStore(),
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UnusedTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             signInDiagnostics = SignInDiagnostics(),
@@ -425,7 +425,7 @@ class GoogleBearerRejectionTest {
         pendingStore: GooglePendingGrantStore,
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form),
+        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(UnusedTransport()),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         pendingGrantStore = pendingStore,

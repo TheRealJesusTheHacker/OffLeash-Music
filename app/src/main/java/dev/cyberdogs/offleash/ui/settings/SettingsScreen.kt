@@ -116,12 +116,14 @@ fun downloadQualityCaption(quality: DownloadQualityPreference): String = when (q
 fun SettingsScreen(
     container: AppContainer,
     onSignInClick: () -> Unit = {},
+    onOwnKeyClick: () -> Unit = {},
 ) {
     val streamQuality by container.appPreferences.streamQualityFlow.collectAsState()
     val downloadQuality by container.parityPreferences.downloadQualityFlow.collectAsState()
     val autoDownloadLiked by container.parityPreferences.autoDownloadLikedFlow.collectAsState()
     val audioVersionInRadio by container.parityPreferences.audioVersionInRadioFlow.collectAsState()
     val sessionState by container.accountUiState.collectAsState()
+    val ownKeyState by container.ownKeySetup.state.collectAsState()
     val scope = rememberCoroutineScope()
     var showSignOutConfirm by remember { mutableStateOf(false) }
 
@@ -296,6 +298,33 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { showSignOutConfirm = true }) {
                 Text("Sign out")
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        // The own-key door (0.8.6): the same guided setup the
+        // sign-in screen offers — here as account management, so
+        // a signed-in owner can set up, replace, or remove the
+        // key sign-in runs under.
+        if (ownKeyState.hasOwnKey) {
+            Text(
+                text = "Sign-in runs under your own Google key.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onOwnKeyClick) {
+                Text("Manage your Google key")
+            }
+        } else {
+            Text(
+                text = "Library not loading? Your own Google key " +
+                    "can fix that — free, about 10 minutes.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onOwnKeyClick) {
+                Text("Set up your own Google key")
             }
         }
     }

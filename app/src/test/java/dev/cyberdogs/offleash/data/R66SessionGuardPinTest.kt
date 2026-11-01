@@ -131,7 +131,7 @@ class R66SessionGuardPinTest {
         pendingStore: GooglePendingGrantStore? = null,
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form),
+        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(UserinfoTransport()),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         pendingGrantStore = pendingStore,
@@ -495,7 +495,7 @@ class R66SessionGuardPinTest {
         )
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,
@@ -588,7 +588,7 @@ class R66SessionGuardPinTest {
         )
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,
@@ -681,7 +681,7 @@ class R66SessionGuardPinTest {
         )
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,
@@ -736,7 +736,7 @@ class R66SessionGuardPinTest {
         )
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,
@@ -859,7 +859,7 @@ class R66SessionGuardPinTest {
         )
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,
@@ -912,7 +912,7 @@ class R66SessionGuardPinTest {
         }
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = pendingStore,

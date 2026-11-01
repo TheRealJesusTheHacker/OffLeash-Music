@@ -64,7 +64,7 @@ class GoogleDeviceAuthTest {
     fun deviceCodeIssuanceParsesAndRequestsThePinnedScopes() {
         val transport = ScriptedFormTransport()
         transport.responses.add(HttpResponse(200, issuedBody))
-        val result = GoogleDeviceAuth(transport).requestDeviceCode()
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).requestDeviceCode()
         val issued = result as DeviceCodeResult.Issued
         assertEquals("device-code-abc", issued.code.deviceCode)
         assertEquals("WDJB-MJHT", issued.code.userCode)
@@ -74,7 +74,7 @@ class GoogleDeviceAuthTest {
 
         assertEquals(GoogleOAuth.DEVICE_CODE_URL, transport.lastUrl)
         val form = transport.lastFormBody!!
-        assertTrue(form.contains("client_id=${GoogleOAuth.CLIENT_ID}"))
+        assertTrue(form.contains("client_id=${TestOAuthIdentity.SHARED.clientId}"))
         // The scope rides form-encoded: the youtube scope's slashes
         // are percent-encoded and the spaces became '+'.
         assertTrue(form.contains("auth%2Fyoutube"))
@@ -91,13 +91,13 @@ class GoogleDeviceAuthTest {
         transport.responses.add(
             HttpResponse(400, """{"error":"invalid_client","error_description":"bad"}""")
         )
-        val result = GoogleDeviceAuth(transport).requestDeviceCode()
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).requestDeviceCode()
         val failed = result as DeviceCodeResult.Failed
         assertTrue(failed.detail.contains("invalid_client"))
 
         val deadTransport = ScriptedFormTransport()
         deadTransport.failure = RuntimeException("connection reset")
-        val dead = GoogleDeviceAuth(deadTransport).requestDeviceCode()
+        val dead = GoogleDeviceAuth(deadTransport, TestOAuthIdentity.SHARED).requestDeviceCode()
         assertTrue(dead is DeviceCodeResult.Failed)
     }
 
@@ -106,7 +106,7 @@ class GoogleDeviceAuthTest {
         fun pollWith(response: HttpResponse): TokenPollResult {
             val transport = ScriptedFormTransport()
             transport.responses.add(response)
-            return GoogleDeviceAuth(transport).pollForToken("device-code-abc")
+            return GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).pollForToken("device-code-abc")
         }
         // Pending arrives as an error body (400 in the docs; the live
         // probe answered 428) — the mapping keys on the error code.
@@ -156,7 +156,7 @@ class GoogleDeviceAuthTest {
         fun pollWith(response: HttpResponse): TokenPollResult {
             val transport = ScriptedFormTransport()
             transport.responses.add(response)
-            return GoogleDeviceAuth(transport).pollForToken("device-code-abc")
+            return GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).pollForToken("device-code-abc")
         }
         assertTrue(
             pollWith(HttpResponse(500, """{"error":"server_error"}"""))
@@ -178,7 +178,7 @@ class GoogleDeviceAuthTest {
     fun pollGrantParsesTheTokenSetAndSendsTheDeviceGrant() {
         val transport = ScriptedFormTransport()
         transport.responses.add(HttpResponse(200, grantBody))
-        val result = GoogleDeviceAuth(transport).pollForToken("device-code-abc")
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).pollForToken("device-code-abc")
         val granted = result as TokenPollResult.Granted
         assertEquals("ya29.test-access", granted.tokens.accessToken)
         assertEquals("test-refresh-token", granted.tokens.refreshToken)
@@ -193,14 +193,14 @@ class GoogleDeviceAuthTest {
                 "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
             )
         )
-        assertTrue(form.contains("client_id=${GoogleOAuth.CLIENT_ID}"))
+        assertTrue(form.contains("client_id=${TestOAuthIdentity.SHARED.clientId}"))
     }
 
     @Test
     fun pollTransportFailureIsAValueNotAThrow() {
         val transport = ScriptedFormTransport()
         transport.failure = RuntimeException("timeout")
-        val result = GoogleDeviceAuth(transport).pollForToken("device-code-abc")
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).pollForToken("device-code-abc")
         // 0.8.1: a transport failure is Transient — the
         // value-not-a-throw contract is unchanged; the value's
         // meaning is now "no answer arrived, keep watching".
@@ -214,7 +214,7 @@ class GoogleDeviceAuthTest {
         transport.responses.add(
             HttpResponse(200, """{"access_token":"ya29.fresh","expires_in":3599,"token_type":"Bearer"}""")
         )
-        val result = GoogleDeviceAuth(transport).refreshTokens("test-refresh-token")
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).refreshTokens("test-refresh-token")
         val refreshed = result as RefreshResult.Refreshed
         assertEquals("ya29.fresh", refreshed.tokens.accessToken)
         // A refresh answer that doesn't rotate the refresh token
@@ -230,7 +230,7 @@ class GoogleDeviceAuthTest {
         transport.responses.add(
             HttpResponse(400, """{"error":"invalid_grant","error_description":"Token has been expired or revoked."}""")
         )
-        val result = GoogleDeviceAuth(transport).refreshTokens("test-refresh-token")
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).refreshTokens("test-refresh-token")
         assertTrue(result is RefreshResult.Revoked)
     }
 
@@ -238,7 +238,7 @@ class GoogleDeviceAuthTest {
     fun refreshServerTroubleIsAFailureNotARevocation() {
         val transport = ScriptedFormTransport()
         transport.responses.add(HttpResponse(503, """{"error":"temporarily_unavailable"}"""))
-        val result = GoogleDeviceAuth(transport).refreshTokens("test-refresh-token")
+        val result = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).refreshTokens("test-refresh-token")
         assertTrue(result is RefreshResult.Failed)
     }
 
@@ -246,12 +246,12 @@ class GoogleDeviceAuthTest {
     fun revokeReportsGooglesAnswerAndNeverThrows() {
         val transport = ScriptedFormTransport()
         transport.responses.add(HttpResponse(200, ""))
-        assertTrue(GoogleDeviceAuth(transport).revokeToken("test-refresh-token"))
+        assertTrue(GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED).revokeToken("test-refresh-token"))
         assertEquals(GoogleOAuth.REVOKE_URL, transport.lastUrl)
         assertTrue(transport.lastFormBody!!.contains("token=test-refresh-token"))
 
         val deadTransport = ScriptedFormTransport()
         deadTransport.failure = RuntimeException("offline")
-        assertEquals(false, GoogleDeviceAuth(deadTransport).revokeToken("x"))
+        assertEquals(false, GoogleDeviceAuth(deadTransport, TestOAuthIdentity.SHARED).revokeToken("x"))
     }
 }

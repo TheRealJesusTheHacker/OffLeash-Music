@@ -2,12 +2,15 @@ package dev.cyberdogs.offleash.data
 
 import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
+import dev.cyberdogs.offleash.core.auth.ClientChangeGate
+import dev.cyberdogs.offleash.core.auth.ClientGateDecision
 import dev.cyberdogs.offleash.core.auth.DeviceCodeResult
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.auth.GoogleTokens
 import dev.cyberdogs.offleash.core.auth.IdentityLookup
 import dev.cyberdogs.offleash.core.auth.RefreshResult
 import dev.cyberdogs.offleash.core.auth.TokenPollResult
+import dev.cyberdogs.offleash.core.auth.signInClientLine
 import dev.cyberdogs.offleash.core.model.AccountIdentity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -337,6 +340,19 @@ class GoogleSessionManager(
      */
     fun startSignIn() {
         if (_uiState.value.signedIn) return
+        // A build with no client identity set up (0.8.6) cannot
+        // ask Google for a code at all: end the attempt here with
+        // the honest reason instead of minting a grant under a
+        // borrowed pair or failing opaquely at the wire.
+        if (auth.identity == null) {
+            _phase.value = GoogleSignInPhase.Failed(NOT_CONFIGURED_REASON)
+            signInDiagnostics.log(
+                "google-sign-in",
+                "sign-in was requested, but no sign-in key is set up " +
+                    "in this build — nothing was asked of Google",
+            )
+            return
+        }
         val live = livePendingGrant()
         if (live != null) {
             signInDiagnostics.log(
@@ -543,6 +559,7 @@ class GoogleSessionManager(
                 issuedAtEpochMs = now,
                 expiresAtEpochMs = now + code.expiresInSeconds * 1000L,
                 intervalSeconds = code.intervalSeconds,
+                clientKind = auth.identity?.kind?.label,
             )
             if (!persistPendingGrantIfCurrent(epoch, grant)) {
                 signInDiagnostics.log(
@@ -968,6 +985,10 @@ class GoogleSessionManager(
             avatarUrl = selected?.avatarUrl,
             identityPageId = brand?.pageId,
             identityAuthUser = brand?.authUser,
+            // The issuing client class (0.8.6): the marker the
+            // client-change gate reads at the next launch — the
+            // class only, never the pair.
+            clientKind = auth.identity?.kind?.label,
             grantedAtEpochMs = now,
             lastValidatedEpochMs = if (selected != null) now else 0L,
         )
@@ -1530,6 +1551,112 @@ class GoogleSessionManager(
         _phase.value = GoogleSignInPhase.Idle
     }
 
+    /**
+     * The client-change gate (0.8.6): run once at container build
+     * (before any account state is read) and again whenever the
+     * live client identity is switched at runtime — the setup
+     * wizard's save, or a key removal. Tokens are bound to the
+     * client that issued them: a session sealed under one client
+     * class can never refresh under another, so when the classes
+     * differ the session ends HERE, once, cleanly — sealed store
+     * wiped, signed-out state published with the honest reason —
+     * instead of degrading into refresh failures the owner would
+     * meet as a mystery sign-out or an error loop. The ending is
+     * LOCAL only: no revocation is attempted at Google, because
+     * revocation names the issuing client and this build may no
+     * longer hold it; the abandoned grant simply dies unused,
+     * which is the outcome the owner asked for by switching.
+     *
+     * Always logs the one diagnostics line naming the client class
+     * in use (`signin: client=owner` / `client=shared` /
+     * `client=unconfigured`) — the class only, never a value.
+     *
+     * [forceCleanResign] covers the pair-level change the class
+     * gate cannot see: the wizard saving a DIFFERENT owner pair
+     * over a standing one (same class, different registration —
+     * the sealed tokens name the old registration and cannot
+     * refresh under the new one either).
+     */
+    fun applyClientGate(forceCleanResign: Boolean = false) {
+        val buildKind = auth.identity?.kind
+        signInDiagnostics.log("signin", signInClientLine(buildKind))
+        val session = synchronized(lock) { stored }
+        if (session != null) {
+            val decision = if (forceCleanResign) {
+                ClientGateDecision.CLEAN_RESIGN
+            } else {
+                ClientChangeGate.decide(session.clientKind, buildKind)
+            }
+            if (decision != ClientGateDecision.CARRY) {
+                endSessionForClientChange(
+                    if (decision == ClientGateDecision.CLEAR_UNCONFIGURED) {
+                        UNCONFIGURED_END_REASON
+                    } else {
+                        CLIENT_CHANGED_REASON
+                    },
+                )
+                return
+            }
+        }
+        // No session stands (or it carries): a leftover pending
+        // grant minted under another class can never be collected
+        // under this one — clear it rather than resuming a code
+        // whose polls could only fail.
+        val grant = pendingGrant
+        if (grant != null) {
+            val grantDecision =
+                ClientChangeGate.decide(grant.clientKind, buildKind)
+            if (grantDecision != ClientGateDecision.CARRY) {
+                bumpFlowEpoch()
+                signInJob?.cancel()
+                signInJob = null
+                clearPendingGrant()
+                signInDiagnostics.log(
+                    "google-sign-in",
+                    "a saved sign-in code from the previous sign-in " +
+                        "setup was cleared — it could never be " +
+                        "collected under this one",
+                )
+            }
+        }
+    }
+
+    /**
+     * The gate's clean ending, shaped like sign-out's teardown
+     * minus the revocation: invalidate everything in flight, wipe
+     * the sealed session, and publish the signed-out state WITH
+     * its reason, once — the sign-in screen shows the reason until
+     * the owner signs in again, which is the whole of the
+     * "clean re-sign-in" contract.
+     */
+    private fun endSessionForClientChange(reason: String) {
+        bumpFlowEpoch()
+        signInJob?.cancel()
+        signInJob = null
+        clearPendingGrant()
+        synchronized(lock) {
+            // Atomic with the wipe, as at sign-out (round 8): work
+            // that started before it sees a moved epoch, and work
+            // that starts after it sees no session at all.
+            flowEpoch++
+            store.wipe()
+            stored = null
+            previousAccessToken = null
+            rejectionHandledForToken = null
+        }
+        _uiState.value = SessionUiState(
+            signedIn = false,
+            health = SessionHealth.UNKNOWN,
+            lastEndReason = reason,
+        )
+        _phase.value = GoogleSignInPhase.Idle
+        signInDiagnostics.log(
+            "google-sign-in",
+            "the saved sign-in was ended because the sign-in setup " +
+                "changed — sign in again to reconnect",
+        )
+    }
+
     private companion object {
         /** Refresh when the access token has less than this left. */
         const val REFRESH_SKEW_MS = 60_000L
@@ -1597,6 +1724,39 @@ class GoogleSessionManager(
         const val REVOKED_REASON =
             "Your Google sign-in was revoked or has expired. " +
                 "Sign in again to see your library."
+
+        /**
+         * The client-change gate's landing copy (0.8.6): the
+         * session ended because the sign-in setup changed — the
+         * owner's own key replaced the shared sign-in, or one key
+         * replaced another. Plain about what happened and what to
+         * do; shown on the sign-in screen until the next sign-in.
+         */
+        const val CLIENT_CHANGED_REASON =
+            "You were signed out because OffLeash's sign-in " +
+                "changed. Sign in again to reconnect your account."
+
+        /**
+         * The gate's landing copy when the build carries no
+         * sign-in at all (0.8.6): the sealed session could never
+         * refresh here, and the road back is the setup wizard.
+         */
+        const val UNCONFIGURED_END_REASON =
+            "You were signed out because this build of OffLeash " +
+                "has no sign-in set up. Set up your own Google key " +
+                "from the sign-in screen, then sign in again."
+
+        /**
+         * The phase copy when a sign-in is attempted in a build
+         * with no client identity (0.8.6): the attempt ends before
+         * anything is asked of Google, saying exactly why and
+         * naming the road in.
+         */
+        const val NOT_CONFIGURED_REASON =
+            "Google sign-in isn't set up in this build of " +
+                "OffLeash yet. Set up your own Google key — it's " +
+                "free and takes about 10 minutes — using the card " +
+                "below, then sign in."
 
         const val UNEXPECTED_REASON =
             "Something went wrong during Google sign-in. " +

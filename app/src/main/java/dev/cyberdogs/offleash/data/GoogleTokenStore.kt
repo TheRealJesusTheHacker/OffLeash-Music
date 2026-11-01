@@ -38,6 +38,17 @@ data class StoredGoogleSession(
     val identityAuthUser: Int? = null,
     val grantedAtEpochMs: Long = 0L,
     val lastValidatedEpochMs: Long = 0L,
+    /**
+     * Which class of client registration issued this session
+     * (0.8.6): the non-secret marker ("owner" / "shared") the
+     * client-change gate reads — tokens are bound to their
+     * issuing client, so a session sealed under one class can
+     * never refresh under the other. Null on every record sealed
+     * before 0.8.6, which the gate reads as the shared class:
+     * the shared TV pair is the only issuer those records can
+     * have had. Never the pair itself — classes only.
+     */
+    val clientKind: String? = null,
 )
 
 private val googleSessionJson = Json {

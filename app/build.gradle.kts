@@ -12,6 +12,32 @@ plugins {
 // this is inert and builds behave exactly as stock (auto debug keystore).
 val ciDebugKeystore: String? = providers.gradleProperty("offleashDebugKeystore").orNull
 
+// The sign-in client pair is BUILD-SUPPLIED, never source-resident
+// (0.8.6): two supply lines, Gradle properties first (the release
+// workflow passes the pair from its Actions secrets this way),
+// then the git-ignored `offleash-oauth.properties` at the repo
+// root for local builds. Absent both, the fields are empty and
+// the app runs unconfigured — sign-in unavailable, everything
+// else working — until the owner sets up their own key in the
+// app. The values land only in the generated BuildConfig.
+val oauthPropsFile = rootProject.file("offleash-oauth.properties")
+val oauthProps = java.util.Properties()
+if (oauthPropsFile.isFile) {
+    oauthPropsFile.inputStream().use { oauthProps.load(it) }
+}
+
+fun oauthSupply(propertyName: String, fileKey: String): String =
+    providers.gradleProperty(propertyName).orNull
+        ?: oauthProps.getProperty(fileKey)
+        ?: ""
+
+fun buildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+val oauthClientId = oauthSupply("offleashOauthClientId", "clientId")
+val oauthClientSecret = oauthSupply("offleashOauthClientSecret", "clientSecret")
+val oauthClientKind = oauthSupply("offleashOauthClientKind", "clientKind")
+
 android {
     namespace = "dev.cyberdogs.offleash"
     compileSdk = 35
@@ -20,8 +46,11 @@ android {
         applicationId = "dev.cyberdogs.offleash"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "0.8.5-sweep"
+        versionCode = 23
+        versionName = "0.8.6-sweep"
+        buildConfigField("String", "OAUTH_CLIENT_ID", buildConfigString(oauthClientId))
+        buildConfigField("String", "OAUTH_CLIENT_SECRET", buildConfigString(oauthClientSecret))
+        buildConfigField("String", "OAUTH_CLIENT_KIND", buildConfigString(oauthClientKind))
     }
 
     flavorDimensions += "edition"

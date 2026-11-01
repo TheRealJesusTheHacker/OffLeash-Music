@@ -97,7 +97,7 @@ class GoogleChurnSweepTest {
         nowMs: () -> Long = { System.currentTimeMillis() },
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form),
+        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(form),
         scope = scope,
         pendingGrantStore = pendingStore,
@@ -254,7 +254,7 @@ class GoogleChurnSweepTest {
             // The local clock never gets to keep a dead grant alive.
             val manager = GoogleSessionManager(
                 store = GoogleTokenStore(InMemorySecretStorage(), box),
-                auth = GoogleDeviceAuth(form),
+                auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
                 client = YoutubeiClient(form),
                 scope = scope,
                 pendingGrantStore = pendingStore,

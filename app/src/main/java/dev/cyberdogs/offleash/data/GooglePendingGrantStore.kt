@@ -38,6 +38,15 @@ data class StoredPendingGrant(
     val expiresAtEpochMs: Long,
     /** Google's minimum poll interval, seconds. */
     val intervalSeconds: Long,
+    /**
+     * Which class of client registration this grant was minted
+     * under (0.8.6): the client-change gate's marker, same
+     * discipline as the session's — a code minted under one class
+     * can never be collected under the other, so a class change
+     * clears the grant instead of resuming a dead code. Null on
+     * grants persisted before 0.8.6, read as the shared class.
+     */
+    val clientKind: String? = null,
 ) {
     /** True while the grant can still be approved and polled. */
     fun isLiveAt(nowEpochMs: Long): Boolean = nowEpochMs < expiresAtEpochMs

@@ -187,7 +187,8 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 7,
             "app:dev/cyberdogs/offleash/ui/about/AboutScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 2,
+            "app:dev/cyberdogs/offleash/ui/account/OwnKeyWizardScreen.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 8,
             "app:dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
@@ -196,7 +197,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 9,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 5,
+            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 6,
         )
         val expectedLifecycle: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 2,

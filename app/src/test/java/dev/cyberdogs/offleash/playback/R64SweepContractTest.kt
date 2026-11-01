@@ -177,8 +177,9 @@ class R64SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_accountUiState" to 2, "_showPlayerRequests" to 1),
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2, "_streamQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to mapOf("_records" to 1),
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_phase" to 10, "_uiState" to 9),
+            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_phase" to 12, "_uiState" to 10),
             "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
+            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to mapOf("_state" to 1),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
@@ -195,8 +196,9 @@ class R64SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt" to 3,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 8,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 19,
+            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 22,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
+            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to 1,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
             "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
@@ -215,6 +217,7 @@ class R64SweepContractTest {
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 2,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
+            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to 1,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
             "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
@@ -276,8 +279,8 @@ class R64SweepContractTest {
                 rawNames,
             )
         }
-        assertEquals(107, grandTotal)
-        assertEquals(40, grandBirths)
+        assertEquals(111, grandTotal)
+        assertEquals(41, grandBirths)
     }
 
     // -- F3–F8: the remainder families on the normalized view ------------

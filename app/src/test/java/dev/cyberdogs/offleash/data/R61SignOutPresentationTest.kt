@@ -99,7 +99,7 @@ class R61SignOutPresentationTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = GoogleSessionManager(
             store = store,
-            auth = GoogleDeviceAuth(form),
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(BlockingRevokeTransport()),
             scope = scope,
             signInDiagnostics = SignInDiagnostics(),

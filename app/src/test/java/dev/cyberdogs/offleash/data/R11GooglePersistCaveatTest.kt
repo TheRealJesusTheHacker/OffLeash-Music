@@ -98,7 +98,7 @@ class R11GooglePersistCaveatTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(transport),
+            auth = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = scope,
             pendingGrantStore = pendingStore,
@@ -132,7 +132,7 @@ class R11GooglePersistCaveatTest {
         val scope2 = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val relaunched = GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(transport),
+            auth = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED),
             client = YoutubeiClient(UserinfoTransport()),
             scope = scope2,
             pendingGrantStore = pendingStore,

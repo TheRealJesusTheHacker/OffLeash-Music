@@ -89,7 +89,7 @@ class R7GoogleStaleTailTest {
         scope: CoroutineScope,
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form),
+        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
         client = YoutubeiClient(UserinfoTransport()),
         scope = scope,
         pendingGrantStore = pendingStore,

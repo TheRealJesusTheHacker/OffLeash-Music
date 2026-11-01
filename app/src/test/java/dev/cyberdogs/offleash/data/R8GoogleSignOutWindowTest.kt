@@ -102,7 +102,7 @@ class R8GoogleSignOutWindowTest {
         )
         val manager = GoogleSessionManager(
             store = store,
-            auth = GoogleDeviceAuth(RevokeTransport()),
+            auth = GoogleDeviceAuth(RevokeTransport(), TestOAuthIdentity.SHARED),
             client = YoutubeiClient(userinfo),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             pendingGrantStore = GooglePendingGrantStore(pendingStorage, testSecretBox()),
