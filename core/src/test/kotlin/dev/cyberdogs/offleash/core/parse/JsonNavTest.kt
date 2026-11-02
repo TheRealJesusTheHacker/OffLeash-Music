@@ -88,6 +88,28 @@ class JsonNavTest {
     }
 
     @Test
+    fun bestThumbnailPicksTheSmallestFittingVariant() {
+        // 0.8.7 sweep 3: lists and cards render a few hundred
+        // pixels wide; the pick is the smallest variant at least
+        // 512 wide, not the 1080px master.
+        val thumbs = Json.parseToJsonElement(
+            """[{"url": "u226", "width": 226, "height": 226},
+                {"url": "u1080", "width": 1080, "height": 1080},
+                {"url": "u540", "width": 540, "height": 540}]""",
+        )
+        assertEquals("u540", bestThumbnailUrl(thumbs))
+        // Everything below the fit width: the largest available
+        // still wins — never a worse pick than the old rule.
+        val small = Json.parseToJsonElement(
+            """[{"url": "u120", "width": 120},
+                {"url": "u226", "width": 226}]""",
+        )
+        assertEquals("u226", bestThumbnailUrl(small))
+        assertNull(bestThumbnailUrl(null))
+        assertNull(bestThumbnailUrl(Json.parseToJsonElement("[]")))
+    }
+
+    @Test
     fun nonEmptyRunsStillWinOverSimpleText() {
         val node = parse(
             """{"runs": [{"text": "Run"}, {"text": " Text"}],

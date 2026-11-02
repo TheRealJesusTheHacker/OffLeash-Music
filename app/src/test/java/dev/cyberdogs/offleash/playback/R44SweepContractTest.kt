@@ -390,15 +390,22 @@ class R44SweepContractTest {
             1,
             occurrences(
                 search,
-                "val flatTracks = current.results.sections\n" +
-                    "                        .flatMap { it.items }\n" +
-                    "                        .filterIsInstance<FeedItem.OfTrack>()\n" +
-                    "                        .map { it.track }\n" +
+                // 0.8.7 sweep 3: the construction is remembered
+                // per result set (it used to re-flatten on every
+                // recomposition); the chain inside is byte-for-
+                // byte the shipped one, and the transformation
+                // bans below bind it unchanged.
+                "val flatTracks = remember(current.results) {\n" +
+                    "                        current.results.sections\n" +
+                    "                            .flatMap { it.items }\n" +
+                    "                            .filterIsInstance<FeedItem.OfTrack>()\n" +
+                    "                            .map { it.track }\n" +
+                    "                    }\n" +
                     "                    val flattenedActions = remember(baseActions, flatTracks) {",
             ),
         )
         val flat = search
-            .substringAfter("val flatTracks = current.results.sections")
+            .substringAfter("val flatTracks = remember(current.results) {")
             .substringBefore("val flattenedActions")
         for (transformed in listOf(
             ".dropLast(", ".distinctBy", ".drop(", ".sortedBy",

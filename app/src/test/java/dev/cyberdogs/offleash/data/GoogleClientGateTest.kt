@@ -283,7 +283,9 @@ class GoogleClientGateTest {
         // surface — a change to it should fail here on purpose.
         const val CLIENT_CHANGED_REASON =
             "You were signed out because OffLeash's sign-in " +
-                "changed. Sign in again to reconnect your account."
+                "changed. Sign in again to reconnect your account. " +
+                "Your playlists and downloads on this device are " +
+                "untouched."
         const val UNCONFIGURED_END_REASON =
             "You were signed out because this build of OffLeash " +
                 "has no sign-in set up. Set up your own Google key " +

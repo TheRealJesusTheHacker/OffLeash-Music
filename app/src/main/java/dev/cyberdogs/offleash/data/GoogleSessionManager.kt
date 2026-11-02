@@ -31,6 +31,14 @@ sealed interface GoogleSignInPhase {
     object Idle : GoogleSignInPhase
 
     /**
+     * A tap is being turned into a code (0.8.7 sweep 3): the
+     * issuance round-trip takes a moment, and without this phase
+     * the screen sat on Idle — its button still live — while the
+     * request ran, inviting a second tap and showing nothing.
+     */
+    object Issuing : GoogleSignInPhase
+
+    /**
      * A code is issued and the poll loop is running: the screen
      * shows [userCode] and sends the owner to [verificationUrl].
      * [connectionTrouble] is set while the poll loop is riding out
@@ -394,7 +402,9 @@ class GoogleSessionManager(
         // minting a live grant nobody recorded or would ever poll —
         // and a double-tap is exactly how owners tap buttons.
         if (signInJob?.isActive == true) return
-        _phase.value = GoogleSignInPhase.Idle
+        // Issuing, not Idle (0.8.7 sweep 3): the tap shows
+        // progress while the code is being asked for.
+        _phase.value = GoogleSignInPhase.Issuing
         signInJob = scope.launch {
             runSignIn()
         }
@@ -1868,7 +1878,9 @@ class GoogleSessionManager(
          */
         const val CLIENT_CHANGED_REASON =
             "You were signed out because OffLeash's sign-in " +
-                "changed. Sign in again to reconnect your account."
+                "changed. Sign in again to reconnect your account. " +
+                "Your playlists and downloads on this device are " +
+                "untouched."
 
         /**
          * The gate's landing copy when the build carries no

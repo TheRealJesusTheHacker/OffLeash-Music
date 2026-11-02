@@ -303,10 +303,12 @@ fun SearchScreen(
                     // reports the tapped section's tracks, and we map the
                     // tap onto the flattened list so next/previous move
                     // through every result.
-                    val flatTracks = current.results.sections
-                        .flatMap { it.items }
-                        .filterIsInstance<FeedItem.OfTrack>()
-                        .map { it.track }
+                    val flatTracks = remember(current.results) {
+                        current.results.sections
+                            .flatMap { it.items }
+                            .filterIsInstance<FeedItem.OfTrack>()
+                            .map { it.track }
+                    }
                     val flattenedActions = remember(baseActions, flatTracks) {
                         dev.cyberdogs.offleash.ui.components.FeedActions(
                             onTrackClick = { sectionTracks, sectionIndex ->

@@ -77,7 +77,34 @@ import java.io.File
  * The container exists before any service can start, because services are
  * only started after the process (and therefore this Application) is up.
  */
-class OffleashApp : Application() {
+class OffleashApp : Application(), coil.ImageLoaderFactory {
+
+    /**
+     * The one image loader for the whole app (0.8.7 sweep 3):
+     * Coil's defaults re-decode on memory pressure far sooner
+     * than a music library's scroll-back wants, and every row
+     * paid a crossfade. The memory cache is sized to the
+     * device (15% of the app's allowance), the disk cache is
+     * capped at 64 MB in the cache dir, and crossfade is off —
+     * thumbnails appear when they are ready, not a beat later.
+     */
+    override fun newImageLoader(): coil.ImageLoader {
+        val appContext = this
+        return coil.ImageLoader.Builder(appContext)
+            .memoryCache {
+                coil.memory.MemoryCache.Builder(appContext)
+                    .maxSizePercent(0.15)
+                    .build()
+            }
+            .diskCache {
+                coil.disk.DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(64L * 1024 * 1024)
+                    .build()
+            }
+            .crossfade(false)
+            .build()
+    }
 
     lateinit var container: AppContainer
         private set
@@ -530,11 +557,16 @@ class AppContainer(app: OffleashApp) {
     val downloadStore: DownloadStore =
         DownloadStore(downloadRecordsFileIn(app.filesDir))
 
+    // One resolver behind the download path (0.8.7 sweep 3):
+    // its short-lived cache lets a retried download reuse the
+    // stream it just resolved instead of paying the cascade again.
+    val downloadStreamResolver: PlaybackResolver = PlaybackResolver(client)
+
     val downloadManager: DownloadManager = DownloadManager(
         store = downloadStore,
         downloadsDir = downloadsDirIn(app.filesDir),
         resolveStream = { track, quality ->
-            PlaybackResolver(client).resolve(
+            downloadStreamResolver.resolve(
                 track.videoId,
                 sessionManager.currentAuthSession(),
                 quality,

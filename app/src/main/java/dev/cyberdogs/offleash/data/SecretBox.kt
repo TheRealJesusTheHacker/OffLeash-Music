@@ -128,7 +128,25 @@ class AesGcmSecretBox(
  */
 object KeystoreSecretKey {
 
+    // Process-lifetime memo (0.8.7 sweep 3): every seal and read
+    // used to open the Android Keystore and load the key — a
+    // provider round-trip on the calling thread, including the
+    // wizard's per-keystroke draft save on the main thread. A
+    // loaded SecretKey handle stays valid for the process, so it
+    // is cached per alias; regenerate() replaces the cached
+    // handle with the fresh key it generates.
+    private val cache =
+        java.util.concurrent.ConcurrentHashMap<String, SecretKey>()
+
     fun getOrCreate(alias: String): SecretKey {
+        val cached = cache[alias]
+        if (cached != null) return cached
+        val key = loadOrCreate(alias)
+        cache[alias] = key
+        return key
+    }
+
+    private fun loadOrCreate(alias: String): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val existing = keyStore.getKey(alias, null) as? SecretKey
         if (existing != null) return existing
@@ -170,7 +188,9 @@ object KeystoreSecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
         keyStore.load(null)
         runCatching { keyStore.deleteEntry(alias) }
-        return generate(keyStore, alias)
+        val fresh = generate(keyStore, alias)
+        cache[alias] = fresh
+        return fresh
     }
 
     private fun generate(keyStore: KeyStore, alias: String): SecretKey {

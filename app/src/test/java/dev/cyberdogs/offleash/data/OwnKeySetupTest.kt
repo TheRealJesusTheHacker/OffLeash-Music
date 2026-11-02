@@ -330,7 +330,9 @@ class OwnKeySetupTest {
         // GoogleClientGateTest): a wording change fails on purpose.
         const val CLIENT_CHANGED_REASON =
             "You were signed out because OffLeash's sign-in " +
-                "changed. Sign in again to reconnect your account."
+                "changed. Sign in again to reconnect your account. " +
+                "Your playlists and downloads on this device are " +
+                "untouched."
 
         const val USERINFO_BODY =
             """{"sub":"123","name":"Test Listener",""" +

@@ -234,7 +234,7 @@ fun LibraryScreen(
                             )
                         }
                     }
-                    items(yt.data) { playlist ->
+                    items(yt.data, key = { it.browseId }) { playlist ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -297,6 +297,17 @@ fun LibraryScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        val endReason = sessionState.lastEndReason
+                        if (endReason != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = endReason,
+                                style =
+                                    MaterialTheme.typography.bodyMedium,
+                                color =
+                                    MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                         Button(onClick = onSignInClick) { Text("Sign in") }
                     }
@@ -332,7 +343,7 @@ fun LibraryScreen(
                 )
             }
         }
-        items(playlists) { playlist ->
+        items(playlists, key = { it.id }) { playlist ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -386,8 +397,10 @@ fun LibraryScreen(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            val summary = summariseDownloads(downloadRecords) { record ->
-                container.downloadManager.fileLength(record)
+            val summary = remember(downloadRecords) {
+                summariseDownloads(downloadRecords) { record ->
+                    container.downloadManager.fileLength(record)
+                }
             }
             val summaryText = when {
                 downloadRecords.isEmpty() -> null

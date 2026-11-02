@@ -329,8 +329,9 @@ fun AboutScreen(
                     Text(
                         "Your sign-in will be removed from this device: " +
                             "Google is told to revoke it, and the saved " +
-                            "sign-in is wiped. Your local playlists and " +
-                            "history stay — they were never tied to your account.",
+                            "sign-in is wiped. Your local playlists, " +
+                            "downloads and history stay — they were never " +
+                            "tied to your account.",
                     )
                 }
             },

@@ -48,10 +48,77 @@ data class ResolvedStream(
  * context unchanged — the road that serves is picked by availability,
  * the format it serves by the preference. It defaults to HIGH, so
  * existing callers resolve exactly as they always did.
+ *
+ * Results are cached briefly (0.8.7 sweep 3): a successful
+ * resolution is re-served for the same track, quality, and auth
+ * scope for five minutes, so a replay, a queue re-entry, or a
+ * download retry does not pay the whole cascade again. Stream
+ * URLs live for hours, so five minutes is conservative; failures
+ * are never cached, and [forceFresh] bypasses the read (the
+ * playback retry paths pass it, so a recovery never re-serves
+ * the URL that just failed). The cache key carries a hash of
+ * the credential it resolved under — never the credential — so
+ * a different account or a rotated token misses honestly.
  */
 class PlaybackResolver(
     private val client: YoutubeiClient,
+    private val nowMs: () -> Long = { System.currentTimeMillis() },
 ) {
+
+    /** What a cached resolution is keyed by (see the class doc). */
+    private data class CacheKey(
+        val videoId: String,
+        val quality: QualityPreference,
+        val authScope: String,
+        val authFingerprint: Int,
+    )
+
+    private val cacheLock = Any()
+    private val streamCache =
+        LinkedHashMap<CacheKey, Pair<Long, ResolvedStream>>(
+            CACHE_MAX_ENTRIES + 1,
+            0.75f,
+            true,
+        )
+
+    private fun cacheKey(
+        videoId: String,
+        quality: QualityPreference,
+        auth: AuthSession?,
+        bearerToken: String?,
+    ): CacheKey = CacheKey(
+        videoId = videoId,
+        quality = quality,
+        authScope = when {
+            bearerToken != null -> "bearer"
+            auth != null -> "cookie"
+            else -> "anonymous"
+        },
+        authFingerprint = bearerToken?.hashCode() ?: auth?.hashCode() ?: 0,
+    )
+
+    private fun cachedStream(key: CacheKey): ResolvedStream? =
+        synchronized(cacheLock) {
+            val entry = streamCache[key] ?: return null
+            if (nowMs() - entry.first > CACHE_TTL_MS) {
+                streamCache.remove(key)
+                null
+            } else {
+                entry.second
+            }
+        }
+
+    private fun cacheStream(key: CacheKey, resolved: ResolvedStream) {
+        synchronized(cacheLock) {
+            // Bounded by generation, not eviction: at the cap
+            // the cache restarts empty rather than tracking an
+            // eldest entry — a miss only ever costs a re-resolve.
+            if (streamCache.size >= CACHE_MAX_ENTRIES) {
+                streamCache.clear()
+            }
+            streamCache[key] = nowMs() to resolved
+        }
+    }
 
     /**
      * Resolution with a Google OAuth Bearer token (0.7.0): the
@@ -69,9 +136,26 @@ class PlaybackResolver(
         auth: AuthSession?,
         quality: QualityPreference = QualityPreference.HIGH,
         bearerToken: String?,
+        forceFresh: Boolean = false,
+    ): ResolvedStream {
+        val key = cacheKey(videoId, quality, auth, bearerToken)
+        val cached = if (forceFresh) null else cachedStream(key)
+        if (cached != null) return cached
+        val resolved =
+            resolveWithBearer(videoId, auth, quality, bearerToken, forceFresh)
+        cacheStream(key, resolved)
+        return resolved
+    }
+
+    private fun resolveWithBearer(
+        videoId: String,
+        auth: AuthSession?,
+        quality: QualityPreference,
+        bearerToken: String?,
+        forceFresh: Boolean,
     ): ResolvedStream {
         if (bearerToken == null) {
-            return resolve(videoId, auth, quality)
+            return resolve(videoId, auth, quality, forceFresh = forceFresh)
         }
         val tokenError = try {
             val info = client.streamInfoOAuth(videoId, bearerToken, quality)
@@ -85,7 +169,7 @@ class PlaybackResolver(
         } catch (e: Exception) {
             NetworkFailure(e.javaClass.simpleName)
         }
-        val base = resolve(videoId, auth, quality)
+        val base = resolve(videoId, auth, quality, forceFresh = forceFresh)
         return base.copy(
             attempts = listOf(
                 RoadAttempt(
@@ -100,6 +184,20 @@ class PlaybackResolver(
         videoId: String,
         auth: AuthSession?,
         quality: QualityPreference = QualityPreference.HIGH,
+        forceFresh: Boolean = false,
+    ): ResolvedStream {
+        val key = cacheKey(videoId, quality, auth, bearerToken = null)
+        val cached = if (forceFresh) null else cachedStream(key)
+        if (cached != null) return cached
+        val resolved = resolveOnRoads(videoId, auth, quality)
+        cacheStream(key, resolved)
+        return resolved
+    }
+
+    private fun resolveOnRoads(
+        videoId: String,
+        auth: AuthSession?,
+        quality: QualityPreference,
     ): ResolvedStream {
         if (auth == null) {
             val (info, attempts) = resolveAnonymous(videoId, quality)
@@ -183,3 +281,9 @@ class PlaybackResolver(
         throw firstError ?: NetworkFailure(null)
     }
 }
+
+/** How long a cached resolution is re-served (sweep 3). */
+private const val CACHE_TTL_MS = 5 * 60 * 1000L
+
+/** The cache's entry cap; at the cap the cache restarts empty. */
+private const val CACHE_MAX_ENTRIES = 64

@@ -65,6 +65,7 @@ fun OwnKeyWizardScreen(
     val state by setup.state.collectAsState()
     var secretVisible by remember { mutableStateOf(false) }
     var removeArmed by remember { mutableStateOf(false) }
+    var restartArmed by remember { mutableStateOf(false) }
 
     // While the paste step is showing, the window is marked
     // secure (0.8.7 sweep 2): the client secret sits in a
@@ -116,8 +117,18 @@ fun OwnKeyWizardScreen(
         )
         if (state.step != OwnKeyStep.DONE) {
             Spacer(Modifier.height(4.dp))
+            val stepTitle = when (state.step) {
+                OwnKeyStep.NEED -> "What you'll need"
+                OwnKeyStep.PROJECT -> "Create your project"
+                OwnKeyStep.API -> "Turn on the YouTube API"
+                OwnKeyStep.CONSENT -> "The sign-in screen setting"
+                OwnKeyStep.CREATE_KEY -> "Create your key"
+                OwnKeyStep.ENTER_KEY -> "Paste your key"
+                OwnKeyStep.DONE -> "Your key is saved"
+            }
             Text(
-                text = "Step ${state.step.ordinal + 1} of 6",
+                text = "Step ${state.step.ordinal + 1} of 6 — " +
+                    stepTitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -186,9 +197,26 @@ fun OwnKeyWizardScreen(
                             if (removeArmed) {
                                 Spacer(Modifier.height(8.dp))
                                 Text(
-                                    text = "Removing your key signs " +
-                                        "you out and returns sign-in " +
-                                        "to the app's shared setup.",
+                                    text = if (
+                                        container.googleAuth
+                                            .identity == null
+                                    ) {
+                                        "Removing your key signs " +
+                                            "you out. This build has " +
+                                            "no shared sign-in to " +
+                                            "fall back to, so signing " +
+                                            "in again means setting " +
+                                            "up a key again. Nothing " +
+                                            "at Google is deleted — " +
+                                            "the key stays in your " +
+                                            "Google account."
+                                    } else {
+                                        "Removing your key signs " +
+                                            "you out and returns " +
+                                            "sign-in to the app's " +
+                                            "shared setup. Nothing " +
+                                            "at Google is deleted."
+                                    },
                                     style =
                                         MaterialTheme.typography.bodyMedium,
                                     color =
@@ -258,8 +286,11 @@ fun OwnKeyWizardScreen(
                         "1. Tap the button below.\n" +
                         "2. Choose “External”.\n" +
                         "3. For the app name, type: OffLeash\n" +
-                        "4. Fill in your email where Google asks " +
-                        "for it, then save.\n" +
+                        "4. Google also asks for a “User support " +
+                        "email” and “Developer contact " +
+                        "information”. Put your own email in " +
+                        "both — the same account as step 1 — " +
+                        "then save.\n" +
                         "5. Tap “Publish app”.\n\n" +
                         "That last one matters: choose Publish. " +
                         "Skip it, and Google signs you out every " +
@@ -290,7 +321,10 @@ fun OwnKeyWizardScreen(
                         "“Create”.\n" +
                         "4. Google shows your key: a Client ID " +
                         "and a Client secret. Keep that page open " +
-                        "— you'll copy both into the next step.",
+                        "— you'll copy both into the next step.\n\n" +
+                        "If that box closes before you've copied " +
+                        "them, don't worry — the next step shows " +
+                        "how to find them again.",
                 )
                 Spacer(Modifier.height(16.dp))
                 Button(
@@ -325,6 +359,19 @@ fun OwnKeyWizardScreen(
                         "your key passes its test and you tap " +
                         "“Save my key”.",
                 )
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { openPage(CREATE_KEY_URL) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Open my key page again") }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Lost the box with your key? Open the " +
+                        "key page, tap your key's name, and both " +
+                        "lines are shown there again.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     state.draftClientId,
@@ -333,6 +380,16 @@ fun OwnKeyWizardScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (state.draftClientId.isEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "It ends in " +
+                            ".apps.googleusercontent.com",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color =
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (state.draftClientId.isNotEmpty() && idError != null) {
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -354,6 +411,16 @@ fun OwnKeyWizardScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (state.draftClientSecret.isEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "One line, no spaces — it usually " +
+                            "starts with GOCSPX-.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color =
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (state.draftClientSecret.isNotEmpty() &&
                     secretError != null
                 ) {
@@ -377,8 +444,23 @@ fun OwnKeyWizardScreen(
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { setup.restart() }) {
-                        Text("Start over")
+                    TextButton(
+                        onClick = {
+                            if (restartArmed) {
+                                setup.restart()
+                                restartArmed = false
+                            } else {
+                                restartArmed = true
+                            }
+                        },
+                    ) {
+                        Text(
+                            if (restartArmed) {
+                                "Tap again to erase and start over"
+                            } else {
+                                "Start over"
+                            },
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -417,6 +499,32 @@ fun OwnKeyWizardScreen(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "Pasted: " +
+                        if (formatValid) {
+                            "done"
+                        } else {
+                            "both lines, from Google's page"
+                        },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "Tested: " +
+                        if (state.tested) {
+                            "done — your key answers Google"
+                        } else {
+                            "tap “Test my key” above"
+                        },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "Saved: tap “Save my key” below",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = { setup.saveAndFinish() },
                     enabled = state.tested && !state.testing,
@@ -448,6 +556,17 @@ fun OwnKeyWizardScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Go to sign in") }
             }
+        }
+        if (state.step != OwnKeyStep.NEED &&
+            state.step != OwnKeyStep.DONE
+        ) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "Your place is saved if you leave — " +
+                    "come back any time.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Spacer(Modifier.height(24.dp))
     }

@@ -185,7 +185,11 @@ class LifecycleChaosContractTest {
             .substringBefore("private fun handToPlayer")
         assertTrue(
             "resolveAndPlay must resolve through the roads (a fresh signed URL)",
-            resolve.contains("resolveWithRoads(track)"),
+            // 0.8.7 sweep 3: retries thread forceFresh so the
+            // resolver's result cache can never hand the recovery
+            // the URL that just failed — the freshness this test
+            // guards is now in the call's own spelling.
+            resolve.contains("resolveWithRoads(track, forceFresh = isRetry)"),
         )
         assertEquals(
             "exactly one setMediaItem site: the fresh hand-off",

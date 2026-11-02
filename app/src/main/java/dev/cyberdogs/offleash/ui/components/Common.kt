@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import dev.cyberdogs.offleash.core.model.FeedItem
+import dev.cyberdogs.offleash.core.model.stableKey
 import dev.cyberdogs.offleash.core.model.LocalPlaylist
 import dev.cyberdogs.offleash.core.model.Section
 import dev.cyberdogs.offleash.core.model.Track
@@ -281,7 +282,10 @@ fun SectionRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(cards) { item ->
+                items(
+                    cards,
+                    key = { item -> item.stableKey },
+                ) { item ->
                     when (item) {
                         is FeedItem.OfAlbum -> FeedCard(
                             title = item.album.title,

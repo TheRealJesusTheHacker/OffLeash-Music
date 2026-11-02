@@ -650,7 +650,7 @@ object YoutubeiParsers {
             ?.let { textOf(it.obj("description")) }
             ?: findFirst(root, "musicDescriptionShelfRenderer").asObj()
                 ?.let { textOf(it.obj("description")) }
-        val thumbnail = header?.let { thumbnailUrlOf(it) }
+        val thumbnail = header?.let { headerThumbnailUrlOf(it) }
         val summary = AlbumSummary(
             browseId = browseId,
             title = title,
@@ -672,7 +672,7 @@ object YoutubeiParsers {
                     .firstOrNull { it.text !in TYPE_LABELS && !YEAR_REGEX.matches(it.text) }
                     ?.text
         }
-        val thumbnail = header?.let { thumbnailUrlOf(it) }
+        val thumbnail = header?.let { headerThumbnailUrlOf(it) }
         return PlaylistPage(
             title = title,
             author = author,
@@ -691,8 +691,8 @@ object YoutubeiParsers {
             ?: immersive?.let { textOf(it.obj("title")) }
             ?: responsiveOrDetailHeader(root)?.let { textOf(it.obj("title")) }
             ?: ""
-        val thumbnail = visual?.let { thumbnailUrlOf(it) }
-            ?: immersive?.let { thumbnailUrlOf(it) }
+        val thumbnail = visual?.let { headerThumbnailUrlOf(it) }
+            ?: immersive?.let { headerThumbnailUrlOf(it) }
         return ArtistPage(
             name = name,
             thumbnailUrl = thumbnail,

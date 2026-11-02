@@ -49,6 +49,19 @@ sealed interface FeedItem {
     data class OfPlaylist(val playlist: PlaylistSummary) : FeedItem
 }
 
+/**
+ * A stable lazy-list key for this item (0.8.7 sweep 3): its kind
+ * plus the id of what it wraps, so list diffing follows items
+ * across refreshes instead of positions.
+ */
+val FeedItem.stableKey: String
+    get() = when (this) {
+        is FeedItem.OfTrack -> "track:" + track.videoId
+        is FeedItem.OfAlbum -> "album:" + album.browseId
+        is FeedItem.OfArtist -> "artist:" + artist.browseId
+        is FeedItem.OfPlaylist -> "playlist:" + playlist.browseId
+    }
+
 data class Section(
     val title: String?,
     val items: List<FeedItem>,

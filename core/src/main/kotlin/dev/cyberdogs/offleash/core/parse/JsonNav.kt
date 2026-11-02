@@ -127,6 +127,40 @@ private fun findFirst(node: JsonElement?, key: String, depth: Int): JsonElement?
     }
 }
 
+/** The width a rendered thumbnail never needs to exceed. */
+private const val THUMBNAIL_FIT_WIDTH = 512
+
+/**
+ * The thumbnail URL a list or card should load (0.8.7 sweep 3):
+ * the SMALLEST variant at least [THUMBNAIL_FIT_WIDTH] wide when
+ * one exists — screens render thumbnails at a few hundred
+ * pixels, and the largest variant can be 1080px+, which costs
+ * download, decode, and memory on every row for no visible
+ * gain — and the largest variant when every variant is smaller
+ * (never a worse pick than the best available).
+ */
+fun bestThumbnailUrl(thumbnails: JsonElement?): String? {
+    val arr = thumbnails.asArr() ?: return null
+    var largestUrl: String? = null
+    var largestWidth = -1
+    var fittingUrl: String? = null
+    var fittingWidth = Int.MAX_VALUE
+    for (thumb in arr) {
+        val obj = thumb.asObj() ?: continue
+        val url = obj.str("url") ?: continue
+        val width = obj.int("width") ?: 0
+        if (width >= largestWidth) {
+            largestWidth = width
+            largestUrl = url
+        }
+        if (width >= THUMBNAIL_FIT_WIDTH && width <= fittingWidth) {
+            fittingWidth = width
+            fittingUrl = url
+        }
+    }
+    return fittingUrl ?: largestUrl
+}
+
 /** Largest thumbnail URL from a `thumbnails` array (by width; last wins ties). */
 fun largestThumbnailUrl(thumbnails: JsonElement?): String? {
     val arr = thumbnails.asArr() ?: return null
@@ -148,9 +182,26 @@ fun largestThumbnailUrl(thumbnails: JsonElement?): String? {
  * The best thumbnail URL for a renderer node, following the thumbnail
  * shapes youtubei actually uses (musicThumbnailRenderer under `thumbnail`
  * or `thumbnailRenderer`, cropped-square variants, and the bare
- * `thumbnail.thumbnails` of panel renderers).
+ * `thumbnail.thumbnails` of panel renderers). The pick is the
+ * right-sized variant ([bestThumbnailUrl]): rows and cards render
+ * a few hundred pixels wide. Detail-page headers — the one
+ * full-width render — use [headerThumbnailUrlOf] instead.
  */
-fun thumbnailUrlOf(node: JsonObject?): String? {
+fun thumbnailUrlOf(node: JsonObject?): String? =
+    thumbnailUrlOf(node, ::bestThumbnailUrl)
+
+/**
+ * The header variant of [thumbnailUrlOf]: same candidate walk,
+ * largest-variant pick — a detail page's hero art is the one
+ * place the biggest file is worth its bytes.
+ */
+fun headerThumbnailUrlOf(node: JsonObject?): String? =
+    thumbnailUrlOf(node, ::largestThumbnailUrl)
+
+private fun thumbnailUrlOf(
+    node: JsonObject?,
+    pick: (JsonElement?) -> String?,
+): String? {
     if (node == null) return null
     val candidates: List<JsonElement?> = listOf(
         node.obj("thumbnail").obj("musicThumbnailRenderer").obj("thumbnail").arr("thumbnails"),
@@ -162,7 +213,7 @@ fun thumbnailUrlOf(node: JsonObject?): String? {
         node.obj("foregroundThumbnail").obj("musicThumbnailRenderer").obj("thumbnail").arr("thumbnails"),
     )
     for (candidate in candidates) {
-        largestThumbnailUrl(candidate)?.let { return it }
+        pick(candidate)?.let { return it }
     }
     return null
 }

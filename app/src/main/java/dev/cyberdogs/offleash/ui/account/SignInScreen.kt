@@ -121,18 +121,41 @@ fun SignInScreen(
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "Sign-in works the way it does on a TV. Google gives this " +
-                "app a short code; you enter it on Google's page, in any " +
-                "browser, and approve with your Google account. Google then " +
-                "hands the app a sign-in token.\n\n" +
-                "Your password is typed only on Google's page — never in " +
-                "this app — and no browser cookies are used. The token is " +
-                "stored encrypted on this device, and OffLeash uses it " +
-                "only to ask YouTube Music for your home feed, your " +
-                "playlists, and your liked songs.",
+            text = "You'll get a short code to type on Google's own " +
+                "page. Your password is only ever typed there — " +
+                "never in this app.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
+        var showSafetyDetails by remember { mutableStateOf(false) }
+        TextButton(
+            onClick = { showSafetyDetails = !showSafetyDetails },
+        ) {
+            Text(
+                if (showSafetyDetails) {
+                    "Hide how this keeps your password safe"
+                } else {
+                    "How this keeps your password safe"
+                },
+            )
+        }
+        if (showSafetyDetails) {
+            Text(
+                text = "Sign-in works the way it does on a TV. Google " +
+                    "gives this app a short code; you enter it on " +
+                    "Google's page, in any browser, and approve with " +
+                    "your Google account. Google then hands the app " +
+                    "a sign-in token.\n\n" +
+                    "Your password is typed only on Google's page — " +
+                    "never in this app — and no browser cookies are " +
+                    "used. The token is stored encrypted on this " +
+                    "device, and OffLeash uses it only to ask YouTube " +
+                    "Music for your home feed, your playlists, and " +
+                    "your liked songs.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         savedCrash?.let { trace ->
             Spacer(Modifier.height(12.dp))
@@ -197,17 +220,45 @@ fun SignInScreen(
                     }
                     Spacer(Modifier.height(16.dp))
                 }
-                Button(
-                    onClick = { manager.startSignIn() },
+                if (container.googleAuth.identity != null) {
+                    Button(
+                        onClick = { manager.startSignIn() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Sign in with Google") }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "You'll get a code to enter on Google's " +
+                            "page. This takes a minute or two.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = "Set up your own Google key below to " +
+                            "sign in — this build doesn't carry a " +
+                            "shared sign-in.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+
+            GoogleSignInPhase.Issuing -> {
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("Sign in with Google") }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "You'll get a code to enter on Google's page. " +
-                        "This takes about a minute.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = "Asking Google for your code…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
 
             is GoogleSignInPhase.AwaitingApproval -> {
@@ -254,6 +305,17 @@ fun SignInScreen(
                     )
                 }
                 Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://www.google.com/device"),
+                        )
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Open google.com/device") }
+                Spacer(Modifier.height(16.dp))
                 // The remaining life is computed from the grant
                 // itself (0.7.2 sweep): a code RESUMED after the app
                 // was restarted may have only a few minutes left,
@@ -298,22 +360,6 @@ fun SignInScreen(
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = {
-                        val intent = Intent(
-                            Intent.ACTION_VIEW,
-                            Uri.parse("https://www.google.com/device"),
-                        )
-                        context.startActivity(intent)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Open google.com/device") }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { manager.checkNow() },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("I've approved — check now") }
-                Spacer(Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -328,6 +374,16 @@ fun SignInScreen(
                             "checking with Google on its own…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { manager.checkNow() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "Already approved but nothing happened? " +
+                            "Check now",
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -352,24 +408,41 @@ fun SignInScreen(
                         )
                         val signInLines = container.signInDiagnostics.lines()
                         if (signInLines.isNotEmpty()) {
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = "What happened",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = signInLines.joinToString("\n"),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            var showDetails by remember {
+                                mutableStateOf(false)
+                            }
+                            TextButton(
+                                onClick = { showDetails = !showDetails },
+                            ) {
+                                Text(
+                                    if (showDetails) {
+                                        "Hide details for support"
+                                    } else {
+                                        "Details for support"
+                                    },
+                                )
+                            }
+                            if (showDetails) {
+                                Text(
+                                    text = signInLines.joinToString("\n"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color =
+                                        MaterialTheme.colorScheme
+                                            .onSurfaceVariant,
+                                )
+                            }
                         }
                         Spacer(Modifier.height(12.dp))
-                        Button(
-                            onClick = { manager.startSignIn() },
-                        ) { Text("Try again") }
+                        if (container.googleAuth.identity == null) {
+                            Button(
+                                onClick = onOwnKeyClick,
+                            ) { Text("Set up your own Google key") }
+                        } else {
+                            Button(
+                                onClick = { manager.startSignIn() },
+                            ) { Text("Try again") }
+                        }
                     }
                 }
             }

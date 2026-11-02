@@ -4,6 +4,8 @@ import dev.cyberdogs.offleash.core.FixedTransport
 import dev.cyberdogs.offleash.core.Fixtures
 import dev.cyberdogs.offleash.core.RoutingTransport
 import dev.cyberdogs.offleash.core.api.HttpResponse
+import dev.cyberdogs.offleash.core.api.HttpTransport
+import dev.cyberdogs.offleash.core.error.OffleashException
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.api.YoutubeiContexts
 import dev.cyberdogs.offleash.core.auth.AuthSession
@@ -195,6 +197,73 @@ class PlaybackResolverTest {
             assertTrue(e.message!!.contains("account road"))
             assertTrue(e.message!!.contains("anonymous road"))
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Resolution cache (0.8.7 sweep 3)
+    // ------------------------------------------------------------------
+
+    private class CountingTransport(
+        private val responseBody: String,
+    ) : HttpTransport {
+        var calls = 0
+
+        override fun post(
+            url: String,
+            headers: Map<String, String>,
+            body: String,
+        ): HttpResponse {
+            calls++
+            return HttpResponse(200, responseBody)
+        }
+    }
+
+    @Test
+    fun aSecondResolveWithinTheTtlMakesNoNewCalls() {
+        val transport =
+            CountingTransport(Fixtures.load("derived_player_android.json"))
+        var now = 1_000_000L
+        val resolver = PlaybackResolver(YoutubeiClient(transport)) { now }
+        val first = resolver.resolve("pYAg_d-iQLk", null)
+        val callsAfterFirst = transport.calls
+        assertTrue(callsAfterFirst > 0)
+        val second = resolver.resolve("pYAg_d-iQLk", null)
+        assertEquals(
+            "a cached resolve must not touch the network",
+            callsAfterFirst,
+            transport.calls,
+        )
+        assertEquals(first.info.url, second.info.url)
+        // A different quality is a different entry.
+        resolver.resolve("pYAg_d-iQLk", null, QualityPreference.LOW)
+        assertTrue(transport.calls > callsAfterFirst)
+        // forceFresh bypasses the read.
+        val beforeForce = transport.calls
+        resolver.resolve("pYAg_d-iQLk", null, forceFresh = true)
+        assertTrue(transport.calls > beforeForce)
+        // Past the TTL the entry is resolved again.
+        now += 6 * 60 * 1000L
+        val beforeExpiry = transport.calls
+        resolver.resolve("pYAg_d-iQLk", null)
+        assertTrue(transport.calls > beforeExpiry)
+    }
+
+    @Test
+    fun failuresAreNeverCached() {
+        val transport = CountingTransport(preconditionBody)
+        val resolver = PlaybackResolver(YoutubeiClient(transport)) { 5_000L }
+        repeat(2) {
+            try {
+                resolver.resolve("pYAg_d-iQLk", null)
+                fail("a refused cascade must throw")
+            } catch (e: OffleashException) {
+                // Expected: every context refused.
+            }
+        }
+        assertTrue(
+            "the second refusal must have re-run the cascade",
+            transport.calls >= 4,
+        )
     }
 
     // ------------------------------------------------------------------

@@ -1644,7 +1644,7 @@ class QueueController(
             }
 
             val stream = try {
-                resolveWithRoads(track)
+                resolveWithRoads(track, forceFresh = isRetry)
             } catch (e: CancellationException) {
                 // A superseded resolve must not clear the flag its
                 // successor owns: rapid skips used to leave the
@@ -1783,8 +1783,18 @@ class QueueController(
      * named failure (the resolver's original exception signed-out, or
      * [AllRoadsRefused] signed-in) when every road refuses.
      */
-    private suspend fun resolveWithRoads(track: Track): ResolvedPlayback {
-        val resolver = PlaybackResolver(client)
+    // One resolver for the controller's lifetime (0.8.7
+    // sweep 3): its short-lived result cache is what lets a
+    // replay or a queue re-entry within minutes skip the
+    // player round-trips. Retries pass forceFresh so a
+    // recovery never re-serves the URL that just failed.
+    private val playbackResolver = PlaybackResolver(client)
+
+    private suspend fun resolveWithRoads(
+        track: Track,
+        forceFresh: Boolean = false,
+    ): ResolvedPlayback {
+        val resolver = playbackResolver
         var auth = sessionProvider()
         while (true) {
             val resolved = try {
@@ -1794,6 +1804,7 @@ class QueueController(
                         auth,
                         qualityProvider(),
                         bearerProvider(),
+                        forceFresh = forceFresh,
                     )
                 }
             } catch (e: AllRoadsRefused) {

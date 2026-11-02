@@ -159,7 +159,7 @@ class R59SweepContractTest {
             "val likeController",
             listOf(
                 "resolveStream = { track, quality ->",
-                "PlaybackResolver(client).resolve(",
+                "downloadStreamResolver.resolve(",
                 "track.videoId",
                 "sessionManager.currentAuthSession()",
                 "quality",
