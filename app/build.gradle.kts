@@ -22,6 +22,17 @@ val ciDebugKeystore: String? = providers.gradleProperty("offleashDebugKeystore")
 // the app runs unconfigured — sign-in unavailable, everything
 // else working — until the owner sets up their own key in the
 // app. The values land only in the generated BuildConfig.
+//
+// WARNING — a build-supplied pair is PUBLIC the moment the APK
+// ships (0.8.7 sweep 2): BuildConfig fields are plain strings in
+// the binary, readable by anyone who downloads it (this build is
+// not minified, and minification would only slow the reading
+// down). Supply a pair only if it is meant to be public — an
+// installed-app client whose secret Google treats as a
+// non-confidential identifier. The standing release ships NO
+// pair at all; the owner's own key, entered in the app and
+// sealed on their device, is the private road, and it outranks
+// any build pair at runtime.
 val oauthPropsFile = rootProject.file("offleash-oauth.properties")
 val oauthProps = Properties()
 if (oauthPropsFile.isFile) {

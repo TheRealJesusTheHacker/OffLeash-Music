@@ -89,6 +89,20 @@ object CrashReporter {
     /** Any URL inside a trace message — redacted before the trace is stored. */
     private val URL_IN_TRACE = Regex("""https?://\S+""")
 
+    /** A bearer credential in a trace message (0.8.7 sweep 2). */
+    private val BEARER_IN_TRACE = Regex("""(?i)Bearer\s+\S+""")
+
+    /**
+     * A named credential assignment in a trace message (0.8.7
+     * sweep 2): token and secret parameters ride exception text
+     * out of the network layer in shapes the URL scrub cannot
+     * see (a bare `access_token=…` in a message that never was a
+     * URL). The name is kept — it is the diagnostic fact — and
+     * the value goes.
+     */
+    private val SECRET_PAIR_IN_TRACE =
+        Regex("""(?i)(access_token|refresh_token|client_secret|id_token|api_key)=[^&\s"']+""")
+
     /**
      * The trace text: when, on which thread, and the full stack.
      * Pure, so the format is unit-testable off-device.
@@ -108,7 +122,10 @@ object CrashReporter {
             pw.println("The app stopped unexpectedly at $stamp (thread: $threadName).")
             throwable.printStackTrace(pw)
         }
-        val text = writer.toString().trimEnd().replace(URL_IN_TRACE, "[link removed]")
+        val text = writer.toString().trimEnd()
+            .replace(URL_IN_TRACE, "[link removed]")
+            .replace(BEARER_IN_TRACE, "Bearer [removed]")
+            .replace(SECRET_PAIR_IN_TRACE, "$1=[removed]")
         return if (text.length <= MAX_TRACE_CHARS) {
             text
         } else {

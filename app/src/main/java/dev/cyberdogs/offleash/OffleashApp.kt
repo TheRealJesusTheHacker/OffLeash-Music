@@ -213,17 +213,36 @@ class AppContainer(app: OffleashApp) {
     val ownKeyStore: OwnKeyStore = OwnKeyStore(
         storage = FileSecretStorage(ownKeyFileIn(app)),
         box = AesGcmSecretBox(
+            keyProvider = { KeystoreSecretKey.getOrCreate(OWN_KEY_ALIAS) },
+            // NO keyRegenerator (0.8.7 sweep 2): the own key
+            // lives under its OWN alias, apart from the session
+            // family. The session box's regeneration remedy —
+            // destroy the key, re-obtain the credentials — is
+            // sound for tokens the owner can re-issue by signing
+            // in again, but the pair sealed here is the owner's
+            // own Google Cloud registration: no sign-in re-issues
+            // it, only re-running the wizard does. This box's key
+            // is generated fresh under this alias with the current
+            // spec, so the mis-specced-key case the regenerator
+            // exists for cannot arise for it; if a seal ever did
+            // fail here, it fails honestly rather than destroying
+            // the key. Blobs a pre-split build sealed under the
+            // shared alias migrate on first read via the legacy
+            // box below.
+        ),
+        legacyBox = AesGcmSecretBox(
             keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
         ),
     )
 
-    /** The own-key wizard's progress store (0.8.6): same seal. */
+    /** The own-key wizard's progress store (0.8.6): the own-key seal, split with it. */
     val ownKeyWizardStore: OwnKeyWizardStore = OwnKeyWizardStore(
         storage = FileSecretStorage(ownKeyWizardFileIn(app)),
         box = AesGcmSecretBox(
+            keyProvider = { KeystoreSecretKey.getOrCreate(OWN_KEY_ALIAS) },
+        ),
+        legacyBox = AesGcmSecretBox(
             keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
         ),
     )
 
@@ -753,5 +772,13 @@ class AppContainer(app: OffleashApp) {
     private companion object {
         const val REPLAY_CACHE_BYTES: Long = 512L * 1024L * 1024L
         const val SESSION_KEY_ALIAS: String = "offleash-session-key"
+
+        /**
+         * The own-key stores' alias (0.8.7 sweep 2): split
+         * from the session family's so no session-side key
+         * event — above all a regeneration — can ever reach
+         * the owner's own Google key.
+         */
+        const val OWN_KEY_ALIAS: String = "offleash-own-key"
     }
 }

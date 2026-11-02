@@ -79,6 +79,7 @@ fun ownKeyWizardFileIn(context: Context): File =
 class OwnKeyStore(
     private val storage: SecretStorage,
     private val box: AesGcmSecretBox,
+    private val legacyBox: AesGcmSecretBox? = null,
 ) {
 
     private val lock = Any()
@@ -86,7 +87,8 @@ class OwnKeyStore(
     fun load(): StoredOwnKey? = synchronized(lock) {
         try {
             val blob = storage.read() ?: return null
-            val plain = box.decrypt(blob) ?: return null
+            val plain = box.decrypt(blob) ?: legacyDecryptAndReseal(blob)
+                ?: return null
             try {
                 ownKeyJson.decodeFromString<StoredOwnKey>(
                     plain.toString(Charsets.UTF_8)
@@ -118,12 +120,35 @@ class OwnKeyStore(
             }
         }
     }
+
+    /**
+     * The pre-0.8.7 seal, migrated (0.8.7 sweep 2): builds before
+     * the alias split sealed this store under the SHARED session
+     * key, whose regeneration — the session family's remedy —
+     * would have destroyed this key with it. A blob the store's
+     * own box cannot open is tried against the legacy box; a hit
+     * is re-sealed under the own box before it is returned, so
+     * the fallback is needed at most once. A re-seal failure is
+     * not fatal: the value still loads, and the next launch
+     * retries the migration.
+     */
+    private fun legacyDecryptAndReseal(blob: ByteArray): ByteArray? {
+        val legacy = legacyBox ?: return null
+        val plain = legacy.decrypt(blob) ?: return null
+        try {
+            storage.write(box.encrypt(plain))
+        } catch (e: Exception) {
+            // Migration retries next launch; the load stands.
+        }
+        return plain
+    }
 }
 
 /** The sealed store for the wizard's progress — same discipline. */
 class OwnKeyWizardStore(
     private val storage: SecretStorage,
     private val box: AesGcmSecretBox,
+    private val legacyBox: AesGcmSecretBox? = null,
 ) {
 
     private val lock = Any()
@@ -131,7 +156,8 @@ class OwnKeyWizardStore(
     fun load(): StoredOwnKeyProgress? = synchronized(lock) {
         try {
             val blob = storage.read() ?: return null
-            val plain = box.decrypt(blob) ?: return null
+            val plain = box.decrypt(blob) ?: legacyDecryptAndReseal(blob)
+                ?: return null
             try {
                 ownKeyJson.decodeFromString<StoredOwnKeyProgress>(
                     plain.toString(Charsets.UTF_8)
@@ -160,6 +186,18 @@ class OwnKeyWizardStore(
                 // Best effort — see [OwnKeyStore.wipe].
             }
         }
+    }
+
+    /** The wizard store's half of the alias migration — see [OwnKeyStore]. */
+    private fun legacyDecryptAndReseal(blob: ByteArray): ByteArray? {
+        val legacy = legacyBox ?: return null
+        val plain = legacy.decrypt(blob) ?: return null
+        try {
+            storage.write(box.encrypt(plain))
+        } catch (e: Exception) {
+            // Migration retries next launch; the load stands.
+        }
+        return plain
     }
 }
 

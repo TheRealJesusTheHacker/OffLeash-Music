@@ -11,8 +11,14 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="no_backup/" />
+        <!-- Liked ids + recents stay on-device (0.8.7 sweep 2,
+             the legacy rules file carries the reasoning). -->
+        <exclude domain="sharedpref" path="offleash_prefs.xml" />
+        <exclude domain="file" path="recents.json" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="no_backup/" />
+        <exclude domain="sharedpref" path="offleash_prefs.xml" />
+        <exclude domain="file" path="recents.json" />
     </device-transfer>
 </data-extraction-rules>

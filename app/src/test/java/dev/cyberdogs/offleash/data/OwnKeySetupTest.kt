@@ -631,4 +631,51 @@ class OwnKeySetupTest {
             manager.uiState.value.lastEndReason,
         )
     }
+
+    @Test
+    fun aKeySealedUnderTheLegacySharedAliasMigratesToTheOwnKeyBox() {
+        // A pre-0.8.7 build sealed the own key under the SHARED
+        // session alias's key. The split composition (0.8.7
+        // sweep 2) reads it through the legacy box once, re-seals
+        // it under the store's own key, and never needs the
+        // legacy key again — so a later session-side regeneration
+        // cannot take the owner's key with it.
+        val storage = InMemorySecretStorage()
+        val legacyBox = testSecretBox()
+        val ownBox = testSecretBox()
+        OwnKeyStore(storage, legacyBox).save(
+            StoredOwnKey(VALID_ID, VALID_SECRET),
+        )
+        val migrated = OwnKeyStore(storage, ownBox, legacyBox)
+        assertEquals(VALID_ID, migrated.load()?.clientId)
+        assertEquals(VALID_SECRET, migrated.load()?.clientSecret)
+        val ownOnly = OwnKeyStore(storage, ownBox)
+        assertEquals(
+            "the first read re-sealed the key under the own box",
+            VALID_ID,
+            ownOnly.load()?.clientId,
+        )
+        assertEquals(VALID_SECRET, ownOnly.load()?.clientSecret)
+    }
+
+    @Test
+    fun aWizardDraftSealedUnderTheLegacyAliasMigratesTheSameWay() {
+        val storage = InMemorySecretStorage()
+        val legacyBox = testSecretBox()
+        val ownBox = testSecretBox()
+        OwnKeyWizardStore(storage, legacyBox).save(
+            StoredOwnKeyProgress(
+                stepOrdinal = 4,
+                draftClientId = VALID_ID,
+                draftClientSecret = VALID_SECRET,
+                draftTested = false,
+            ),
+        )
+        val migrated = OwnKeyWizardStore(storage, ownBox, legacyBox)
+        assertEquals(VALID_ID, migrated.load()?.draftClientId)
+        assertEquals(
+            VALID_ID,
+            OwnKeyWizardStore(storage, ownBox).load()?.draftClientId,
+        )
+    }
 }

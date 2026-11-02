@@ -66,6 +66,27 @@ fun OwnKeyWizardScreen(
     var secretVisible by remember { mutableStateOf(false) }
     var removeArmed by remember { mutableStateOf(false) }
 
+    // While the paste step is showing, the window is marked
+    // secure (0.8.7 sweep 2): the client secret sits in a
+    // visible field there, and FLAG_SECURE keeps it out of
+    // screenshots and the recents thumbnail for exactly the
+    // step that shows it. The flag is cleared the moment the
+    // step changes or the screen leaves, so no other surface
+    // loses its screenshots to this step's secret.
+    val activity = context as? android.app.Activity
+    androidx.compose.runtime.DisposableEffect(state.step) {
+        if (state.step == OwnKeyStep.ENTER_KEY) {
+            activity?.window?.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        }
+        onDispose {
+            activity?.window?.clearFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        }
+    }
+
     fun openPage(url: String) {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
         context.startActivity(intent)
@@ -297,8 +318,12 @@ fun OwnKeyWizardScreen(
                 StepCard(
                     title = "Paste your key",
                     body = "Copy each line from Google's page " +
-                        "and paste it here. Nothing is saved " +
-                        "until your key passes its test.",
+                        "and paste it here. As you type, your " +
+                        "place is kept — encrypted, on this phone " +
+                        "only — so you can leave and come back. " +
+                        "Nothing is used or sent anywhere until " +
+                        "your key passes its test and you tap " +
+                        "“Save my key”.",
                 )
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(

@@ -9,4 +9,12 @@
 -->
 <full-backup-content>
     <exclude domain="file" path="no_backup/" />
+    <!-- The liked-id record and the recently-played list are
+         listening data, not documents (0.8.7 sweep 2): they stay
+         on the device. Playlists and the download records remain
+         backed up on purpose — they are the owner's own library
+         work, and losing them in a phone move would be the worse
+         harm; liked ids can be re-read from the account itself. -->
+    <exclude domain="sharedpref" path="offleash_prefs.xml" />
+    <exclude domain="file" path="recents.json" />
 </full-backup-content>

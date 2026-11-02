@@ -89,6 +89,11 @@ class AutoplayWiringContractTest {
     fun failureSkipsAreCappedAndScopedToAutoplayTracks() {
         val source = queueControllerSource()
         assertTrue(source.contains("MAX_AUTOPLAY_CONSECUTIVE_FAILURES"))
-        assertTrue(source.contains("failed.videoId !in autoplayTrackIds"))
+        // Membership is by queue ENTRY identity since 0.8.7
+        // sweep 1: a listener-queued duplicate of an autoplay
+        // song must surface its failure (SPEC §4), not be
+        // silently skipped as an autoplay entry — the pin
+        // follows the guard's new spelling.
+        assertTrue(source.contains("autoplayEntries.none { it === failed }"))
     }
 }

@@ -2,6 +2,7 @@ package dev.cyberdogs.offleash.data
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -62,5 +63,29 @@ class CrashReporterTest {
     @Test
     fun crashFileNameIsPinned() {
         assertEquals("last_crash.txt", CrashReporter.CRASH_FILE_NAME)
+    }
+
+    @Test
+    fun traceScrubsCredentialShapedValues() {
+        // The trace file is share-by-design (it renders on the
+        // sign-in screen for the owner to screenshot), so a
+        // credential-shaped value riding an exception message
+        // must not survive formatting (0.8.7 sweep 2) — while
+        // the diagnostic facts around it (class, the parameter
+        // NAMES) stay.
+        val boom = RuntimeException(
+            "call failed: Bearer ya29.fake-token-value " +
+                "access_token=<redacted_query_secret_1>&refresh_token=1//fake-refresh " +
+                "client_secret=<redacted_query_secret_2>",
+        )
+        val trace = CrashReporter.formatTrace("main", boom, epochMs = 0L)
+        assertFalse(trace.contains("ya29.fake-token-value"))
+        assertFalse(trace.contains("ya29.fake-access"))
+        assertFalse(trace.contains("fake-refresh"))
+        assertFalse(trace.contains("GOCSPX-fake-secret"))
+        assertTrue(trace.contains("Bearer [removed]"))
+        assertTrue(trace.contains("access_token=[removed]"))
+        assertTrue(trace.contains("client_secret=[removed]"))
+        assertTrue(trace.contains("java.lang.RuntimeException"))
     }
 }

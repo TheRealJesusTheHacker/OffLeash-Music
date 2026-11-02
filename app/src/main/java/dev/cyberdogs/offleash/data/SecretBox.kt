@@ -52,13 +52,24 @@ import javax.crypto.spec.GCMParameterSpec
  * works at all — the randomized-encryption authorization binds
  * ENCRYPTION with a caller IV only), so anything the old key ever
  * sealed remained readable right up to regeneration; and every
- * store on this box holds re-obtainable sign-in credentials — a
- * device grant with minutes of life, Google tokens, a legacy
- * cookie session — never user data. After regeneration those old
- * blobs decrypt to null under the box's standing contract, the
- * stores read "no stored session", and the owner signs in again:
- * one re-sign-in, against the alternative of a key that can never
- * seal again and sign-in broken on the device forever.
+ * store on the SESSION family's box holds re-obtainable sign-in
+ * credentials — a device grant with minutes of life, Google
+ * tokens, a legacy cookie session — never user data. After
+ * regeneration those old blobs decrypt to null under the box's
+ * standing contract, the stores read "no stored session", and
+ * the owner signs in again: one re-sign-in, against the
+ * alternative of a key that can never seal again and sign-in
+ * broken on the device forever.
+ *
+ * That argument holds ONLY for the session family, and since
+ * 0.8.7 it is scoped to it: the owner's own Google key (0.8.6)
+ * briefly shared this alias, and it is NOT re-obtainable — no
+ * sign-in re-issues a Google Cloud client secret; only the
+ * setup wizard re-enters it. The own-key stores now seal under
+ * their own alias with NO regenerator wired (see the container),
+ * so a session-side regeneration can never reach them, and a
+ * seal failure there surfaces honestly instead of destroying
+ * the one credential this app cannot get back on its own.
  */
 class AesGcmSecretBox(
     private val keyProvider: () -> SecretKey,
@@ -148,8 +159,9 @@ object KeystoreSecretKey {
      * invokes when a seal proves the standing key's parameters
      * cannot serve this box (0.8.1 hotfix; see the box's doc for
      * why orphaning the old key's blobs is the safe trade). The
-     * three session stores share one alias, so one regeneration
-     * heals every seal site at once.
+     * session-family stores share one alias, so one regeneration
+     * heals every seal site at once. (The own-key stores are not
+     * on this alias since 0.8.7 — see the class doc.)
      */
     fun regenerate(alias: String): SecretKey {
         // Written without the apply-block load idiom on purpose:
