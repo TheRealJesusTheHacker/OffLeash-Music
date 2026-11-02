@@ -20,7 +20,7 @@ A Cyberdogs project — the unofficial side of Sentinel Safeguard. Inspirations,
 
 ## Downloads
 
-Get OffLeash from [GitHub Releases](https://github.com/TheRealJesusTheHacker/OffLeash-Music/releases) — that page is the download channel. The current release is **v0.8.6** (prerelease, published 2026-11-01), shipping `OffLeash-Hunt-0.8.6-window-hunt1.apk` together with `SHA256SUMS.txt` — verify the APK against the checksums before installing.
+Get OffLeash from [GitHub Releases](https://github.com/TheRealJesusTheHacker/OffLeash-Music/releases) — that page is the download channel. The current release is **v0.8.7** (prerelease, published 2026-11-02), shipping `OffLeash-Hunt-0.8.7-window-hunt1.apk` together with `SHA256SUMS.txt` — verify the APK against the checksums before installing.
 
 ## License
 
