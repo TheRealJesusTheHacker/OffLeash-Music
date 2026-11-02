@@ -59,8 +59,8 @@ android {
         applicationId = "dev.cyberdogs.offleash"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "0.8.6-sweep"
+        versionCode = 24
+        versionName = "0.8.7-sweep"
         buildConfigField("String", "OAUTH_CLIENT_ID", buildConfigString(oauthClientId))
         buildConfigField("String", "OAUTH_CLIENT_SECRET", buildConfigString(oauthClientSecret))
         buildConfigField("String", "OAUTH_CLIENT_KIND", buildConfigString(oauthClientKind))
