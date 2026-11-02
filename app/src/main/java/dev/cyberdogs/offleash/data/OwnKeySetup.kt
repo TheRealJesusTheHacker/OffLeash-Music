@@ -7,11 +7,13 @@ import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.auth.OAuthClientIdentity
 import dev.cyberdogs.offleash.core.auth.OAuthClientKind
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -264,6 +266,21 @@ class OwnKeySetup(
 
     private var current: UiState = restoreInitialState()
 
+    /**
+     * The live test's generation (0.8.7 sweep 1): every transition
+     * that changes what a test would be testing — a draft edit, a
+     * restart, a save, a removal — bumps it and cancels the job,
+     * so a verdict can only ever land on the exact pair it tested.
+     */
+    private var testGeneration: Long = 0
+    private var testJob: Job? = null
+
+    private fun invalidateTest() {
+        testGeneration++
+        testJob?.cancel()
+        testJob = null
+    }
+
     private val _state = MutableStateFlow(current)
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -288,8 +305,16 @@ class OwnKeySetup(
             step = restoredStep,
             draftClientId = progress?.draftClientId ?: "",
             draftClientSecret = progress?.draftClientSecret ?: "",
-            tested = progress?.draftTested ?: false,
-            hasOwnKey = keyStore.load() != null,
+            // The draft resumes; its test verdict does not (0.8.7
+            // sweep 1). A pass is a statement about a moment — the
+            // owner may have rotated or deleted the key in the
+            // console since — so a restarted wizard always asks
+            // for a fresh test before a save.
+            tested = false,
+            // One definition of "a key is set", shared with the
+            // identity resolution: a stored record with a blank
+            // half is not a key (0.8.7 sweep 1).
+            hasOwnKey = storedOwnKeyIdentity(keyStore) != null,
         )
     }
 
@@ -336,6 +361,7 @@ class OwnKeySetup(
 
     /** Start over: the draft and the place are both cleared. */
     fun restart() {
+        invalidateTest()
         wizardStore.wipe()
         publish(
             UiState(hasOwnKey = current.hasOwnKey),
@@ -353,11 +379,13 @@ class OwnKeySetup(
         ) {
             return
         }
+        invalidateTest()
         publish(
             current.copy(
                 draftClientId = clientId,
                 draftClientSecret = clientSecret,
                 tested = false,
+                testing = false,
                 testMessage = null,
             ),
         )
@@ -378,16 +406,45 @@ class OwnKeySetup(
         val id = current.draftClientId.trim()
         val secret = current.draftClientSecret.trim()
         if (!OwnKeyValidation.isValid(id, secret)) return
+        val generation = ++testGeneration
         publish(current.copy(testing = true, testMessage = null))
-        scope.launch {
+        testJob = scope.launch {
             val entered = OAuthClientIdentity(
                 clientId = id,
                 clientSecret = secret,
                 kind = OAuthClientKind.OWNER,
             )
-            val result = withContext(Dispatchers.IO) {
-                GoogleDeviceAuth(transport, entered).requestDeviceCode()
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    GoogleDeviceAuth(transport, entered).requestDeviceCode()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // The device-code call is total for Exceptions;
+                // an escaping Error must still land as a failed
+                // test with the spinner cleared, never as a stuck
+                // wizard or a dead process (0.8.7 sweep 1).
+                if (generation == testGeneration) {
+                    signInDiagnostics.log(
+                        "own-key",
+                        "the key test couldn't finish " +
+                            "(${e.javaClass.simpleName}) — " +
+                            "nothing was saved",
+                    )
+                    publish(
+                        current.copy(
+                            testing = false,
+                            tested = false,
+                            testMessage = TEST_FAILED_MESSAGE,
+                        ),
+                    )
+                }
+                return@launch
             }
+            // A superseded test says nothing: the transition that
+            // replaced it already reset the state it owns.
+            if (generation != testGeneration) return@launch
             when (result) {
                 is DeviceCodeResult.Issued -> {
                     signInDiagnostics.log(
@@ -434,8 +491,19 @@ class OwnKeySetup(
         val id = current.draftClientId.trim()
         val secret = current.draftClientSecret.trim()
         if (!OwnKeyValidation.isValid(id, secret)) return
-        val previous = keyStore.load()
-        val pairChanged = previous != null && previous.clientId != id
+        invalidateTest()
+        val enteredIdentity = OAuthClientIdentity(
+            clientId = id,
+            clientSecret = secret,
+            kind = OAuthClientKind.OWNER,
+        )
+        // The gate question is whether the LIVE client changes —
+        // compared as a whole identity, not by stored record
+        // (0.8.7 sweep 1): a secret-only rotation under the same
+        // Client ID, and a first save over a build-supplied owner
+        // pair, both change which registration the standing
+        // session's tokens belong to, and both must end it.
+        val pairChanged = auth.identity != enteredIdentity
         try {
             keyStore.save(StoredOwnKey(clientId = id, clientSecret = secret))
         } catch (e: Exception) {
@@ -455,24 +523,29 @@ class OwnKeySetup(
             )
             return
         }
-        auth.identity = OAuthClientIdentity(
-            clientId = id,
-            clientSecret = secret,
-            kind = OAuthClientKind.OWNER,
-        )
+        auth.identity = enteredIdentity
         sessionManager.applyClientGate(forceCleanResign = pairChanged)
-        wizardStore.wipe()
         signInDiagnostics.log(
             "own-key",
             "the owner's key was saved — sign-in now runs under it",
         )
+        // The wizard's work is done: the draft is SPENT, not kept
+        // (0.8.7 sweep 1). Publish the landing with the draft
+        // cleared, then wipe the progress file — in this order,
+        // because publish persists what it is given, and an
+        // earlier build's wipe-then-publish quietly re-saved the
+        // live pair into the progress file it had just wiped.
         publish(
             current.copy(
                 step = OwnKeyStep.DONE,
+                draftClientId = "",
+                draftClientSecret = "",
+                tested = false,
                 testing = false,
                 hasOwnKey = true,
             ),
         )
+        wizardStore.wipe()
     }
 
     /**
@@ -481,35 +554,67 @@ class OwnKeySetup(
      * the gate ends a session the fallback can't refresh.
      */
     fun removeOwnKey() {
+        invalidateTest()
         keyStore.wipe()
+        // Falling back changes the live client whenever the build
+        // pair is a different registration than the removed key —
+        // the gate hears about it exactly like a save (0.8.7
+        // sweep 1).
+        val pairChanged = auth.identity != buildIdentity
         auth.identity = buildIdentity
-        sessionManager.applyClientGate()
+        sessionManager.applyClientGate(forceCleanResign = pairChanged)
         signInDiagnostics.log(
             "own-key",
             "the owner's key was removed — sign-in fell back " +
                 "to the build's own setup",
         )
+        // Removal removes (0.8.7 sweep 1): the wizard draft is the
+        // same pair in a second sealed file, so it is cleared and
+        // wiped too — an earlier build left it in place and the
+        // "removed" key reappeared on the paste screen.
         publish(
             current.copy(
                 step = OwnKeyStep.NEED,
+                draftClientId = "",
+                draftClientSecret = "",
                 tested = false,
+                testing = false,
                 testMessage = null,
                 hasOwnKey = false,
             ),
         )
+        wizardStore.wipe()
     }
 
     companion object {
 
-        /** The live test's pass verdict, shown on the paste screen. */
+        /**
+         * The live test's pass verdict, shown on the paste screen:
+         * scoped to what the test actually proves — Google accepted
+         * the pair for a sign-in code. It does not prove the
+         * earlier steps (the API switch, the Publish step), and it
+         * says so, so a later mystery sign-out has a named first
+         * suspect instead of contradicting a "your key works"
+         * verdict (0.8.7 sweep 3).
+         */
         const val TEST_PASSED_MESSAGE =
-            "Your key works — Google accepted it."
+            "Google accepted your key — the ID and secret are " +
+                "right. This test checks the key itself; it can't " +
+                "check steps 3 and 4, so if Google signs you out " +
+                "every week later, those are the steps to re-check."
 
-        /** The live test's failure verdict: honest, nothing saved. */
+        /**
+         * The live test's failure verdict: the copy causes first,
+         * then the other usual suspects, with the steps named so
+         * Back can take the owner straight to them (0.8.7 sweep 3).
+         */
         const val TEST_FAILED_MESSAGE =
-            "Google didn't accept that key. Check both lines " +
-                "are copied exactly from your key page, then test " +
-                "again. Nothing was saved."
+            "Google didn't accept that key. First check both " +
+                "lines are copied exactly from your key page, then " +
+                "test again. Still failing? The usual causes: in " +
+                "step 5 the type must be “TVs and Limited Input " +
+                "devices”, and step 4 must end with “Publish app”. " +
+                "Your key wasn't saved."
 
         /** The save-failure verdict: the key never reached storage. */
         const val SAVE_FAILED_MESSAGE =

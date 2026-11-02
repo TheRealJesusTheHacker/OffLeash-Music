@@ -33,4 +33,24 @@ class PlaybackDiagnosticsHelpersTest {
             streamHost("https://rr1---sn.googlevideo.com/videoplayback?x=1"),
         )
     }
+
+    @Test
+    fun malformedEmbeddedIpEscapeReportsNone() {
+        // URLDecoder throws on a malformed escape; the helper is
+        // total (0.8.7 sweep 1) — an unreadable ip parameter is
+        // reported exactly like an absent one, never thrown into
+        // the resolve path that records it.
+        assertEquals(
+            "none",
+            embeddedIpFamily(
+                "https://rr1---sn.googlevideo.com/videoplayback?ip=%zz&expire=1",
+            ),
+        )
+        assertEquals(
+            "none",
+            embeddedIpFamily(
+                "https://rr1---sn.googlevideo.com/videoplayback?ip=%&expire=1",
+            ),
+        )
+    }
 }

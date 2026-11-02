@@ -2,6 +2,7 @@ package dev.cyberdogs.offleash.playback
 
 import android.content.Intent
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -117,7 +118,66 @@ private class QueueTransportPlayer(
             .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
             .add(Player.COMMAND_SEEK_TO_PREVIOUS)
             .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            // The playlist itself is NOT on offer (0.8.7 sweep
+            // 1): the raw player holds exactly the one item the
+            // queue resolved, and QueueController is the only
+            // owner of what plays. A controller setting or
+            // editing items directly (a car head unit's queue
+            // editor, a Wear companion) desynced the player from
+            // the queue — the UI went on showing the queue's
+            // track while the player played the foreign item, and
+            // the next queue advance replaced it without a word.
+            // The mutation commands are un-advertised above and
+            // no-opped below: one behavior for every surface.
+            .remove(Player.COMMAND_SET_MEDIA_ITEM)
+            .remove(Player.COMMAND_CHANGE_MEDIA_ITEMS)
             .build()
+
+    // Playlist mutation, no-opped as a set (see
+    // getAvailableCommands above): the queue owns the playlist;
+    // these verbs on the raw player could only desync it.
+
+    override fun setMediaItem(mediaItem: MediaItem) = Unit
+
+    override fun setMediaItem(mediaItem: MediaItem, startPositionMs: Long) = Unit
+
+    override fun setMediaItem(mediaItem: MediaItem, resetPosition: Boolean) = Unit
+
+    override fun setMediaItems(mediaItems: List<MediaItem>) = Unit
+
+    override fun setMediaItems(mediaItems: List<MediaItem>, resetPosition: Boolean) = Unit
+
+    override fun setMediaItems(
+        mediaItems: List<MediaItem>,
+        startIndex: Int,
+        startPositionMs: Long,
+    ) = Unit
+
+    override fun addMediaItem(mediaItem: MediaItem) = Unit
+
+    override fun addMediaItem(index: Int, mediaItem: MediaItem) = Unit
+
+    override fun addMediaItems(mediaItems: List<MediaItem>) = Unit
+
+    override fun addMediaItems(index: Int, mediaItems: List<MediaItem>) = Unit
+
+    override fun moveMediaItem(currentIndex: Int, newIndex: Int) = Unit
+
+    override fun moveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int) = Unit
+
+    override fun replaceMediaItem(index: Int, mediaItem: MediaItem) = Unit
+
+    override fun replaceMediaItems(
+        fromIndex: Int,
+        toIndex: Int,
+        mediaItems: List<MediaItem>,
+    ) = Unit
+
+    override fun removeMediaItem(index: Int) = Unit
+
+    override fun removeMediaItems(fromIndex: Int, toIndex: Int) = Unit
+
+    override fun clearMediaItems() = Unit
 
     override fun play() {
         // Dead-state routing (see the class doc): play() must

@@ -47,7 +47,8 @@ fun runsOf(node: JsonElement?): List<JsonObject> =
 fun textOf(node: JsonElement?): String? {
     val obj = node.asObj() ?: return (node as? JsonPrimitive)?.contentOrNull
     obj.arr("runs")?.let { runs ->
-        return runs.joinToString("") { run -> run.asObj().str("text") ?: "" }
+        val joined = runs.joinToString("") { run -> run.asObj().str("text") ?: "" }
+        if (joined.isNotEmpty()) return joined
     }
     obj.str("simpleText")?.let { return it }
     (obj["content"] as? JsonPrimitive)?.contentOrNull?.let { return it }

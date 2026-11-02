@@ -428,7 +428,7 @@ class DownloadStore(private val file: File) {
         // the discard policy keeps no bytes, so the file cannot be
         // the owner's, and dropping the DONE record lost the one
         // genuine completed download in the group.
-        val winnerIds = deduped.groupBy { it.fileName }.values.map { group ->
+        val winnerIds = deduped.groupBy { it.fileName.lowercase() }.values.map { group ->
             preferredDownloadRecord(group).videoId
         }.toSet()
         val uniqueFiles = deduped.filter { it.videoId in winnerIds }
@@ -445,7 +445,7 @@ class DownloadStore(private val file: File) {
         // are reserved up front, so a fallback can never steal a
         // file a survivor owns, and one fallback never takes a
         // file another fallback just took.
-        val reservedFiles = uniqueFiles.mapTo(mutableSetOf()) { it.fileName }
+        val reservedFiles = uniqueFiles.mapTo(mutableSetOf()) { it.fileName.lowercase() }
         // Round 7: a dropped group's HONEST file — the name its own
         // videoId derives — is claimed for that group up front, on
         // the same footing as a survivor's file. Round 6 reserved
@@ -474,20 +474,20 @@ class DownloadStore(private val file: File) {
         // here, whether or not it holds a record naming it.
         val honestFallbackOwner = mutableMapOf<String, String>()
         for (videoId in recordsById.keys) {
-            honestFallbackOwner.putIfAbsent(downloadFileName(videoId), videoId)
+            honestFallbackOwner.putIfAbsent(downloadFileName(videoId).lowercase(), videoId)
         }
         // Groups lost at the decode pass own their derived names
         // too (round 9, see `undecodableIds` above): their files
         // can still stand on disk, and no claimant fallback may
         // take a name whose owner's bytes those are.
         for (videoId in undecodableIds) {
-            honestFallbackOwner.putIfAbsent(downloadFileName(videoId), videoId)
+            honestFallbackOwner.putIfAbsent(downloadFileName(videoId).lowercase(), videoId)
         }
         for (group in recordsById.values) {
             if (preferredDownloadRecord(group).videoId in winnerIds) continue
             for (record in group) {
-                if (record.fileName == downloadFileName(record.videoId)) {
-                    honestFallbackOwner.putIfAbsent(record.fileName, record.videoId)
+                if (record.fileName.equals(downloadFileName(record.videoId), ignoreCase = true)) {
+                    honestFallbackOwner.putIfAbsent(record.fileName.lowercase(), record.videoId)
                 }
             }
         }
@@ -505,11 +505,19 @@ class DownloadStore(private val file: File) {
                     )
                     .map { it.value }
                     .firstOrNull {
-                        it.fileName !in reservedFiles &&
-                            (honestFallbackOwner[it.fileName] == null ||
-                                honestFallbackOwner[it.fileName] == it.videoId)
+                        // File identity is case-insensitive
+                        // (0.8.7 sweep 1): the suffix namespaces
+                        // this loader guards already matched
+                        // case-insensitively (rounds 4-5), but the
+                        // dedupe grouped and reserved by exact
+                        // name, so two records naming one file in
+                        // different cases both believed they owned
+                        // it — the cross-play split, in case form.
+                        it.fileName.lowercase() !in reservedFiles &&
+                            (honestFallbackOwner[it.fileName.lowercase()] == null ||
+                                honestFallbackOwner[it.fileName.lowercase()] == it.videoId)
                     }
-                    ?.also { reservedFiles += it.fileName }
+                    ?.also { reservedFiles += it.fileName.lowercase() }
             }
         }
         // A record dropped by either dedupe is a loss exactly like

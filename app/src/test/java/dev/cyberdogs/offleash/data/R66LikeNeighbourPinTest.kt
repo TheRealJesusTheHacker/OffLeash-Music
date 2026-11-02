@@ -138,7 +138,20 @@ class R66LikeNeighbourPinTest {
             emptyList<Boolean>(),
             transport.writes.toList(),
         )
-        assertEquals(setOf("vid1"), preferences.localLikedVideoIds())
+        // And the settled entry must be LABELED the device-only
+        // outcome it was (0.8.7 sweep 1): the account never
+        // received this like, so the row may not wear the plain
+        // account-backed presentation.
+        assertFalse(
+            "a like no account received must not settle as account-backed",
+            controller.stateFor("vid1").accountBacked,
+        )
+        // The drain's persist lands a breath after the settle
+        // that clears pending — await the persisted value rather
+        // than racing the drain thread for it.
+        await("like persisted") {
+            preferences.localLikedVideoIds() == setOf("vid1")
+        }
     }
 
     @Test

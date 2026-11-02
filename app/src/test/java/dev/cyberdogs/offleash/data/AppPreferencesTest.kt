@@ -200,4 +200,25 @@ class AppPreferencesTest {
         assertEquals(false, prefs.autoDownloadLiked)
         assertEquals(false, prefs.audioVersionInRadio)
     }
+
+    @Test
+    fun legacyLikedSettersMergeThroughTheCombinedPair() {
+        // Once the combined pair exists it is the only value the
+        // getters read, so the legacy single-half setters must
+        // merge through it (0.8.7 sweep 1) — before the fix they
+        // wrote keys nothing reads and the change was silently
+        // lost.
+        val preferences = AppPreferences(InMemoryKeyValueStore())
+        preferences.setLikedState(setOf("aaa"), setOf("seed1"))
+        preferences.setLocalLikedVideoIds(setOf("bbb"))
+        assertEquals(setOf("bbb"), preferences.localLikedVideoIds())
+        assertEquals(
+            "the untouched half carries over",
+            setOf("seed1"),
+            preferences.seededLikedVideoIds(),
+        )
+        preferences.setSeededLikedVideoIds(setOf("seed2"))
+        assertEquals(setOf("seed2"), preferences.seededLikedVideoIds())
+        assertEquals(setOf("bbb"), preferences.localLikedVideoIds())
+    }
 }

@@ -8,6 +8,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.BufferedSource
+import okio.Source
+import okio.Timeout
+import okio.buffer
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -916,5 +926,119 @@ class DownloadManagerTest {
         assertNull(OkHttpChunkFetcher.parseContentRangeTotal("bytes 0-0/"))
         assertNull(OkHttpChunkFetcher.parseContentRangeTotal("garbage"))
         assertNull(OkHttpChunkFetcher.parseContentRangeTotal(null))
+    }
+
+    @Test
+    fun aDuplicateRunAfterCompletionLeavesTheFinishedDownloadStanding() {
+        // The launch race's other half (0.8.7 sweep 1): a second
+        // run starting after the first completed used to delete
+        // the finished file up front and download again — and a
+        // failure in that second run left the track with neither.
+        // A run that finds its record DONE reports it and touches
+        // nothing: no resolve, no fetch, no file write.
+        val r = rig()
+        r.store.enqueueIfAbsent(track(), nowMs = 1L)
+        val done = r.manager.runDownload(track())
+        assertEquals(DownloadState.DONE, done?.state)
+        val finished = File(r.downloadsDir, downloadFileName("vid1"))
+        assertArrayEquals(content(2500), finished.readBytes())
+        val fetchesBefore = r.fetcher.windows.size
+        val resolvesBefore = r.resolvedQualities.size
+
+        val duplicate = r.manager.runDownload(track())
+        assertEquals(DownloadState.DONE, duplicate?.state)
+        assertEquals(fetchesBefore, r.fetcher.windows.size)
+        assertEquals(resolvesBefore, r.resolvedQualities.size)
+        assertArrayEquals(content(2500), finished.readBytes())
+        assertEquals(
+            DownloadState.DONE,
+            r.store.recordFor("vid1")?.state,
+        )
+    }
+
+    /** A body source that yields [goodBytes] bytes, then explodes. */
+    private class ExplodingSource(private val goodBytes: Int) : Source {
+        private var delivered = 0
+
+        override fun read(sink: Buffer, byteCount: Long): Long {
+            if (delivered >= goodBytes) {
+                throw java.io.IOException("stream exploded MARKER")
+            }
+            val n = minOf(byteCount, (goodBytes - delivered).toLong())
+            sink.write(ByteArray(n.toInt()) { 7 })
+            delivered += n.toInt()
+            return n
+        }
+
+        override fun timeout(): Timeout = Timeout.NONE
+
+        override fun close() {}
+    }
+
+    private fun explodingClient(goodBytes: Int): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val body = object : ResponseBody() {
+                    override fun contentType() = "audio/mp4".toMediaType()
+                    override fun contentLength(): Long = -1
+                    override fun source(): BufferedSource =
+                        ExplodingSource(goodBytes).buffer()
+                }
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(206)
+                    .message("Partial Content")
+                    .body(body)
+                    .build()
+            }
+            .build()
+
+    @Test
+    fun anOversizedRangeBodyFailsOnTheCapNotOnFullMaterialization() {
+        // The range read is capped one byte past the window
+        // (0.8.7 sweep 1): a body streaming far more than the
+        // window asked for fails as a size mismatch WITHOUT the
+        // reader consuming the stream to its end (or its
+        // explosion). Materializing first — the old body.bytes()
+        // shape — would surface the stream's own IOException
+        // instead of the DownloadFailed size verdict.
+        val fetcher = OkHttpChunkFetcher(explodingClient(goodBytes = 10_000))
+        try {
+            fetcher.fetchRange("https://example.invalid/stream", 0L..99L)
+            throw AssertionError("an oversized body must fail")
+        } catch (e: DownloadFailed) {
+            assertTrue(
+                "the failure names the size mismatch",
+                e.message!!.contains("100-byte range"),
+            )
+        }
+    }
+
+    @Test
+    fun anExactRangeBodyStillReadsThroughTheCappedPath() {
+        val client = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val payload = content(100)
+                val body = object : ResponseBody() {
+                    override fun contentType() = "audio/mp4".toMediaType()
+                    override fun contentLength(): Long = payload.size.toLong()
+                    override fun source(): BufferedSource =
+                        Buffer().write(payload)
+                }
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(206)
+                    .message("Partial Content")
+                    .body(body)
+                    .build()
+            }
+            .build()
+        val fetcher = OkHttpChunkFetcher(client)
+        assertArrayEquals(
+            content(100),
+            fetcher.fetchRange("https://example.invalid/stream", 0L..99L),
+        )
     }
 }

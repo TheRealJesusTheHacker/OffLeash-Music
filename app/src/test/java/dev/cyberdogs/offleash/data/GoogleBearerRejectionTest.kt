@@ -206,7 +206,11 @@ class GoogleBearerRejectionTest {
 
         // A second refusal of the SAME token (another surface
         // replaying it) must not spend a second token-endpoint
-        // call — one forced refresh per token, ever.
+        // call while the failure is fresh — one forced refresh
+        // per token per cooldown (0.8.7 sweep 1: this suite's
+        // clock is frozen, so the cooldown never lapses here;
+        // its lapse is pinned by
+        // aFailedForcedRefreshMayRetryAfterTheCooldown).
         assertNull(manager.bearerAfterRejection(STALE_TOKEN))
         assertEquals(1, form.refreshRequests.get())
     }
@@ -456,5 +460,115 @@ class GoogleBearerRejectionTest {
             """{"device_code":"dc-2","user_code":"KQXR-TWZN",""" +
                 """"verification_url":"https://www.google.com/device",""" +
                 """"expires_in":1800,"interval":0}"""
+    }
+
+    // ---------------------------------------------------------------
+    // 0.8.7 sweep 1: the latch's cooldown, and the save retry
+    // ---------------------------------------------------------------
+
+    @Test
+    fun aFailedForcedRefreshMayRetryAfterTheCooldown() {
+        var clock = NOW
+        val form = RoutingFormTransport()
+        form.onRefresh = {
+            HttpResponse(503, """{"error":"temporarily_unavailable"}""")
+        }
+        val store = testTokenStore()
+        // Prime the locally-valid-but-refused session against a
+        // mutable clock (primedManager's clock is frozen at NOW;
+        // this test needs time to pass).
+        store.save(
+            StoredGoogleSession(
+                accessToken = STALE_TOKEN,
+                refreshToken = "rt-1",
+                accessTokenExpiresAtEpochMs = NOW + 3_600_000L,
+                identityName = "Test Listener",
+                identityEmail = "listener@example.com",
+                grantedAtEpochMs = NOW,
+                lastValidatedEpochMs = NOW,
+            ),
+        )
+        val primed = GoogleSessionManager(
+            store = store,
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            client = YoutubeiClient(UnusedTransport()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            signInDiagnostics = SignInDiagnostics(),
+            nowMs = { clock },
+        )
+
+        assertNull(primed.bearerAfterRejection(STALE_TOKEN))
+        assertEquals(1, form.refreshRequests.get())
+        // Inside the cooldown the refusal spends nothing more.
+        assertNull(primed.bearerAfterRejection(STALE_TOKEN))
+        assertEquals(1, form.refreshRequests.get())
+        // After it, the same refused token may try again — the
+        // clock-skew case this path exists for is not bricked by
+        // one network blip — and this time Google answers.
+        clock += 61_000L
+        form.onRefresh = { HttpResponse(200, REFRESHED_BODY) }
+        assertEquals(FRESH_TOKEN, primed.bearerAfterRejection(STALE_TOKEN))
+        assertEquals(2, form.refreshRequests.get())
+    }
+
+    /** A sealed storage whose next write fails, once, when armed. */
+    private class FailOnceStorage : SecretStorage {
+        private val inner = InMemorySecretStorage()
+
+        @Volatile
+        var armed: Boolean = false
+
+        override fun read(): ByteArray? = inner.read()
+
+        override fun write(bytes: ByteArray) {
+            if (armed) {
+                armed = false
+                throw RuntimeException("disk full MARKER")
+            }
+            inner.write(bytes)
+        }
+
+        override fun clear() = inner.clear()
+    }
+
+    @Test
+    fun aRefreshSaveFailureIsRetriedBeforeTheRotatedTokenIsLost() {
+        // The refresh rotates the refresh token (rt-1 -> rt-2)
+        // but the sealed save throws: memory takes the new pair,
+        // disk keeps the rotated-out one. Without the retry, a
+        // restart would present rt-1, read invalid_grant, and
+        // wipe a healthy session as "revoked" (0.8.7 sweep 1).
+        val form = RoutingFormTransport()
+        val storage = FailOnceStorage()
+        val store = GoogleTokenStore(storage, testSecretBox())
+        store.save(
+            StoredGoogleSession(
+                accessToken = STALE_TOKEN,
+                refreshToken = "rt-1",
+                accessTokenExpiresAtEpochMs = NOW + 30_000L,
+                identityName = "Test Listener",
+                identityEmail = "listener@example.com",
+                grantedAtEpochMs = NOW,
+                lastValidatedEpochMs = NOW,
+            ),
+        )
+        val manager = GoogleSessionManager(
+            store = store,
+            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            client = YoutubeiClient(UnusedTransport()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            signInDiagnostics = SignInDiagnostics(),
+            nowMs = { NOW },
+        )
+
+        storage.armed = true
+        assertEquals(FRESH_TOKEN, manager.currentBearer())
+        // The divergence is real: disk still holds the old pair.
+        assertEquals("rt-1", store.load()?.refreshToken)
+        // The next bearer call retries the save first, so from
+        // here a restart loads the rotated pair.
+        assertEquals(FRESH_TOKEN, manager.currentBearer())
+        assertEquals("rt-2", store.load()?.refreshToken)
+        assertEquals(FRESH_TOKEN, store.load()?.accessToken)
     }
 }

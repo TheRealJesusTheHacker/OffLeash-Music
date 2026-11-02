@@ -92,6 +92,18 @@ class GoogleSessionManager(
     private var stored: StoredGoogleSession? = null
 
     /**
+     * Memory is ahead of disk (0.8.7 sweep 1): a refresh landed
+     * new tokens — possibly a ROTATED refresh token — but the
+     * sealed save threw. Until a retry lands, a restart would
+     * reload the rotated-out refresh token and read its
+     * invalid_grant as a revocation, wiping a healthy session.
+     * Guarded by [lock] wherever it is written; read unlocked as
+     * a fast-path hint in [currentBearer].
+     */
+    @Volatile
+    private var sessionSaveDirty: Boolean = false
+
+    /**
      * The access token the standing session most recently rotated
      * AWAY from (sign-in perfection pass): a request that left with
      * it can still be in flight when its 401 comes back, and
@@ -113,6 +125,18 @@ class GoogleSessionManager(
      */
     @Volatile
     private var rejectionHandledForToken: String? = null
+
+    /**
+     * The token whose most recent forced refresh FAILED
+     * transiently, and when a retry of it becomes allowed again
+     * (0.8.7 sweep 1): a failed attempt starts a cooldown instead
+     * of spending the one-shot forever — one network blip used to
+     * leave a refused-but-locally-valid token unrecoverable until
+     * its natural expiry, which is exactly the clock-skew case
+     * [bearerAfterRejection] exists for.
+     */
+    private var rejectionFailedToken: String? = null
+    private var rejectionRetryAtMs: Long = 0L
 
     /**
      * The issued-but-unapproved device grant (0.7.1), mirrored in
@@ -505,6 +529,11 @@ class GoogleSessionManager(
      */
     private suspend fun runSignIn() {
         val epoch = flowEpoch
+        // The issuing client's class, read now (0.8.7 sweep 1):
+        // the grant this run persists is stamped with the client
+        // that minted the code, never with whatever identity is
+        // current by the time the network answers.
+        val issuingKind = auth.identity?.kind?.label
         signInDiagnostics.startAttempt()
         signInDiagnostics.log("google-sign-in", "device-code flow started")
         try {
@@ -559,7 +588,7 @@ class GoogleSessionManager(
                 issuedAtEpochMs = now,
                 expiresAtEpochMs = now + code.expiresInSeconds * 1000L,
                 intervalSeconds = code.intervalSeconds,
-                clientKind = auth.identity?.kind?.label,
+                clientKind = issuingKind,
             )
             if (!persistPendingGrantIfCurrent(epoch, grant)) {
                 signInDiagnostics.log(
@@ -618,8 +647,18 @@ class GoogleSessionManager(
     private suspend fun pollPendingGrant() {
         val grant = pendingGrant ?: return
         val epoch = flowEpoch
+        // A check-now signal is spent on the watch it was tapped
+        // in (0.8.7 sweep 1): the conflated channel otherwise
+        // carried a leftover tap — from an earlier grant, or one
+        // delivered while no watch was running — into this loop's
+        // first park, polling immediately against the interval
+        // (and any slow_down) Google set.
+        while (checkNowSignal.tryReceive().isSuccess) {
+            // Draining stale signals only; the loop below re-arms.
+        }
         try {
-            var intervalSeconds = grant.intervalSeconds.coerceAtLeast(1L)
+            var intervalSeconds =
+                grant.intervalSeconds.coerceIn(1L, MAX_POLL_INTERVAL_SECONDS)
             // Transient-failure state (0.8.1 hotfix): consecutive
             // polls that got NO protocol answer (transport / 5xx),
             // the backoff the next park uses instead of the plain
@@ -749,7 +788,9 @@ class GoogleSessionManager(
                                 ),
                             )
                         }
-                        intervalSeconds += SLOW_DOWN_INCREMENT_SECONDS
+                        intervalSeconds =
+                            (intervalSeconds + SLOW_DOWN_INCREMENT_SECONDS)
+                                .coerceAtMost(MAX_POLL_INTERVAL_SECONDS)
                         signInDiagnostics.log(
                             "google-sign-in",
                             "poll: Google asked to slow down — interval now ${intervalSeconds}s",
@@ -1087,7 +1128,36 @@ class GoogleSessionManager(
         )
     }
 
+    /**
+     * Re-attempts the sealed save a failed refresh left behind
+     * (0.8.7 sweep 1, see [sessionSaveDirty]). Called at the head
+     * of the bearer paths; a no-op unless a save is outstanding.
+     */
+    private fun retrySessionSave() {
+        if (!sessionSaveDirty) return
+        synchronized(lock) {
+            if (!sessionSaveDirty) return
+            val current = stored
+            if (current == null) {
+                // The session ended; nothing is owed to disk.
+                sessionSaveDirty = false
+                return
+            }
+            try {
+                store.save(current)
+                sessionSaveDirty = false
+                signInDiagnostics.log(
+                    "store",
+                    "the refreshed token's save was retried and landed",
+                )
+            } catch (e: Throwable) {
+                // Still dirty; the next bearer call tries again.
+            }
+        }
+    }
+
     fun currentBearer(): String? {
+        retrySessionSave()
         val session = stored ?: return null
         if (session.accessTokenExpiresAtEpochMs - nowMs() > REFRESH_SKEW_MS) {
             return session.accessToken
@@ -1129,6 +1199,7 @@ class GoogleSessionManager(
      * BLOCKING like [currentBearer]: call from an IO dispatcher.
      */
     fun bearerAfterRejection(rejectedBearer: String): String? {
+        retrySessionSave()
         synchronized(lock) {
             val current = stored ?: return null
             if (rejectedBearer == previousAccessToken) {
@@ -1140,12 +1211,31 @@ class GoogleSessionManager(
             if (rejectionHandledForToken == rejectedBearer) {
                 return null
             }
-            rejectionHandledForToken = rejectedBearer
+            if (rejectionFailedToken == rejectedBearer &&
+                nowMs() < rejectionRetryAtMs
+            ) {
+                return null
+            }
             signInDiagnostics.log(
                 "google-sign-in",
                 "a request was refused with the stored access token — refreshing it once",
             )
-            return refreshUnderLock(current, nowMs(), refusedToken = true)
+            val refreshed =
+                refreshUnderLock(current, nowMs(), refusedToken = true)
+            if (refreshed != null || stored == null) {
+                // Refreshed — or the session ended (revoked): the
+                // rejection is definitively handled, and the
+                // one-shot is spent for this token.
+                rejectionHandledForToken = rejectedBearer
+                rejectionFailedToken = null
+            } else {
+                // A transient failure spends nothing but a
+                // cooldown: a later refusal of the same token may
+                // try again once it lapses (0.8.7 sweep 1).
+                rejectionFailedToken = rejectedBearer
+                rejectionRetryAtMs = nowMs() + REJECTION_RETRY_COOLDOWN_MS
+            }
+            return refreshed
         }
     }
 
@@ -1212,11 +1302,18 @@ class GoogleSessionManager(
                 )
                 try {
                     store.save(updated)
+                    sessionSaveDirty = false
                 } catch (e: Throwable) {
+                    // Memory takes the rotated tokens (they are
+                    // the only valid ones now) and the divergence
+                    // is named honestly: the STORED copy is stale,
+                    // not standing (0.8.7 sweep 1).
+                    sessionSaveDirty = true
                     signInDiagnostics.log(
                         "store",
                         "the refreshed token couldn't be saved (${e.javaClass.simpleName}) — " +
-                            "the stored copy stands",
+                            "the copy in memory is ahead of the stored one; " +
+                            "the save will be retried",
                     )
                 }
                 // The token just rotated away from stays
@@ -1507,6 +1604,8 @@ class GoogleSessionManager(
             stored = null
             previousAccessToken = null
             rejectionHandledForToken = null
+            rejectionFailedToken = null
+            rejectionRetryAtMs = 0L
             current
         }
         // The device copy is gone, so the presented account
@@ -1580,6 +1679,14 @@ class GoogleSessionManager(
     fun applyClientGate(forceCleanResign: Boolean = false) {
         val buildKind = auth.identity?.kind
         signInDiagnostics.log("signin", signInClientLine(buildKind))
+        // The in-flight half of this gate is at the bottom: when
+        // nothing stands and nothing is saved, the epoch moves so
+        // an issuance blocked in its network call — which has
+        // persisted nothing yet — cannot land afterwards stamped
+        // with the NEW client's class (the zombie-code shape,
+        // 0.8.7 sweep 1). A standing session or grant is handled
+        // by the branches below, and a resumed grant's poll (same
+        // class, nothing changed) is never epoch-killed here.
         val session = synchronized(lock) { stored }
         if (session != null) {
             val decision = if (forceCleanResign) {
@@ -1604,8 +1711,11 @@ class GoogleSessionManager(
         // whose polls could only fail.
         val grant = pendingGrant
         if (grant != null) {
-            val grantDecision =
+            val grantDecision = if (forceCleanResign) {
+                ClientGateDecision.CLEAN_RESIGN
+            } else {
                 ClientChangeGate.decide(grant.clientKind, buildKind)
+            }
             if (grantDecision != ClientGateDecision.CARRY) {
                 bumpFlowEpoch()
                 signInJob?.cancel()
@@ -1618,6 +1728,13 @@ class GoogleSessionManager(
                         "collected under this one",
                 )
             }
+        }
+        if (session == null && pendingGrant == null) {
+            // Nothing stands and nothing is saved: anything still
+            // in flight was minted under the client declaration
+            // this gate just replaced — move the epoch so it can
+            // neither persist nor publish when it lands.
+            bumpFlowEpoch()
         }
     }
 
@@ -1643,6 +1760,8 @@ class GoogleSessionManager(
             stored = null
             previousAccessToken = null
             rejectionHandledForToken = null
+            rejectionFailedToken = null
+            rejectionRetryAtMs = 0L
         }
         _uiState.value = SessionUiState(
             signedIn = false,
@@ -1663,6 +1782,21 @@ class GoogleSessionManager(
 
         /** RFC 8628: a slow_down answer adds 5 seconds to the interval. */
         const val SLOW_DOWN_INCREMENT_SECONDS = 5L
+
+        /**
+         * The poll interval's ceiling (0.8.7 sweep 1): slow_down
+         * increments accumulate on the grant and persist across
+         * restarts, so an unlucky run could park a code nearly to
+         * its expiry; the interval never grows past five minutes.
+         */
+        const val MAX_POLL_INTERVAL_SECONDS = 300L
+
+        /**
+         * How long a transiently failed forced refresh waits
+         * before the same refused token may spend another attempt
+         * (0.8.7 sweep 1, see [bearerAfterRejection]).
+         */
+        const val REJECTION_RETRY_COOLDOWN_MS = 60_000L
 
         /**
          * The transient-poll budget (0.8.1 hotfix): at most this

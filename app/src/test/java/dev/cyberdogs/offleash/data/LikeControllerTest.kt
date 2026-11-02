@@ -740,4 +740,59 @@ class LikeControllerTest {
         assertFalse(controller.isLiked("vid1"))
         assertEquals(emptySet<String>(), preferences.localLikedVideoIds())
     }
+
+    @Test
+    fun concurrentDeviceOnlyTogglesNeverLoseAnEntry() {
+        // The state map's writes all take the intent lock (0.8.7
+        // sweep 1): concurrent toggles of distinct tracks — with
+        // an account flip racing them — must leave EVERY entry
+        // standing. The device-only branch settles synchronously,
+        // so the outcome is fully determined when the threads join.
+        val preferences = AppPreferences(InMemoryKeyValueStore())
+        val controller = LikeController(
+            client = YoutubeiClient(LikeTransport()),
+            preferences = preferences,
+            sessionProvider = { null },
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+        val ids = (1..240).map { "track-$it" }
+        val workers = ids.chunked(30).map { chunk ->
+            Thread {
+                for (id in chunk) controller.toggle(track.copy(videoId = id))
+            }
+        }
+        val flipper = Thread {
+            repeat(20) {
+                controller.setAccountBacked(true)
+                controller.setAccountBacked(false)
+            }
+        }
+        workers.forEach { it.start() }
+        flipper.start()
+        workers.forEach { it.join() }
+        flipper.join()
+        for (id in ids) {
+            assertTrue("entry lost for $id", controller.stateFor(id).liked)
+        }
+    }
+
+    @Test
+    fun initialLabelsConsultTheBearerSession() {
+        // A stored Google session with no cookie session (the
+        // only shape 0.8.6 ships) must label persisted likes
+        // account-backed from construction (0.8.7 sweep 1) — the
+        // cookie-only read labeled them all device-only until the
+        // container's wiring happened to repair it.
+        val preferences = AppPreferences(InMemoryKeyValueStore())
+        preferences.setLocalLikedVideoIds(setOf("vid1"))
+        val controller = LikeController(
+            client = YoutubeiClient(LikeTransport()),
+            preferences = preferences,
+            sessionProvider = { null },
+            bearerSessionPresent = { true },
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+        assertTrue(controller.accountBacked.value)
+        assertTrue(controller.stateFor("vid1").accountBacked)
+    }
 }

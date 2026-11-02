@@ -4,6 +4,8 @@ import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -296,5 +298,64 @@ class GoogleClientGateTest {
             """{"sub":"123","name":"Test Listener",""" +
                 """"email":"listener@example.com",""" +
                 """"picture":"https://example.com/avatar.png"}"""
+    }
+
+    // ---------------------------------------------------------------
+    // 0.8.7 sweep 1: the gate against work still in flight
+    // ---------------------------------------------------------------
+
+    /** A form transport that blocks inside the issuance request. */
+    private class LatchingFormTransport : HttpTransport {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+
+        override fun post(
+            url: String,
+            headers: Map<String, String>,
+            body: String,
+        ): HttpResponse = throw UnsupportedOperationException("form POSTs only")
+
+        override fun postForm(
+            url: String,
+            headers: Map<String, String>,
+            formBody: String,
+        ): HttpResponse {
+            entered.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            return HttpResponse(
+                200,
+                """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
+                    """"verification_url":"https://www.google.com/device",""" +
+                    """"expires_in":1800,"interval":5}""",
+            )
+        }
+    }
+
+    @Test
+    fun anIssuanceInFlightAcrossAGateCallNeverPersists() = runBlocking {
+        // The zombie shape (0.8.7 sweep 1): a sign-in is blocked
+        // in its issuance request when the client changes (the
+        // wizard saves a key). Nothing is persisted yet, so the
+        // class branches of the gate see nothing to end — the
+        // epoch move in the nothing-stands branch is the only
+        // thing standing between this run and a grant stamped
+        // with the NEW client's class, polled against the wrong
+        // registration until expiry.
+        val form = LatchingFormTransport()
+        val grantStore = testGrantStore()
+        val auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED)
+        val manager = manager(auth, testStore(), grantStore = grantStore)
+
+        manager.startSignIn()
+        assertTrue(form.entered.await(5, TimeUnit.SECONDS))
+        manager.applyClientGate(forceCleanResign = true)
+        form.release.countDown()
+        delay(600)
+
+        assertNull(grantStore.load())
+        assertFalse(
+            manager.phase.value is GoogleSignInPhase.AwaitingApproval
+        )
+        assertFalse(manager.uiState.value.signedIn)
     }
 }

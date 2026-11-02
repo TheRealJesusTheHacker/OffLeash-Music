@@ -357,21 +357,27 @@ class GoogleDeviceAuth(
             ?: return DeviceCodeResult.Failed("HTTP ${response.status}: unparseable body")
         if (response.status != 200) {
             return DeviceCodeResult.Failed(
-                "HTTP ${response.status}: ${root.str("error") ?: "no error code"}"
+                "HTTP ${response.status}: ${errorCodeForDetail(root.str("error"))}"
             )
         }
         val deviceCode = root.str("device_code")
-            ?: return DeviceCodeResult.Failed("response carried no device_code")
+        if (deviceCode.isNullOrBlank()) {
+            return DeviceCodeResult.Failed("response carried no usable device_code")
+        }
         val userCode = root.str("user_code")
-            ?: return DeviceCodeResult.Failed("response carried no user_code")
+        if (userCode.isNullOrBlank()) {
+            return DeviceCodeResult.Failed("response carried no usable user_code")
+        }
         return DeviceCodeResult.Issued(
             DeviceCode(
                 deviceCode = deviceCode,
                 userCode = userCode,
                 verificationUrl = root.str("verification_url")
                     ?: GoogleOAuth.VERIFICATION_URL,
-                intervalSeconds = root.long("interval") ?: DEFAULT_INTERVAL_SECONDS,
-                expiresInSeconds = root.long("expires_in") ?: DEFAULT_EXPIRES_SECONDS,
+                intervalSeconds = (root.long("interval") ?: DEFAULT_INTERVAL_SECONDS)
+                    .coerceIn(1L, MAX_INTERVAL_SECONDS),
+                expiresInSeconds = (root.long("expires_in") ?: DEFAULT_EXPIRES_SECONDS)
+                    .coerceIn(1L, MAX_EXPIRES_SECONDS),
             )
         )
     }
@@ -429,11 +435,11 @@ class GoogleDeviceAuth(
                 // not in question. Transient, like a transport
                 // failure (0.8.1 hotfix).
                 TokenPollResult.Transient(
-                    "HTTP ${response.status}: ${error ?: "no error code"}"
+                    "HTTP ${response.status}: ${errorCodeForDetail(error)}"
                 )
             } else {
                 TokenPollResult.Failed(
-                    "HTTP ${response.status}: ${error ?: "no error code"}"
+                    "HTTP ${response.status}: ${errorCodeForDetail(error)}"
                 )
             }
         }
@@ -473,7 +479,7 @@ class GoogleDeviceAuth(
         return if (error == "invalid_grant") {
             RefreshResult.Revoked
         } else {
-            RefreshResult.Failed("HTTP ${response.status}: ${error ?: "no error code"}")
+            RefreshResult.Failed("HTTP ${response.status}: ${errorCodeForDetail(error)}")
         }
     }
 
@@ -544,6 +550,39 @@ class GoogleDeviceAuth(
         )
         const val DEFAULT_INTERVAL_SECONDS = 5L
         const val DEFAULT_EXPIRES_SECONDS = 1800L
+
+        /** Sanity bounds for endpoint-supplied device-code numerics (0.8.7 sweep 1). */
+        const val MAX_INTERVAL_SECONDS = 300L
+        const val MAX_EXPIRES_SECONDS = 3600L
+
+        /**
+         * The OAuth error codes Google documents for the device-code
+         * and token endpoints. A failure detail may carry one of
+         * these verbatim; any other server-supplied `error` text is
+         * endpoint-controlled free text and is replaced, so it can
+         * never inject lines into the diagnostics panel or the
+         * user-facing failure reason (0.8.7 sweep 1).
+         */
+        val KNOWN_ERROR_CODES = setOf(
+            "access_denied",
+            "authorization_pending",
+            "expired_token",
+            "invalid_client",
+            "invalid_grant",
+            "invalid_request",
+            "invalid_scope",
+            "server_error",
+            "slow_down",
+            "temporarily_unavailable",
+            "unauthorized_client",
+            "unsupported_grant_type",
+        )
+
+        fun errorCodeForDetail(error: String?): String = when {
+            error == null -> "no error code"
+            error in KNOWN_ERROR_CODES -> error
+            else -> "unrecognized error"
+        }
         const val DEFAULT_TOKEN_LIFETIME_SECONDS = 3600L
     }
 }

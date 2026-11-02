@@ -5,6 +5,8 @@ import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
 import dev.cyberdogs.offleash.core.auth.OAuthClientKind
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -341,5 +343,292 @@ class OwnKeySetupTest {
             "123456789012-fakefakefakefakefakefakefakefa" +
                 ".apps.googleusercontent.com"
         const val VALID_SECRET = "GOCSPX-fakefakefakefakefake"
+    }
+
+    // ---------------------------------------------------------------
+    // 0.8.7 sweep 1: the wizard's verdict and draft lifetime
+    // ---------------------------------------------------------------
+
+    /** A form transport that blocks inside the request until released. */
+    private class LatchingFormTransport : HttpTransport {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+
+        @Volatile
+        var response: HttpResponse = HttpResponse(200, "{}")
+
+        override fun post(
+            url: String,
+            headers: Map<String, String>,
+            body: String,
+        ): HttpResponse = throw UnsupportedOperationException("form POSTs only")
+
+        override fun postForm(
+            url: String,
+            headers: Map<String, String>,
+            formBody: String,
+        ): HttpResponse {
+            entered.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            return response
+        }
+    }
+
+    /** A form transport whose request dies with an Error, not an Exception. */
+    private class ErrorFormTransport : HttpTransport {
+        override fun post(
+            url: String,
+            headers: Map<String, String>,
+            body: String,
+        ): HttpResponse = throw UnsupportedOperationException("form POSTs only")
+
+        override fun postForm(
+            url: String,
+            headers: Map<String, String>,
+            formBody: String,
+        ): HttpResponse = throw AssertionError("boom MARKER")
+    }
+
+    private fun manualSetup(
+        form: HttpTransport,
+        keyStore: OwnKeyStore =
+            OwnKeyStore(InMemorySecretStorage(), testSecretBox()),
+        wizardStore: OwnKeyWizardStore =
+            OwnKeyWizardStore(InMemorySecretStorage(), testSecretBox()),
+        tokenStore: GoogleTokenStore =
+            GoogleTokenStore(InMemorySecretStorage(), testSecretBox()),
+        buildIdentity: dev.cyberdogs.offleash.core.auth.OAuthClientIdentity =
+            TestOAuthIdentity.SHARED,
+    ): Triple<OwnKeySetup, GoogleSessionManager, GoogleDeviceAuth> {
+        val diagnostics = SignInDiagnostics()
+        val auth = GoogleDeviceAuth(form, buildIdentity)
+        val manager = GoogleSessionManager(
+            store = tokenStore,
+            auth = auth,
+            client = YoutubeiClient(UserinfoTransport()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            signInDiagnostics = diagnostics,
+        )
+        val setup = OwnKeySetup(
+            keyStore = keyStore,
+            wizardStore = wizardStore,
+            transport = form,
+            auth = auth,
+            sessionManager = manager,
+            buildIdentity = buildIdentity,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            signInDiagnostics = diagnostics,
+        )
+        return Triple(setup, manager, auth)
+    }
+
+    private val issuedJson =
+        """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
+            """"verification_url":"https://www.google.com/device",""" +
+            """"expires_in":1800,"interval":5}"""
+
+    @Test
+    fun aStaleTestVerdictNeverLandsOnAnEditedDraft() = runBlocking {
+        val form = LatchingFormTransport()
+        form.response = HttpResponse(200, issuedJson)
+        val keyStore = OwnKeyStore(InMemorySecretStorage(), testSecretBox())
+        val (setup, _, auth) = manualSetup(form, keyStore = keyStore)
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        assertTrue(form.entered.await(5, TimeUnit.SECONDS))
+        // The owner edits the draft while Google is being asked.
+        setup.updateDraft(VALID_ID, "$VALID_SECRET-edited")
+        form.release.countDown()
+        delay(600)
+        // The verdict belonged to the pair that was tested, not
+        // to the edited one: nothing is marked tested, no message
+        // lands, and Save stays shut.
+        assertFalse(setup.state.value.tested)
+        assertFalse(setup.state.value.testing)
+        assertNull(setup.state.value.testMessage)
+        setup.saveAndFinish()
+        assertNull(keyStore.load())
+        assertEquals(TestOAuthIdentity.SHARED, auth.identity)
+    }
+
+    @Test
+    fun aRestartDuringATestCancelsTheVerdict() = runBlocking {
+        val form = LatchingFormTransport()
+        form.response = HttpResponse(200, issuedJson)
+        val (setup, _, _) = manualSetup(form)
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        assertTrue(form.entered.await(5, TimeUnit.SECONDS))
+        setup.restart()
+        form.release.countDown()
+        delay(600)
+        assertEquals(OwnKeyStep.NEED, setup.state.value.step)
+        assertEquals("", setup.state.value.draftClientId)
+        assertFalse(setup.state.value.tested)
+        assertFalse(setup.state.value.testing)
+    }
+
+    @Test
+    fun anErrorEscapingTheTestLandsAsAFailure() = runBlocking {
+        val (setup, _, _) = manualSetup(ErrorFormTransport())
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        awaitTrue { setup.state.value.testMessage != null }
+        assertEquals(
+            OwnKeySetup.TEST_FAILED_MESSAGE,
+            setup.state.value.testMessage,
+        )
+        assertFalse(setup.state.value.testing)
+        assertFalse(setup.state.value.tested)
+    }
+
+    @Test
+    fun theTestVerdictDoesNotSurviveARestart() = runBlocking {
+        val fixture = Fixture()
+        scriptDeviceCodeIssued(fixture.form)
+        val setup = fixture.setup
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        awaitTrue { setup.state.value.tested }
+
+        val resumed = fixture.restartedSetup()
+        // The draft resumes; the verdict does not — the key may
+        // have been rotated or deleted in the console since.
+        assertEquals(VALID_ID, resumed.state.value.draftClientId)
+        assertFalse(resumed.state.value.tested)
+    }
+
+    @Test
+    fun savingSpendsTheDraftAndRemovalRemovesIt() = runBlocking {
+        val fixture = Fixture()
+        scriptDeviceCodeIssued(fixture.form)
+        scriptDeviceCodeIssued(fixture.form)
+        val setup = fixture.setup
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        awaitTrue { setup.state.value.tested }
+        setup.saveAndFinish()
+        // The progress file no longer carries the pair it held
+        // mid-entry: the draft is spent at the save.
+        assertNull(fixture.wizardStore.load())
+        val afterSave = fixture.restartedSetup()
+        assertEquals("", afterSave.state.value.draftClientId)
+        assertEquals("", afterSave.state.value.draftClientSecret)
+
+        afterSave.updateDraft(VALID_ID, VALID_SECRET)
+        afterSave.testKey()
+        awaitTrue { afterSave.state.value.tested }
+        afterSave.saveAndFinish()
+        afterSave.removeOwnKey()
+        // Removal removes: no sealed copy of the pair survives
+        // in the wizard store either.
+        assertNull(fixture.wizardStore.load())
+        assertNull(fixture.keyStore.load())
+        val afterRemoval = fixture.restartedSetup()
+        assertEquals("", afterRemoval.state.value.draftClientId)
+        assertFalse(afterRemoval.state.value.hasOwnKey)
+    }
+
+    @Test
+    fun aBlankHalfStoredKeyPresentsAsNoKey() {
+        val fixture = Fixture()
+        fixture.keyStore.save(StoredOwnKey(VALID_ID, ""))
+        val resumed = fixture.restartedSetup()
+        assertFalse(resumed.state.value.hasOwnKey)
+    }
+
+    @Test
+    fun aFirstSaveOverABuildOwnerPairEndsTheSession() = runBlocking {
+        // The build itself was supplied an OWNER pair; the standing
+        // session belongs to it. A wizard save of a DIFFERENT owner
+        // pair changes the registration even though the class label
+        // does not move — the session must end (0.8.7 sweep 1).
+        val form = ScriptedFormTransport()
+        val tokenStore =
+            GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
+        tokenStore.save(
+            StoredGoogleSession(
+                accessToken = "ya29.seeded",
+                refreshToken = "rt-seeded",
+                accessTokenExpiresAtEpochMs =
+                    System.currentTimeMillis() + 3_600_000L,
+                identityName = "Test Listener",
+                identityEmail = "listener@example.com",
+                clientKind = "owner",
+            ),
+        )
+        val (setup, manager, _) = manualSetup(
+            form,
+            tokenStore = tokenStore,
+            buildIdentity = TestOAuthIdentity.OWNER,
+        )
+        assertTrue(manager.uiState.value.signedIn)
+
+        form.responses.add(HttpResponse(200, issuedJson))
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        awaitTrue { setup.state.value.tested }
+        setup.saveAndFinish()
+
+        assertNull(tokenStore.load())
+        assertEquals(
+            CLIENT_CHANGED_REASON,
+            manager.uiState.value.lastEndReason,
+        )
+    }
+
+    @Test
+    fun aSecretOnlyRotationEndsTheSession() = runBlocking {
+        // Same Client ID, new secret: the tokens belong to the old
+        // registration's secret, so the session ends (0.8.7 sweep 1).
+        val fixture = Fixture()
+        scriptDeviceCodeIssued(fixture.form)
+        scriptDeviceCodeIssued(fixture.form)
+        val setup = fixture.setup
+        setup.updateDraft(VALID_ID, VALID_SECRET)
+        setup.testKey()
+        awaitTrue { setup.state.value.tested }
+        setup.saveAndFinish()
+
+        fixture.tokenStore.save(
+            StoredGoogleSession(
+                accessToken = "ya29.seeded",
+                refreshToken = "rt-seeded",
+                accessTokenExpiresAtEpochMs =
+                    System.currentTimeMillis() + 3_600_000L,
+                identityName = "Test Listener",
+                identityEmail = "listener@example.com",
+                clientKind = "owner",
+            ),
+        )
+        val manager = GoogleSessionManager(
+            store = fixture.tokenStore,
+            auth = fixture.auth,
+            client = YoutubeiClient(UserinfoTransport()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            signInDiagnostics = fixture.diagnostics,
+        )
+        val setup2 = OwnKeySetup(
+            keyStore = fixture.keyStore,
+            wizardStore = fixture.wizardStore,
+            transport = fixture.form,
+            auth = fixture.auth,
+            sessionManager = manager,
+            buildIdentity = TestOAuthIdentity.SHARED,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            signInDiagnostics = fixture.diagnostics,
+        )
+        assertTrue(manager.uiState.value.signedIn)
+
+        setup2.updateDraft(VALID_ID, "$VALID_SECRET-rotated")
+        setup2.testKey()
+        awaitTrue { setup2.state.value.tested }
+        setup2.saveAndFinish()
+
+        assertNull(fixture.tokenStore.load())
+        assertEquals(
+            CLIENT_CHANGED_REASON,
+            manager.uiState.value.lastEndReason,
+        )
     }
 }

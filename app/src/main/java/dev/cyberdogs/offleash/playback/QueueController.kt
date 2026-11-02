@@ -355,8 +355,24 @@ class QueueController(
      */
     private var radioJob: Job? = null
 
-    /** Video ids the current autoplay chain itself lined up. */
-    private val autoplayTrackIds = mutableSetOf<String>()
+    /**
+     * The queue ENTRIES the current autoplay chain itself lined
+     * up — by reference identity, not by video id (0.8.7 sweep
+     * 1). The id-keyed set this replaces could not tell an
+     * autoplay-lined copy of a song from the copy the listener
+     * deliberately queued: when the same song stood in the queue
+     * twice, a failure on the listener's own entry was treated
+     * as an autoplay failure — silently skipped, with the
+     * autoplay failure budget spent — instead of surfacing the
+     * honest stop SPEC §4 promises for a chosen track. Entries
+     * are the Track instances autoplay appended, compared by
+     * reference (===) at every check — the list holds one
+     * continuation page at a time, so the scans stay trivial.
+     * An explicit play (the listener taking the wheel) clears
+     * the list whole via resetAutoplayChain, so an instance the
+     * listener replays deliberately is never misread either.
+     */
+    private val autoplayEntries = mutableListOf<Track>()
 
     /** Consecutive failures among autoplay-lined tracks (see the cap). */
     private var consecutiveAutoplayFailures: Int = 0
@@ -688,7 +704,7 @@ class QueueController(
                         // advances under the queue's own repeat/
                         // shuffle semantics.
                         if (failedTrack != null &&
-                            failedTrack.videoId in autoplayTrackIds
+                            autoplayEntries.any { it === failedTrack }
                         ) {
                             if (trySkipFailedAutoplayTrack(
                                     failedTrack,
@@ -745,6 +761,14 @@ class QueueController(
                     syncPlaybackState()
                     return
                 }
+                // The surface is a STOP (0.8.7 sweep 1): every
+                // recovery branch above hands the player a next
+                // action, but this path used to leave playWhenReady
+                // set on a dead item — the notification kept
+                // reading "playing", and the service's
+                // onTaskRemoved never saw a paused player to stop
+                // for. Pause first, then tell the truth about it.
+                player.pause()
                 setResolving(false)
                 _namedError.value = ErrorMessages.playerMessage(error.errorCode, httpStatus)
                 syncPlaybackState()
@@ -787,7 +811,7 @@ class QueueController(
     private fun resetAutoplayChain() {
         autoplayJob?.cancel()
         autoplayJob = null
-        autoplayTrackIds.clear()
+        autoplayEntries.clear()
         consecutiveAutoplayFailures = 0
     }
 
@@ -1483,7 +1507,7 @@ class QueueController(
                 )
                 return@launch
             }
-            autoplayTrackIds.addAll(continuation.map { it.videoId })
+            autoplayEntries.addAll(continuation)
             // appendAll (not the old setQueue rebuild): the played
             // history and any shuffle-pass state survive the append,
             // and the current position is untouched (chaos sweep
@@ -1518,7 +1542,7 @@ class QueueController(
         stage: String,
         resumePlayback: Boolean = true,
     ): Boolean {
-        if (failed.videoId !in autoplayTrackIds) return false
+        if (autoplayEntries.none { it === failed }) return false
         consecutiveAutoplayFailures += 1
         if (consecutiveAutoplayFailures > MAX_AUTOPLAY_CONSECUTIVE_FAILURES) {
             return false

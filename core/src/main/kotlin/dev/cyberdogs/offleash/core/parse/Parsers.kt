@@ -32,7 +32,8 @@ object YoutubeiParsers {
         "Playlist", "Chart", "Profile", "Artist", "Podcast",
     )
     private val YEAR_REGEX = Regex("""(19|20)\d{2}""")
-    private val COUNT_REGEX = Regex("""([\d,]+)\s+(songs|tracks)""")
+    private val COUNT_REGEX =
+        Regex("""([\d,]+)\s+(songs|tracks)""", RegexOption.IGNORE_CASE)
 
     // ------------------------------------------------------------------
     // Shared row extractors

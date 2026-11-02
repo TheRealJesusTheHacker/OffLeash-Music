@@ -246,4 +246,56 @@ class PlaybackResolverTest {
         assertFalse(NetworkFailure("offline").isAuthRefusal())
         assertFalse(ParseFailure("shape").isAuthRefusal())
     }
+
+    @Test
+    fun runtimeExceptionOnFirstAnonymousContextStillCascades() {
+        // A non-taxonomy escape from a client call must not abort
+        // the remaining roads (0.8.7 sweep 1): iOS blows up with a
+        // raw RuntimeException, ANDROID still serves.
+        val transport = RoutingTransport { _, _, body ->
+            val b = body ?: ""
+            when {
+                b.contains("\"clientName\":\"IOS\"") ->
+                    throw IllegalStateException("boom MARKER")
+                b.contains("\"clientName\":\"ANDROID\"") ->
+                    ok("derived_player_android.json")
+                else -> HttpResponse(500, "{}")
+            }
+        }
+        val resolved = PlaybackResolver(YoutubeiClient(transport))
+            .resolve("vid", null)
+        assertEquals("anonymous", resolved.servedByRoad)
+        // The blown-up attempt is on the record by failure class
+        // (the client wraps the transport's raw exception into the
+        // taxonomy; the resolver's own widened catch covers escapes
+        // that bypass that wrap).
+        assertTrue(
+            resolved.attempts.any {
+                it.outcome.contains("NetworkFailure")
+            }
+        )
+    }
+
+    @Test
+    fun runtimeExceptionsOnEveryRoadSurfaceAsAllRoadsRefused() {
+        // Every road throwing raw exceptions must still end in the
+        // named taxonomy — AllRoadsRefused carrying NetworkFailure
+        // class records — never an escaping RuntimeException or NPE.
+        val transport = RoutingTransport { _, _, _ ->
+            throw IllegalStateException("boom MARKER")
+        }
+        try {
+            PlaybackResolver(YoutubeiClient(transport)).resolve("vid", session)
+            fail("expected AllRoadsRefused")
+        } catch (e: AllRoadsRefused) {
+            assertTrue(e.accountError is NetworkFailure)
+            assertTrue(e.anonymousError is NetworkFailure)
+        }
+        try {
+            PlaybackResolver(YoutubeiClient(transport)).resolve("vid", null)
+            fail("expected NetworkFailure from the anonymous cascade")
+        } catch (e: NetworkFailure) {
+            assertEquals("IllegalStateException", e.networkDetail)
+        }
+    }
 }

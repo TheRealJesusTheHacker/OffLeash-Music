@@ -118,4 +118,28 @@ class R8DownloadSalvageTest {
         assertEquals("ccc.audio", store.recordFor("ccc")?.fileName)
         assertEquals(DownloadState.QUEUED, store.recordFor("ccc")?.state)
     }
+
+    @Test
+    fun fileNamesDifferingOnlyInCaseAreOneFile() {
+        // File identity is case-insensitive (0.8.7 sweep 1): two
+        // DONE records naming one file in different cases are a
+        // collision for the dedupe, exactly as if the names were
+        // identical — on a case-folding filesystem (or after a
+        // case-folding copy) they ARE one file, and letting both
+        // records believe they own it is the cross-play split in
+        // case form.
+        val a = """{"track":{"videoId":"aaa","title":"A"},"state":"DONE",""" +
+            """"downloadedBytes":10,"totalBytes":10,"fileName":"shared.audio"}"""
+        val b = """{"track":{"videoId":"bbb","title":"B"},"state":"DONE",""" +
+            """"downloadedBytes":10,"totalBytes":10,"fileName":"SHARED.audio"}"""
+        val file = storeFileWith("""{"downloads":[$a,$b]}""")
+        val store = DownloadStore(file)
+        assertEquals(
+            "one file, one owner: the case-variant collision dedupes",
+            1,
+            store.records.value.size,
+        )
+        assertEquals(DownloadState.DONE, store.records.value.single().state)
+        assertTrue(store.loadRecoveredFromCorruption)
+    }
 }

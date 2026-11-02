@@ -148,7 +148,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 6,
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
             "app:dev/cyberdogs/offleash/data/Stores.kt" to 7,
-            "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 1,
+            "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 0,
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 1,

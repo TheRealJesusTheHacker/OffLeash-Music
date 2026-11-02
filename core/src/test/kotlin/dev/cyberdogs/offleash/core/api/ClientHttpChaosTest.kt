@@ -37,7 +37,7 @@ class ClientHttpChaosTest {
 
     @Test
     fun clientErrorStatusesMapToContextRejectedWithServerMessage() {
-        for (status in listOf(400, 401, 403, 404, 429)) {
+        for (status in listOf(400, 401, 403, 404)) {
             try {
                 clientFor(errorBody("server says no MARKER$status"), status).home()
                 fail("expected ContextRejected for HTTP $status")
@@ -51,6 +51,48 @@ class ClientHttpChaosTest {
             } catch (e: ContextRejected) {
                 assertEquals("server says no MARKER$status", e.serverMessage)
             }
+        }
+    }
+
+    @Test
+    fun rateLimitedMapsToNetworkFailureNotARefusal() {
+        // HTTP 429 is transient rate limiting (0.8.7 sweep 1): on
+        // both postRaw variants it must surface as NetworkFailure —
+        // the transient road — never as the "API has likely
+        // changed" refusal that steered users to sign out and back
+        // in over a rate limit. External truth: HTTP semantics and
+        // Google's RESOURCE_EXHAUSTED taxonomy, not the code's own
+        // 400..499 range rule.
+        val body = """{"error": {"code": 429, "message": "quota MARKER429",
+            "status": "RESOURCE_EXHAUSTED",
+            "errors": [{"reason": "rateLimitExceeded"}]}}"""
+        try {
+            clientFor(body, 429).home()
+            fail("expected NetworkFailure for HTTP 429")
+        } catch (e: NetworkFailure) {
+            assertTrue(e.message!!.contains("quota MARKER429"))
+        }
+        try {
+            clientFor(body, 429).streamInfo("vid")
+            fail("expected NetworkFailure for player HTTP 429")
+        } catch (e: NetworkFailure) {
+            assertTrue(e.message!!.contains("quota MARKER429"))
+        }
+    }
+
+    @Test
+    fun transportExceptionMessageNeverReachesTheFailureDetail() {
+        // D-L2 (0.8.7 sweep 2, pinned here with the transport
+        // taxonomy): a transport exception's raw message can embed
+        // host/URL material, so the failure detail carries the
+        // exception's class name only.
+        val client = YoutubeiClient(dev.cyberdogs.offleash.core.ThrowingTransport())
+        try {
+            client.home()
+            fail("expected NetworkFailure")
+        } catch (e: NetworkFailure) {
+            assertEquals("RuntimeException", e.networkDetail)
+            assertFalse(e.message!!.contains("connection reset"))
         }
     }
 

@@ -254,4 +254,84 @@ class GoogleDeviceAuthTest {
         deadTransport.failure = RuntimeException("offline")
         assertEquals(false, GoogleDeviceAuth(deadTransport, TestOAuthIdentity.SHARED).revokeToken("x"))
     }
+
+    @Test
+    fun issuanceRejectsBlankCodes() {
+        // Endpoint-controlled shapes (0.8.7 sweep 1): a blank code
+        // must never be issued — the screen would show an empty
+        // code and the poll loop would poll a blank grant.
+        val blankDevice = ScriptedFormTransport()
+        blankDevice.responses.add(
+            HttpResponse(200, issuedBody.replace("device-code-abc", ""))
+        )
+        assertTrue(
+            GoogleDeviceAuth(blankDevice, TestOAuthIdentity.SHARED)
+                .requestDeviceCode() is DeviceCodeResult.Failed
+        )
+        val blankUser = ScriptedFormTransport()
+        blankUser.responses.add(
+            HttpResponse(200, issuedBody.replace("WDJB-MJHT", "  "))
+        )
+        assertTrue(
+            GoogleDeviceAuth(blankUser, TestOAuthIdentity.SHARED)
+                .requestDeviceCode() is DeviceCodeResult.Failed
+        )
+    }
+
+    @Test
+    fun issuanceClampsHostileNumerics() {
+        // An interval near Long.MAX_VALUE overflowed the poll
+        // park's multiplication and spun the loop; a huge or
+        // negative expires_in did the same to the grant expiry.
+        val transport = ScriptedFormTransport()
+        transport.responses.add(
+            HttpResponse(
+                200,
+                """{"device_code":"dc","user_code":"UC",
+                    "expires_in":9223372036854775807,
+                    "interval":9223372036854775807}""",
+            )
+        )
+        val issued = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED)
+            .requestDeviceCode() as DeviceCodeResult.Issued
+        assertEquals(300L, issued.code.intervalSeconds)
+        assertEquals(3600L, issued.code.expiresInSeconds)
+
+        val negative = ScriptedFormTransport()
+        negative.responses.add(
+            HttpResponse(
+                200,
+                """{"device_code":"dc","user_code":"UC",
+                    "expires_in":-5,"interval":0}""",
+            )
+        )
+        val issued2 = GoogleDeviceAuth(negative, TestOAuthIdentity.SHARED)
+            .requestDeviceCode() as DeviceCodeResult.Issued
+        assertEquals(1L, issued2.code.intervalSeconds)
+        assertEquals(1L, issued2.code.expiresInSeconds)
+    }
+
+    @Test
+    fun failureDetailCarriesOnlyKnownErrorCodes() {
+        // The server's `error` text is endpoint-controlled and
+        // lands in diagnostics verbatim no longer (0.8.7 sweep 1):
+        // known OAuth codes pass through; anything else — however
+        // long or multi-line — becomes the fixed generic phrase.
+        val injected = ScriptedFormTransport()
+        injected.responses.add(
+            HttpResponse(
+                400,
+                """{"error":"totally_made_up\nsecond forged line MARKER"}""",
+            )
+        )
+        val failed = GoogleDeviceAuth(injected, TestOAuthIdentity.SHARED)
+            .requestDeviceCode() as DeviceCodeResult.Failed
+        assertEquals("HTTP 400: unrecognized error", failed.detail)
+
+        val known = ScriptedFormTransport()
+        known.responses.add(HttpResponse(400, """{"error":"invalid_client"}"""))
+        val failedKnown = GoogleDeviceAuth(known, TestOAuthIdentity.SHARED)
+            .requestDeviceCode() as DeviceCodeResult.Failed
+        assertEquals("HTTP 400: invalid_client", failedKnown.detail)
+    }
 }

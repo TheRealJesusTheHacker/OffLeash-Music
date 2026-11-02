@@ -256,4 +256,34 @@ class StoresTest {
         val created = store.createPlaylist("Fresh")
         assertEquals(listOf(created.id), store.playlists.value.map { it.id })
     }
+
+    @Test
+    fun aHostilelyDeepStoreFileReadsAsUnusableAndTheStoreStaysUsable() =
+        runBlocking {
+            // A store file nested far deeper than any thread
+            // stack: parsing it overflows the recursion
+            // (StackOverflowError — an Error, which the decode
+            // funnels' Exception catches used to let escape,
+            // 0.8.7 sweep 1). The store must treat the file as
+            // unusable and keep working.
+            val depth = 100_000
+            val bomb = buildString {
+                append("{\"playlists\":[")
+                repeat(depth) { append("{\"tracks\":[") }
+                repeat(depth) { append("]}") }
+                append("]}")
+            }
+            val file = tempFile("playlists.json")
+            file.writeText(bomb)
+            val store = LocalPlaylistStore(file)
+            // Give the init load its chance to die, then prove
+            // the store still answers mutations.
+            Thread.sleep(500)
+            val created = store.createPlaylist("Still standing")
+            assertEquals("Still standing", created.name)
+            assertEquals(
+                listOf("Still standing"),
+                store.playlists.value.map { it.name },
+            )
+        }
 }

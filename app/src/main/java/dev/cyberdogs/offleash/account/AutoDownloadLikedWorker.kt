@@ -9,7 +9,10 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.cyberdogs.offleash.OffleashApp
+import dev.cyberdogs.offleash.core.error.NetworkFailure
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import java.io.IOException
 import kotlinx.coroutines.withContext
 
 /**
@@ -134,10 +137,27 @@ class AutoDownloadLikedWorker(
                 }
             }
             page ?: return Result.success()
+        } catch (e: CancellationException) {
+            // Never convert a cancel into a retry (0.8.7 sweep 1):
+            // WorkManager cancelling this run (constraints lost,
+            // the app swiped away) must end it — the catch-all
+            // below used to swallow the cancel and schedule a
+            // duplicate run behind the cancelled one.
+            throw e
         } catch (e: Exception) {
-            // A network-shaped failure gets WorkManager's backoff; the
-            // manager's health handling owns anything session-shaped.
-            return Result.retry()
+            // A network-shaped failure gets WorkManager's backoff;
+            // the manager's health handling owns anything
+            // session-shaped. Anything else — a parse failure, a
+            // programming error, a session-shaped refusal — fails
+            // the same way on every retry, so it ends honestly
+            // here instead of spending the backoff budget on a
+            // failure that cannot change; the next app start or
+            // Library visit enqueues a fresh run.
+            return if (e is NetworkFailure || e is IOException) {
+                Result.retry()
+            } else {
+                Result.failure()
+            }
         }
         // Stale-apply guard (round 7, generation form round 8):
         // enqueue only while the credential that fetched the list

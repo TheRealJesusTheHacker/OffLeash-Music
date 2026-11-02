@@ -7,6 +7,7 @@ import dev.cyberdogs.offleash.core.error.ContextRejected
 import dev.cyberdogs.offleash.core.error.NetworkFailure
 import dev.cyberdogs.offleash.core.error.ParseFailure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -58,7 +59,15 @@ class YoutubeiClientErrorsTest {
             client.search("anything")
             fail("expected NetworkFailure")
         } catch (e: NetworkFailure) {
-            assertTrue(e.message!!.contains("connection reset by peer"))
+            // The detail names the failure's CLASS, never its raw
+            // message (0.8.7 sweep 2): a transport exception's text
+            // can embed the URL it failed on, and this detail
+            // flows into diagnostics the owner may be asked to
+            // share. The previous pin asserted the raw text was
+            // present — it certified the leak it should have
+            // caught.
+            assertEquals("RuntimeException", e.networkDetail)
+            assertFalse(e.message!!.contains("connection reset by peer"))
         }
     }
 

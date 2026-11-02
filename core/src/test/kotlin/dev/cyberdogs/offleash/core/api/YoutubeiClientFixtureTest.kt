@@ -6,6 +6,7 @@ import dev.cyberdogs.offleash.core.model.FeedItem
 import dev.cyberdogs.offleash.core.model.MoodCategory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -464,11 +465,40 @@ class YoutubeiClientFixtureTest {
 
     @Test
     fun pinnedSearchFilterParamsMatchFixtureChips() {
+        // The Songs/Videos/Albums/Artists expectations are DERIVED from
+        // the recorded fixture's own chips (0.8.7 sweep 1): the
+        // previous shape asserted the constants against literals
+        // typed from the same source the constants were typed
+        // from, so a drifted endpoint — or the same typo made in
+        // both places — stayed green. Whatever the fixture's
+        // chips carry IS the expectation now.
+        val fixtureFilters = clientFor("search.json")
+            .search("never gonna give you up").filters.associateBy { it.label }
+        for ((label, filter) in listOf(
+            "Songs" to SearchFilters.SONGS,
+            "Videos" to SearchFilters.VIDEOS,
+            "Albums" to SearchFilters.ALBUMS,
+            "Artists" to SearchFilters.ARTISTS,
+        )) {
+            val chip = fixtureFilters[label]
+            assertNotNull("the fixture must carry a $label chip", chip)
+            assertEquals(
+                "the $label constant must equal the fixture chip's params",
+                chip!!.params,
+                filter.params,
+            )
+        }
+        // Playlists alone has NO chip in the recorded fixture,
+        // so its constant is NOT fixture-verified — this pin says
+        // so out loud instead of letting the test's name imply
+        // coverage it does not have. Its literal stands on API
+        // convention (the constant carries the same note at its
+        // definition) until a fixture that carries its chip is
+        // recorded. (Videos DOES have a chip — derived above;
+        // an earlier reading of this fixture missed it.)
+        assertNull(fixtureFilters["Playlists"])
+        assertEquals("EgWKAQIoAWoSEAQQAxAJEAUQChAQEBUQDhAR", SearchFilters.PLAYLISTS.params)
         assertEquals(null, SearchFilters.ALL.params)
-        assertEquals("EgWKAQIIAWoSEAQQAxAJEAUQChAQEBUQDhAR", SearchFilters.SONGS.params)
-        assertEquals("EgWKAQIQAWoSEAQQAxAJEAUQChAQEBUQDhAR", SearchFilters.VIDEOS.params)
-        assertEquals("EgWKAQIYAWoSEAQQAxAJEAUQChAQEBUQDhAR", SearchFilters.ALBUMS.params)
-        assertEquals("EgWKAQIgAWoSEAQQAxAJEAUQChAQEBUQDhAR", SearchFilters.ARTISTS.params)
         assertEquals(
             listOf("All", "Songs", "Videos", "Albums", "Artists", "Playlists"),
             SearchFilters.ALL_FILTERS.map { it.label }

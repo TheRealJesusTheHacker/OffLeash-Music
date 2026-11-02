@@ -4,6 +4,7 @@ import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.api.YoutubeiContexts
 import dev.cyberdogs.offleash.core.auth.AuthSession
 import dev.cyberdogs.offleash.core.error.AllRoadsRefused
+import dev.cyberdogs.offleash.core.error.NetworkFailure
 import dev.cyberdogs.offleash.core.error.OffleashException
 import dev.cyberdogs.offleash.core.model.StreamInfo
 
@@ -81,6 +82,8 @@ class PlaybackResolver(
             )
         } catch (e: OffleashException) {
             e
+        } catch (e: Exception) {
+            NetworkFailure(e.javaClass.simpleName)
         }
         val base = resolve(videoId, auth, quality)
         return base.copy(
@@ -115,6 +118,8 @@ class PlaybackResolver(
             )
         } catch (e: OffleashException) {
             e
+        } catch (e: Exception) {
+            NetworkFailure(e.javaClass.simpleName)
         }
         val attempts = mutableListOf(
             RoadAttempt("account", accountError.javaClass.simpleName)
@@ -129,17 +134,22 @@ class PlaybackResolver(
                     servedByRoad = "anonymous",
                     attempts = attempts,
                 )
-            } catch (e: OffleashException) {
-                if (firstAnonymousError == null) firstAnonymousError = e
+            } catch (e: Exception) {
+                val failure = e as? OffleashException
+                    ?: NetworkFailure(e.javaClass.simpleName)
+                if (firstAnonymousError == null) firstAnonymousError = failure
                 attempts.add(
                     RoadAttempt(
                         "anonymous",
-                        "${e.javaClass.simpleName}:${context.clientName}",
+                        "${failure.javaClass.simpleName}:${context.clientName}",
                     )
                 )
             }
         }
-        throw AllRoadsRefused(accountError, firstAnonymousError!!)
+        throw AllRoadsRefused(
+            accountError,
+            firstAnonymousError ?: NetworkFailure(null),
+        )
     }
 
     /**
@@ -158,16 +168,18 @@ class PlaybackResolver(
                 val info = client.streamInfo(videoId, context, quality)
                 attempts.add(RoadAttempt("anonymous", "served:${context.clientName}"))
                 return info to attempts
-            } catch (e: OffleashException) {
-                if (firstError == null) firstError = e
+            } catch (e: Exception) {
+                val failure = e as? OffleashException
+                    ?: NetworkFailure(e.javaClass.simpleName)
+                if (firstError == null) firstError = failure
                 attempts.add(
                     RoadAttempt(
                         "anonymous",
-                        "${e.javaClass.simpleName}:${context.clientName}",
+                        "${failure.javaClass.simpleName}:${context.clientName}",
                     )
                 )
             }
         }
-        throw firstError!!
+        throw firstError ?: NetworkFailure(null)
     }
 }

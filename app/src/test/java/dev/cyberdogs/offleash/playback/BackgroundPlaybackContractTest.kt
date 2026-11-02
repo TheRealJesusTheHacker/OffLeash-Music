@@ -182,6 +182,15 @@ class BackgroundPlaybackContractTest {
         assertTrue(service.contains("Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM"))
         assertTrue(service.contains("Player.COMMAND_SEEK_TO_PREVIOUS"))
         assertTrue(service.contains("Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM"))
+        // The playlist-mutation commands are stripped and the
+        // verbs no-opped (0.8.7 sweep 1): no external controller
+        // may set or edit items on the raw player behind
+        // QueueController's back.
+        assertTrue(service.contains(".remove(Player.COMMAND_SET_MEDIA_ITEM)"))
+        assertTrue(service.contains(".remove(Player.COMMAND_CHANGE_MEDIA_ITEMS)"))
+        assertTrue(service.contains("override fun clearMediaItems()"))
+        assertTrue(service.contains("override fun setMediaItems("))
+        assertTrue(service.contains("override fun removeMediaItems("))
     }
 
     // -- Autoplay continuation (H2): the background chain's other half ---

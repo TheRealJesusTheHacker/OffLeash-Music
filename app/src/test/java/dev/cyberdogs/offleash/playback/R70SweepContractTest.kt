@@ -58,7 +58,7 @@ class R70SweepContractTest {
                 "is cleared — a cancel after the clear would race " +
                 "the job it forgets",
             body.indexOf("autoplayJob?.cancel()") <
-                body.indexOf("autoplayTrackIds.clear()"),
+                body.indexOf("autoplayEntries.clear()"),
         )
         // Round 71: presence + ordering is not liveness — the
         // cancel guarded by a named always-false condition
@@ -75,7 +75,7 @@ class R70SweepContractTest {
             body.contains(
                 "        autoplayJob?.cancel()\n" +
                     "        autoplayJob = null\n" +
-                    "        autoplayTrackIds.clear()\n" +
+                    "        autoplayEntries.clear()\n" +
                     "        consecutiveAutoplayFailures = 0\n",
             ),
         )
@@ -106,7 +106,7 @@ class R70SweepContractTest {
             codeBody.contains(
                 "        autoplayJob?.cancel()\n" +
                     "        autoplayJob = null\n" +
-                    "        autoplayTrackIds.clear()\n" +
+                    "        autoplayEntries.clear()\n" +
                     "        consecutiveAutoplayFailures = 0\n",
             ),
         )
@@ -155,7 +155,7 @@ class R70SweepContractTest {
             templateBody.contains(
                 "        autoplayJob?.cancel()\n" +
                     "        autoplayJob = null\n" +
-                    "        autoplayTrackIds.clear()\n" +
+                    "        autoplayEntries.clear()\n" +
                     "        consecutiveAutoplayFailures = 0\n",
             ),
         )

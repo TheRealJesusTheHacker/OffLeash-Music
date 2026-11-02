@@ -179,6 +179,17 @@ class AppPreferences(private val store: KeyValueStore) {
     }
 
     fun setLocalLikedVideoIds(ids: Set<String>) {
+        val combined = combinedLikedState()
+        if (combined != null) {
+            // Once the combined pair exists it is the only value
+            // the getters read (round 39), so a write to the legacy
+            // key would land where nothing looks — the caller's
+            // change silently lost (0.8.7 sweep 1). Merge through
+            // the pair instead: this half changes, the seed
+            // provenance carries over.
+            setLikedState(ids, combined.second)
+            return
+        }
         store.putString(
             KEY_LOCAL_LIKED_IDS,
             ids.filter { it.isNotBlank() }.sorted().joinToString("\n"),
@@ -294,6 +305,14 @@ class AppPreferences(private val store: KeyValueStore) {
     }
 
     fun setSeededLikedVideoIds(ids: Set<String>) {
+        val combined = combinedLikedState()
+        if (combined != null) {
+            // The mirror of setLocalLikedVideoIds above (0.8.7
+            // sweep 1): merge through the combined pair, carrying
+            // the record half over.
+            setLikedState(combined.first, ids)
+            return
+        }
         store.putString(
             KEY_SEEDED_LIKED_IDS,
             ids.filter { it.isNotBlank() }.sorted().joinToString("\n"),

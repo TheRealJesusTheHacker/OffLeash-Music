@@ -32,6 +32,11 @@ internal fun buildSharedClient(
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        // A whole-call bound on top of the per-phase ones (0.8.7
+        // sweep 1): a server dribbling one byte per read-timeout
+        // window reset the read timer forever and the call never
+        // ended — sixty seconds end to end, whatever the phases do.
+        .callTimeout(60, TimeUnit.SECONDS)
         .addInterceptor(
             RangeInterceptor(streamWindows) { status, host, shape ->
                 diagnostics.recordStreamLoad(status, host, shape)
@@ -105,11 +110,33 @@ class OkHttpTransport(
     private fun execute(request: Request): HttpResponse {
         httpClient.newCall(request).execute().use { response ->
             notifyResponseCookies(request, response.headers("Set-Cookie"))
+            val responseBody = response.body
             return HttpResponse(
                 status = response.code,
-                body = response.body?.string() ?: "",
+                body = if (responseBody == null) "" else readBodyBounded(responseBody),
             )
         }
+    }
+
+    /**
+     * Reads a response body under a hard cap (0.8.7 sweep 1):
+     * `Body.string()` materialized whatever arrived, so a broken
+     * or hostile endpoint decided the app's memory (and the cap
+     * applies after any transparent decompression, so a tiny
+     * gzipped bomb counts at its expanded size). Past the cap the
+     * read fails as the IOException it is, and the core client
+     * wraps it in NetworkFailure exactly like any other transport
+     * failure.
+     */
+    private fun readBodyBounded(body: okhttp3.ResponseBody): String {
+        val source = body.source()
+        source.request(MAX_BODY_BYTES + 1)
+        if (source.buffer.size > MAX_BODY_BYTES) {
+            throw java.io.IOException(
+                "response body exceeds $MAX_BODY_BYTES bytes",
+            )
+        }
+        return source.buffer.readUtf8()
     }
 
     private fun notifyResponseCookies(request: Request, setCookieHeaders: List<String>) {
@@ -127,6 +154,9 @@ class OkHttpTransport(
     }
 
     companion object {
+        /** Hard cap on a single API response body (0.8.7 sweep 1). */
+        const val MAX_BODY_BYTES: Long = 32L * 1024 * 1024
+
 
         /** youtube.com itself, or any subdomain of it — nothing else. */
         internal fun isYouTubeHost(host: String): Boolean {

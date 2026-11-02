@@ -68,8 +68,18 @@ class OkHttpChunkFetcher(
                 )
             }
             val body = response.body ?: throw DownloadFailed("the stream server sent no audio")
-            val bytes = body.bytes()
             val expected = DownloadChunkPlanner.windowSize(window)
+            // The read is capped at the window (0.8.7 sweep 1):
+            // body.bytes() materialized the WHOLE body before the
+            // size check below could look at it, so a server
+            // answering a small range with an unbounded body
+            // decided the app's memory. Reading one byte past the
+            // window is enough to judge: exact bodies pass, longer
+            // ones fail as the size mismatch they are, and nothing
+            // larger than the window is ever held.
+            val source = body.source()
+            source.request(expected + 1)
+            val bytes = source.buffer.readByteArray()
             if (bytes.size.toLong() != expected) {
                 throw DownloadFailed(
                     "the stream sent ${bytes.size} bytes for a $expected-byte range",
@@ -199,7 +209,7 @@ class DownloadManager(
     /** Deletes stale partials and record-less audio files — see the init reconciliation. */
     private fun sweepOrphanFiles() {
         try {
-            val tracked = store.records.value.map { it.fileName }.toSet()
+            val tracked = store.records.value.map { it.fileName.lowercase() }.toSet()
             downloadsDir.listFiles()?.forEach { file ->
                 val name = file.name
                 // The partial suffix matches case-insensitively
@@ -218,7 +228,8 @@ class DownloadManager(
                 // sat as unaccounted storage forever, the same
                 // split invariant in the sibling suffix.
                 if (name.endsWith(".part", ignoreCase = true) ||
-                    (name.endsWith(".audio", ignoreCase = true) && name !in tracked)
+                    (name.endsWith(".audio", ignoreCase = true) &&
+                        name.lowercase() !in tracked)
                 ) {
                     deleteQuietly(file)
                 }
@@ -366,8 +377,19 @@ class DownloadManager(
     private fun launchJob(track: Track) {
         // One live job per track: a second launch while the first
         // is still active would only re-download the same bytes
-        // from scratch behind the first job's back.
-        synchronized(jobs) { if (jobs[track.videoId]?.isActive == true) return }
+        // from scratch behind the first job's back. The check, the
+        // job's creation, its registration, and its start are ONE
+        // synchronized step (0.8.7 sweep 1): the shape this
+        // replaces checked in one block, registered in a second,
+        // and started in a third — and a LAZY job reads
+        // isActive == false until start() runs, so a second launch
+        // landing in that window saw "no active job", registered
+        // its own job over the first, and started it too. Two runs
+        // for one track, serialized only by the run mutex: the
+        // second started by deleting the first run's files (see
+        // the DONE guard in runDownload, its other half).
+        synchronized(jobs) {
+        if (jobs[track.videoId]?.isActive == true) return
         // LAZY start: the job is registered in [jobs] before it can
         // run, so its own isActive check can never read "no job".
         var job: Job? = null
@@ -390,13 +412,14 @@ class DownloadManager(
             }
         }
         job = launched
-        synchronized(jobs) { jobs[track.videoId] = launched }
+        jobs[track.videoId] = launched
         launched.invokeOnCompletion {
             synchronized(jobs) {
                 if (jobs[track.videoId] === launched) jobs.remove(track.videoId)
             }
         }
         launched.start()
+        }
     }
 
     private fun isJobActive(videoId: String): Boolean =
@@ -420,6 +443,19 @@ class DownloadManager(
         // the name playback and delete look for — and only a track
         // with no record yet derives one from its id.
         val existingRecord = store.recordFor(videoId)
+        // A completed download is not re-run (0.8.7 sweep 1): a
+        // duplicate job reaching this line after the first run
+        // finished used to delete the finished file up front and
+        // download again from scratch — and when its own run then
+        // failed, the track was left with neither file nor record.
+        // enqueue() already refuses DONE records; the run holds
+        // the same line, so the duplicate is a no-op reporting the
+        // standing download. A genuine re-download is the owner's
+        // remove + download-again, which starts from no record at
+        // all and never passes this line with one standing DONE.
+        if (existingRecord?.state == DownloadState.DONE) {
+            return existingRecord
+        }
         val fileName = existingRecord?.fileName ?: downloadFileName(videoId)
         val finalFile = File(downloadsDir, fileName)
         val partFile = File(downloadsDir, partialFileName(fileName))

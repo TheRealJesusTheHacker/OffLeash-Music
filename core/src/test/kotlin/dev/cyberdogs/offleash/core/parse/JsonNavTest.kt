@@ -76,4 +76,23 @@ class JsonNavTest {
         assertEquals(findAll(root, "renderer").firstOrNull(), findFirst(root, "renderer"))
         assertEquals(findAll(root, "other").firstOrNull(), findFirst(root, "other"))
     }
+
+    @Test
+    fun emptyRunsFallThroughToSimpleText() {
+        // A text node carrying an empty runs array alongside a real
+        // simpleText reads as the simpleText (0.8.7 sweep 1) — the
+        // empty concatenation is absence, not text, and titles used
+        // to come out blank on this shape.
+        val node = parse("""{"runs": [], "simpleText": "Real Title"}""")
+        assertEquals("Real Title", textOf(node))
+    }
+
+    @Test
+    fun nonEmptyRunsStillWinOverSimpleText() {
+        val node = parse(
+            """{"runs": [{"text": "Run"}, {"text": " Text"}],
+                "simpleText": "Other"}""".trimIndent()
+        )
+        assertEquals("Run Text", textOf(node))
+    }
 }

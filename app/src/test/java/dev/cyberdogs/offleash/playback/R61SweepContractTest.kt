@@ -433,7 +433,7 @@ class R61SweepContractTest {
                 "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to "private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))",
                 "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to "private val _phase = MutableStateFlow<GoogleSignInPhase>(GoogleSignInPhase.Idle)",
                 "dev/cyberdogs/offleash/data/SessionManager.kt" to "private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))",
-                "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _accountBacked = MutableStateFlow(sessionProvider() != null)",
+                "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _accountBacked = MutableStateFlow(\n        sessionProvider() != null || bearerSessionPresent(),",
                 "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _error = MutableStateFlow<String?>(null)",
                 "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _states = MutableStateFlow<Map<String, LikeUiState>>(",
                 "dev/cyberdogs/offleash/data/DownloadStore.kt" to "private val _records = MutableStateFlow<List<DownloadRecord>>(loadFromDisk())",

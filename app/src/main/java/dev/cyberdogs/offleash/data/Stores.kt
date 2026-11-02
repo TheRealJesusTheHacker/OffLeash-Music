@@ -106,11 +106,17 @@ private val storeJson = Json {
  * every good entry with it. Salvage keeps the good entries and
  * drops only the bad one; a file that isn't JSON at all still
  * reads as empty, as before.
+ *
+ * The funnels below catch Throwable, not Exception (0.8.7 sweep
+ * 1): a store file nested deeper than the thread stack overflows
+ * the JSON parser's recursion, and a StackOverflowError is an
+ * Error — it sailed past every Exception catch and killed the
+ * load it rode in on.
  */
 private fun decodeTrackLenient(element: kotlinx.serialization.json.JsonElement): TrackDto? =
     try {
         storeJson.decodeFromJsonElement(TrackDto.serializer(), element)
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         null
     }
 
@@ -127,7 +133,7 @@ private fun decodePlaylistLenient(
 ): LocalPlaylistDto? {
     try {
         return storeJson.decodeFromJsonElement(LocalPlaylistDto.serializer(), element)
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         // Fall through to the salvage path: header fields plus the
         // tracks that do decode.
     }
@@ -155,7 +161,7 @@ private fun storeFileArray(text: String, key: String): kotlinx.serialization.jso
     try {
         val root = storeJson.parseToJsonElement(text) as? kotlinx.serialization.json.JsonObject
         root?.get(key) as? kotlinx.serialization.json.JsonArray
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         null
     }
 
@@ -173,13 +179,22 @@ class LocalPlaylistStore(private val file: File) {
     private val _playlists = MutableStateFlow<List<LocalPlaylist>>(emptyList())
     val playlists: StateFlow<List<LocalPlaylist>> = _playlists.asStateFlow()
 
+    /** Set by every mutation; the init load must not overwrite one it raced. */
+    @Volatile
+    private var mutated: Boolean = false
+
     init {
         scope.launch { loadFromDisk() }
     }
 
     private suspend fun loadFromDisk() {
         mutex.withLock {
-            _playlists.value = readFromDisk()
+            // A mutation that raced ahead of this load is
+            // authoritative (0.8.7 sweep 1): its persist is
+            // best-effort, so the disk copy can be BEHIND the
+            // in-memory one, and overwriting with it silently
+            // reverted a change the user already saw land.
+            if (!mutated) _playlists.value = readFromDisk()
         }
     }
 
@@ -203,6 +218,7 @@ class LocalPlaylistStore(private val file: File) {
     }
 
     private suspend fun persistLocked(playlists: List<LocalPlaylist>) {
+        mutated = true
         _playlists.value = playlists
         withContext(Dispatchers.IO) {
             try {
@@ -431,10 +447,17 @@ class RecentsStore(private val file: File) {
     private val _recents = MutableStateFlow<List<Track>>(emptyList())
     val recentsFlow: StateFlow<List<Track>> = _recents.asStateFlow()
 
+    /** Set by every mutation; the init load must not overwrite one it raced. */
+    @Volatile
+    private var mutated: Boolean = false
+
     init {
         scope.launch {
             mutex.withLock {
-                _recents.value = readFromDisk()
+                // The playlist store's rule (0.8.7 sweep 1): a
+                // recordPlayed that raced ahead of this load is
+                // authoritative over the disk copy.
+                if (!mutated) _recents.value = readFromDisk()
             }
         }
     }
@@ -460,6 +483,7 @@ class RecentsStore(private val file: File) {
 
     suspend fun recordPlayed(track: Track) {
         mutex.withLock {
+            mutated = true
             if (_recents.value.isEmpty() && file.exists()) {
                 _recents.value = readFromDisk()
             }

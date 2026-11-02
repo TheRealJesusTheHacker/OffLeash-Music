@@ -1405,11 +1405,18 @@ class YoutubeiClient(
         } catch (e: OffleashException) {
             throw e
         } catch (e: Exception) {
-            throw NetworkFailure(e.message ?: e.javaClass.simpleName)
+            throw NetworkFailure(e.javaClass.simpleName)
         }
         if (response.status != 200) {
             val serverError = parseServerError(response.body)
             val serverMessage = serverError.message ?: "HTTP ${response.status}"
+            if (response.status == 429) {
+                // Rate limiting is transient: the request was
+                // well-formed and the refusal lifts on its own, so
+                // it takes the transient road, not the 4xx shape
+                // refusal below (0.8.7 sweep 1).
+                throw NetworkFailure(serverMessage)
+            }
             if (response.status in 400..499) {
                 throw ContextRejected(
                     serverMessage, response.status,
@@ -1472,11 +1479,18 @@ class YoutubeiClient(
         } catch (e: OffleashException) {
             throw e
         } catch (e: Exception) {
-            throw NetworkFailure(e.message ?: e.javaClass.simpleName)
+            throw NetworkFailure(e.javaClass.simpleName)
         }
         if (response.status != 200) {
             val serverError = parseServerError(response.body)
             val serverMessage = serverError.message ?: "HTTP ${response.status}"
+            if (response.status == 429) {
+                // Rate limiting is transient: the request was
+                // well-formed and the refusal lifts on its own, so
+                // it takes the transient road, not the 4xx shape
+                // refusal below (0.8.7 sweep 1).
+                throw NetworkFailure(serverMessage)
+            }
             if (response.status in 400..499) {
                 throw ContextRejected(
                     serverMessage, response.status,

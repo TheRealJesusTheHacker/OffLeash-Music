@@ -156,7 +156,16 @@ private fun queryParam(url: String, name: String): String? {
         val eq = part.indexOf('=')
         if (eq <= 0) continue
         if (part.substring(0, eq) == name) {
-            return java.net.URLDecoder.decode(part.substring(eq + 1), "UTF-8")
+            // A malformed escape (%zz, a trailing %) makes decode
+            // throw — on the diagnostics path that turned a
+            // RESOLVED stream's bookkeeping into a thrown failure
+            // (0.8.7 sweep 1). The helpers here are total, like
+            // streamHost above: an unreadable value is no value.
+            return try {
+                java.net.URLDecoder.decode(part.substring(eq + 1), "UTF-8")
+            } catch (e: Exception) {
+                null
+            }
         }
     }
     return null

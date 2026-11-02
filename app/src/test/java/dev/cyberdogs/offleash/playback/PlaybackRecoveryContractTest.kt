@@ -245,4 +245,41 @@ class PlaybackRecoveryContractTest {
         assertFalse(body.contains("stream.info.url"))
         assertFalse(body.contains("info.url"))
     }
+
+    @Test
+    fun surfacedPlayerErrorPausesBeforeSyncingState() {
+        // The SURFACE path is a stop (0.8.7 sweep 1): after the
+        // SURFACE_ERROR arm, the handler must pause the player
+        // before it clears resolving and names the error, or the
+        // notification keeps reading "playing" on a dead item
+        // and the service never sees a paused player to stop for.
+        val tail = onPlayerErrorBody()
+            .substringAfter("PlayerErrorRecoveryAction.SURFACE_ERROR -> Unit")
+        val pause = tail.indexOf("player.pause()")
+        assertTrue("the surface path must pause the player", pause >= 0)
+        assertTrue(
+            "the pause precedes the resolving clear that syncs state",
+            pause < tail.indexOf("setResolving(false)"),
+        )
+    }
+
+    @Test
+    fun autoplayMembershipIsByEntryIdentityNotVideoId() {
+        // Autoplay's failure-skip membership follows the queue
+        // ENTRY (reference identity), never the video id (0.8.7
+        // sweep 1): a duplicate the listener queued deliberately
+        // must surface its failure, not be silently skipped as an
+        // autoplay entry.
+        val controller = queueController()
+        assertTrue(
+            controller.contains("autoplayEntries.none { it === failed }"),
+        )
+        assertTrue(
+            controller.contains("autoplayEntries.any { it === failedTrack }"),
+        )
+        assertFalse(
+            "no id-keyed autoplay membership may remain",
+            controller.contains("autoplayTrackIds"),
+        )
+    }
 }

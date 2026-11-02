@@ -53,12 +53,18 @@ class LikeController(
 
     private val _states = MutableStateFlow<Map<String, LikeUiState>>(
         preferences.localLikedVideoIds().associateWith { videoId ->
-            LikeUiState(liked = true, accountBacked = sessionProvider() != null)
+            LikeUiState(
+                liked = true,
+                accountBacked =
+                    sessionProvider() != null || bearerSessionPresent(),
+            )
         },
     )
     val states: StateFlow<Map<String, LikeUiState>> = _states.asStateFlow()
 
-    private val _accountBacked = MutableStateFlow(sessionProvider() != null)
+    private val _accountBacked = MutableStateFlow(
+        sessionProvider() != null || bearerSessionPresent(),
+    )
     /** True while a session exists — like writes go to the account. */
     val accountBacked: StateFlow<Boolean> = _accountBacked.asStateFlow()
 
@@ -138,9 +144,15 @@ class LikeController(
                 }
             }
         }
-        _accountBacked.value = backed
-        _states.value = _states.value.mapValues { (_, state) ->
-            state.copy(accountBacked = backed)
+        // The flip's own writes take the lock too (0.8.7 sweep
+        // 1): the remap used to run outside it, so a toggle
+        // landing mid-remap could be overwritten by the mapValues
+        // snapshot or lose the flip's label.
+        synchronized(intentLock) {
+            _accountBacked.value = backed
+            _states.value = _states.value.mapValues { (_, state) ->
+                state.copy(accountBacked = backed)
+            }
         }
         if (droppedSeed || clearedSeedProvenance) persistLikeState()
     }
@@ -260,7 +272,18 @@ class LikeController(
             if (failure == null && !wroteToAccount) {
                 synchronized(intentLock) {
                     drainsInFlight.remove(videoId)
-                    update(videoId, likeToggleSucceeded(stateFor(videoId)))
+                    // Nothing reached the account — the session
+                    // ended, or its token never materialized. The
+                    // like stands ON THIS DEVICE, and the entry's
+                    // label must say so (0.8.7 sweep 1): it used to
+                    // keep accountBacked as-is, so a like the
+                    // account never received offered the plain
+                    // "Remove like" of an account like.
+                    update(
+                        videoId,
+                        likeToggleSucceeded(stateFor(videoId))
+                            .copy(accountBacked = false),
+                    )
                 }
                 persistLikeState()
                 return
@@ -443,7 +466,15 @@ class LikeController(
     }
 
     private fun update(videoId: String, state: LikeUiState) {
-        _states.value = _states.value + (videoId to state)
+        // Every state write takes the intent lock (0.8.7 sweep
+        // 1). Callers already holding it re-enter (synchronized
+        // monitors are reentrant); the paths that used to write
+        // bare — the device-only toggle branch above all — can no
+        // longer lose a concurrent entry between their read of
+        // the map and this write of it.
+        synchronized(intentLock) {
+            _states.value = _states.value + (videoId to state)
+        }
     }
 
     /**
@@ -461,8 +492,16 @@ class LikeController(
      * pair or the whole next one, never half of each.
      */
     private fun persistLikeState() {
-        val likedIds = _states.value.filterValues { it.liked }.keys
-        val seeded = synchronized(intentLock) { seededVideoIds.toSet() }
-        preferences.setLikedState(likedIds, seeded)
+        // Both halves of the pair are snapshotted in ONE locked
+        // block (0.8.7 sweep 1): the record half used to be read
+        // unlocked while the provenance half was read under the
+        // lock, so a toggle landing between the two reads paired
+        // a new record with stale provenance — the round-39 split
+        // this method's doc describes, reintroduced one layer up.
+        val snapshot = synchronized(intentLock) {
+            _states.value.filterValues { it.liked }.keys to
+                seededVideoIds.toSet()
+        }
+        preferences.setLikedState(snapshot.first, snapshot.second)
     }
 }

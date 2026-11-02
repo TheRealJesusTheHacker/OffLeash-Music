@@ -1,7 +1,9 @@
 package dev.cyberdogs.offleash.core.parse
 
+import dev.cyberdogs.offleash.core.model.FeedItem
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -162,5 +164,32 @@ class ParserArmorTest {
         assertEquals(emptyList<Any>(), YoutubeiParsers.parseSections(root))
         assertEquals(emptyList<Any>(), YoutubeiParsers.parseHomeChips(root))
         assertEquals(emptyList<Any>(), YoutubeiParsers.parseNextTracks(root))
+    }
+
+    @Test
+    fun capitalizedBylineCountStillParses() {
+        // Bylines capitalize the noun ("1,234 Songs"); the count
+        // reader used to match lowercase only and read those track
+        // counts as absent (0.8.7 sweep 1).
+        val row = parse(
+            """
+            {"flexColumns": [
+              {"musicResponsiveListItemFlexColumnRenderer":
+                {"text": {"runs": [{"text": "My Mix"}]}}},
+              {"musicResponsiveListItemFlexColumnRenderer":
+                {"text": {"runs": [{"text": "Playlist"},
+                                   {"text": " • "},
+                                   {"text": "1,234 Songs"}]}}}
+            ],
+            "navigationEndpoint": {"browseEndpoint": {
+              "browseId": "VLtest123",
+              "browseEndpointContextSupportedConfigs": {
+                "browseEndpointContextMusicConfig": {
+                  "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"}}}}}
+            """.trimIndent()
+        ) as JsonObject
+        val item = YoutubeiParsers.parseResponsiveListItem(row)
+        val playlist = (item as FeedItem.OfPlaylist).playlist
+        assertEquals(1234, playlist.trackCount)
     }
 }

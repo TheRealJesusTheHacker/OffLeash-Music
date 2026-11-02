@@ -44,6 +44,14 @@ import org.junit.Test
  * contains — are recorded in the round-49 lane report
  * (richGridRenderer, reelItemRenderer) rather than pinned
  * here.
+ *
+ * Naming discipline (0.8.7 sweep 1): every case in this class
+ * is SYNTHETIC — parser self-consistency against a
+ * shape-faithful hand-built body. None of it is recorded-
+ * endpoint coverage, and no case here may be cited as evidence
+ * an endpoint still serves its shape; that evidence lives only
+ * in the fixture tests. The two header cases below carry the
+ * marker in their own comments as the most-cited pair.
  */
 class ParserDispatchCensusTest {
 
@@ -90,6 +98,8 @@ class ParserDispatchCensusTest {
             "}}"
 
     @Test
+    // SYNTHETIC shape (no fixture carries this renderer):
+    // parser self-consistency, not endpoint coverage.
     fun albumParsesFromADetailHeaderRendererAlone() {
         val body = json(
             "{\"header\": {\"musicDetailHeaderRenderer\": {" +
@@ -111,6 +121,8 @@ class ParserDispatchCensusTest {
     }
 
     @Test
+    // SYNTHETIC shape (no fixture carries this renderer):
+    // parser self-consistency, not endpoint coverage.
     fun artistParsesFromAnImmersiveHeaderRendererAlone() {
         val body = json(
             "{\"header\": {\"musicImmersiveHeaderRenderer\": {" +
