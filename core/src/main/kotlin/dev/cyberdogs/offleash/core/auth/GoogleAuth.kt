@@ -43,6 +43,9 @@ import kotlinx.serialization.json.longOrNull
 object GoogleOAuth {
 
     const val DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
+
+    /** Where the native flow's Custom Tab goes (0.8.8, Road C). */
+    const val AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     const val TOKEN_URL = "https://oauth2.googleapis.com/token"
     const val REVOKE_URL = "https://oauth2.googleapis.com/revoke"
     const val USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
@@ -74,6 +77,9 @@ object GoogleOAuth {
     const val GRANT_TYPE_DEVICE_CODE =
         "urn:ietf:params:oauth:grant-type:device_code"
 
+    /** The native flow's exchange grant (0.8.8). */
+    const val GRANT_TYPE_AUTHORIZATION_CODE = "authorization_code"
+
     /** Where the owner approves: shown verbatim in the sign-in UI. */
     const val VERIFICATION_URL = "https://www.google.com/device"
 }
@@ -96,6 +102,16 @@ enum class OAuthClientKind(val label: String) {
      * class: the shared TV pair is the only issuer they can have.
      */
     SHARED("shared"),
+
+    /**
+     * The app's own ANDROID registration (0.8.8, Road C): an OAuth
+     * client bound to the app's package name and signing-certificate
+     * fingerprint, with no secret — the native authorization-code +
+     * PKCE flow's issuer ([GoogleNativeAuth]). A session sealed
+     * under any device-flow class can never refresh under it, and
+     * vice versa; the gate ends such sessions once, cleanly.
+     */
+    ANDROID("android"),
 }
 
 /**
@@ -215,10 +231,10 @@ object ClientChangeGate {
         buildKind: OAuthClientKind?,
     ): ClientGateDecision {
         if (buildKind == null) return ClientGateDecision.CLEAR_UNCONFIGURED
-        val sealedKind = if (sealedClientLabel == OAuthClientKind.OWNER.label) {
-            OAuthClientKind.OWNER
-        } else {
-            OAuthClientKind.SHARED
+        val sealedKind = when (sealedClientLabel) {
+            OAuthClientKind.OWNER.label -> OAuthClientKind.OWNER
+            OAuthClientKind.ANDROID.label -> OAuthClientKind.ANDROID
+            else -> OAuthClientKind.SHARED
         }
         return if (sealedKind == buildKind) {
             ClientGateDecision.CARRY
@@ -230,8 +246,9 @@ object ClientChangeGate {
 
 /**
  * The one diagnostics line naming the sign-in client class in use
- * (`signin: client=owner` / `client=shared` / `client=unconfigured`
- * once the stage is prefixed) — the class only, never a value.
+ * (`signin: client=owner` / `client=shared` / `client=android` /
+ * `client=unconfigured` once the stage is prefixed) — the class
+ * only, never a value.
  */
 fun signInClientLine(kind: OAuthClientKind?): String =
     "client=" + (kind?.label ?: "unconfigured")
