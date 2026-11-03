@@ -276,8 +276,8 @@ class R64SweepContractTest {
                 rawNames,
             )
         }
-        assertEquals(111, grandTotal)
-        assertEquals(41, grandBirths)
+        assertEquals(121, grandTotal)
+        assertEquals(42, grandBirths)
     }
 
     // -- F3–F8: the remainder families on the normalized view ------------
@@ -362,6 +362,7 @@ class R64SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 1,
+            "core:dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt" to 1,
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/JsonNav.kt" to 1,
         )

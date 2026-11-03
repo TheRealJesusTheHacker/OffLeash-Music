@@ -9,7 +9,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -133,12 +135,22 @@ class R11GooglePersistCaveatTest {
 
             // And the return still completes the sign-in in this
             // process — the caveat costs restart-survival only.
+            // The exchange completes on the manager's own scope,
+            // so wait for the adoption with a bounded deadline
+            // rather than reading the state in the same instant.
             manager.completeSignIn(
                 NativeTestSupport.codeRedirect(
                     NativeTestSupport.stateFrom(launch.url)
                 )
             )
-            assertTrue(manager.uiState.value.signedIn)
+            val adopted = withTimeoutOrNull(10_000) {
+                while (!manager.uiState.value.signedIn) delay(10)
+                true
+            }
+            assertTrue(
+                "the return must complete the sign-in in this process",
+                adopted == true,
+            )
 
             // The caveat's other half: with nothing sealed, a
             // fresh manager after process death has nothing to

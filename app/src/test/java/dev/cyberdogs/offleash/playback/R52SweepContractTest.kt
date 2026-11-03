@@ -200,11 +200,12 @@ class R52SweepContractTest {
         }
         assertEquals(
             "the module's true shipped StateFlow write total, " +
-                "plain and compound together, is 111 (112 " +
+                "plain and compound together, is 121 (112 " +
                 "through 0.8.2; 0.8.3's legacy-road removal " +
-                "is -5 and 0.8.6's own-client build is +4 — " +
-                "see the per-file note above)",
-            111,
+                "is -5, 0.8.6's own-client build is +4, and " +
+                "0.8.8's native sign-in is +10 net — see the " +
+                "per-file note above)",
+            121,
             grandCombined,
         )
     }
