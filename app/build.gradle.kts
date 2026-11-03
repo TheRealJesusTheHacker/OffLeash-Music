@@ -14,25 +14,24 @@ plugins {
 // this is inert and builds behave exactly as stock (auto debug keystore).
 val ciDebugKeystore: String? = providers.gradleProperty("offleashDebugKeystore").orNull
 
-// The sign-in client pair is BUILD-SUPPLIED, never source-resident
-// (0.8.6): two supply lines, Gradle properties first (the release
-// workflow passes the pair from its Actions secrets this way),
-// then the git-ignored `offleash-oauth.properties` at the repo
-// root for local builds. Absent both, the fields are empty and
-// the app runs unconfigured — sign-in unavailable, everything
-// else working — until the owner sets up their own key in the
-// app. The values land only in the generated BuildConfig.
+// The sign-in registration is BUILD-SUPPLIED, never
+// source-resident (0.8.8): the Android OAuth client ID, supplied
+// two ways — the `offleashAndroidClientId` Gradle property first
+// (the release workflow passes it this way), then the
+// `androidClientId` key of the git-ignored
+// `offleash-oauth.properties` at the repo root for local builds.
+// Absent both, the field is empty and the app runs unconfigured —
+// sign-in unavailable with the honest explanation, everything
+// else working. The value lands only in the generated
+// BuildConfig.
 //
-// WARNING — a build-supplied pair is PUBLIC the moment the APK
-// ships (0.8.7 sweep 2): BuildConfig fields are plain strings in
-// the binary, readable by anyone who downloads it (this build is
-// not minified, and minification would only slow the reading
-// down). Supply a pair only if it is meant to be public — an
-// installed-app client whose secret Google treats as a
-// non-confidential identifier. The standing release ships NO
-// pair at all; the owner's own key, entered in the app and
-// sealed on their device, is the private road, and it outranks
-// any build pair at runtime.
+// An Android client ID is PUBLIC by design: it names the
+// registration, ships inside the APK in plain sight, and has NO
+// secret — none exists for this client type. What stops another
+// app from spending the registration is the binding recorded
+// with Google when the client was created: this app's package
+// name + its signing certificate's fingerprint. Only a build of
+// THIS app, signed with THIS key, can sign in under it.
 val oauthPropsFile = rootProject.file("offleash-oauth.properties")
 val oauthProps = Properties()
 if (oauthPropsFile.isFile) {
@@ -47,9 +46,7 @@ fun oauthSupply(propertyName: String, fileKey: String): String =
 fun buildConfigString(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-val oauthClientId = oauthSupply("offleashOauthClientId", "clientId")
-val oauthClientSecret = oauthSupply("offleashOauthClientSecret", "clientSecret")
-val oauthClientKind = oauthSupply("offleashOauthClientKind", "clientKind")
+val androidClientId = oauthSupply("offleashAndroidClientId", "androidClientId")
 
 android {
     namespace = "dev.cyberdogs.offleash"
@@ -59,11 +56,13 @@ android {
         applicationId = "dev.cyberdogs.offleash"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.8.7-sweep"
-        buildConfigField("String", "OAUTH_CLIENT_ID", buildConfigString(oauthClientId))
-        buildConfigField("String", "OAUTH_CLIENT_SECRET", buildConfigString(oauthClientSecret))
-        buildConfigField("String", "OAUTH_CLIENT_KIND", buildConfigString(oauthClientKind))
+        versionCode = 25
+        versionName = "0.8.8-sweep"
+        buildConfigField(
+            "String",
+            "GOOGLE_ANDROID_CLIENT_ID",
+            buildConfigString(androidClientId),
+        )
     }
 
     flavorDimensions += "edition"
@@ -130,6 +129,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
+    // Chrome Custom Tabs (0.8.8): Google's sign-in page opens in
+    // the browser's own surface, and the return lands back in the
+    // app — the native authorization flow's browser leg.
+    implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")

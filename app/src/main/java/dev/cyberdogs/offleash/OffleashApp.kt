@@ -15,9 +15,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
-import dev.cyberdogs.offleash.core.auth.OAuthClientIdentity
-import dev.cyberdogs.offleash.core.auth.OAuthClientResolution
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
 import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.account.GoogleSessionKeepAlive
@@ -27,20 +25,16 @@ import dev.cyberdogs.offleash.data.DownloadManager
 import dev.cyberdogs.offleash.data.DownloadStore
 import dev.cyberdogs.offleash.data.FileSecretStorage
 import dev.cyberdogs.offleash.data.GooglePendingGrantStore
+import dev.cyberdogs.offleash.data.GooglePendingNativeAuthStore
 import dev.cyberdogs.offleash.data.GoogleSessionManager
 import dev.cyberdogs.offleash.data.GoogleSignInSeenMarker
 import dev.cyberdogs.offleash.data.googleSignInSeenFileIn
+import dev.cyberdogs.offleash.data.googlePendingNativeAuthFileIn
 import dev.cyberdogs.offleash.data.legacyFallbackApplies
 import dev.cyberdogs.offleash.data.GoogleTokenStore
 import dev.cyberdogs.offleash.data.KeystoreSecretKey
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
 import dev.cyberdogs.offleash.data.OkHttpTransport
-import dev.cyberdogs.offleash.data.OwnKeySetup
-import dev.cyberdogs.offleash.data.OwnKeyStore
-import dev.cyberdogs.offleash.data.OwnKeyWizardStore
-import dev.cyberdogs.offleash.data.ownKeyFileIn
-import dev.cyberdogs.offleash.data.ownKeyWizardFileIn
-import dev.cyberdogs.offleash.data.storedOwnKeyIdentity
 import dev.cyberdogs.offleash.data.RecentsStore
 import dev.cyberdogs.offleash.data.SessionManager
 import dev.cyberdogs.offleash.data.SessionStore
@@ -218,8 +212,11 @@ class AppContainer(app: OffleashApp) {
     /**
      * The pending device-grant store (0.7.1): an issued-but-not-
      * yet-approved sign-in code, sealed with the same box into its
-     * own file, so the grant survives the app being killed while
-     * the owner is in the browser approving it.
+     * own file. The device-code flow is no longer the presented
+     * sign-in (0.8.8 — the native browser flow replaced it); the
+     * store stays wired as part of the non-presented rollback kit
+     * (the core device engine and its tests are untouched), and
+     * costs the presented app nothing.
      */
     val googlePendingGrantStore: GooglePendingGrantStore =
         GooglePendingGrantStore(
@@ -231,47 +228,20 @@ class AppContainer(app: OffleashApp) {
         )
 
     /**
-     * The owner's own Google key store (0.8.6): the pair the owner
-     * entered in the setup wizard, sealed with the same box into
-     * its own file. Read at startup BEFORE the build-supplied pair
-     * is resolved — a key entered on this device outranks anything
-     * a build carried in (see [ownKeySetup]).
+     * The pending native sign-in attempt store (0.8.8): a started-
+     * but-not-yet-answered browser sign-in attempt (state binding +
+     * PKCE verifier), sealed with the same box into its own file,
+     * so the attempt survives the app being killed while the owner
+     * is in the browser approving it.
      */
-    val ownKeyStore: OwnKeyStore = OwnKeyStore(
-        storage = FileSecretStorage(ownKeyFileIn(app)),
-        box = AesGcmSecretBox(
-            keyProvider = { KeystoreSecretKey.getOrCreate(OWN_KEY_ALIAS) },
-            // NO keyRegenerator (0.8.7 sweep 2): the own key
-            // lives under its OWN alias, apart from the session
-            // family. The session box's regeneration remedy —
-            // destroy the key, re-obtain the credentials — is
-            // sound for tokens the owner can re-issue by signing
-            // in again, but the pair sealed here is the owner's
-            // own Google Cloud registration: no sign-in re-issues
-            // it, only re-running the wizard does. This box's key
-            // is generated fresh under this alias with the current
-            // spec, so the mis-specced-key case the regenerator
-            // exists for cannot arise for it; if a seal ever did
-            // fail here, it fails honestly rather than destroying
-            // the key. Blobs a pre-split build sealed under the
-            // shared alias migrate on first read via the legacy
-            // box below.
-        ),
-        legacyBox = AesGcmSecretBox(
-            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-        ),
-    )
-
-    /** The own-key wizard's progress store (0.8.6): the own-key seal, split with it. */
-    val ownKeyWizardStore: OwnKeyWizardStore = OwnKeyWizardStore(
-        storage = FileSecretStorage(ownKeyWizardFileIn(app)),
-        box = AesGcmSecretBox(
-            keyProvider = { KeystoreSecretKey.getOrCreate(OWN_KEY_ALIAS) },
-        ),
-        legacyBox = AesGcmSecretBox(
-            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-        ),
-    )
+    val googlePendingNativeAuthStore: GooglePendingNativeAuthStore =
+        GooglePendingNativeAuthStore(
+            storage = FileSecretStorage(googlePendingNativeAuthFileIn(app)),
+            box = AesGcmSecretBox(
+                keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
+                keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
+            ),
+        )
 
     /**
      * The "a Google sign-in has happened here" marker (bug sweep
@@ -347,59 +317,56 @@ class AppContainer(app: OffleashApp) {
     )
 
     /**
-     * The client pair this build itself was supplied with (0.8.6):
-     * injected at build time (Gradle properties / the release
-     * workflow's secrets — see app/build.gradle.kts), resolved
-     * through the core resolver. A malformed supply is a build
-     * defect: logged in plain words, treated as no pair — never
-     * half-used.
+     * The Android OAuth client ID this build was supplied with
+     * (0.8.8): injected at build time (the `offleashAndroidClientId`
+     * Gradle property — see app/build.gradle.kts). An Android
+     * client ID is a PUBLIC identifier — it names the registration
+     * and ships inside the APK; no secret exists for this client
+     * type, and the registration itself (package name + signing
+     * certificate fingerprint, recorded with Google) is what stops
+     * another app from spending it. A non-blank value that is not
+     * shaped like a client ID is a build defect: logged in plain
+     * words and treated as absent — never half-used.
      */
-    val buildOAuthIdentity: OAuthClientIdentity? = resolveBuildOAuthIdentity()
+    val androidClientId: String? = resolveAndroidClientId()
 
-    private fun resolveBuildOAuthIdentity(): OAuthClientIdentity? {
-        val resolution = OAuthClientIdentity.resolve(
-            BuildConfig.OAUTH_CLIENT_ID,
-            BuildConfig.OAUTH_CLIENT_SECRET,
-            BuildConfig.OAUTH_CLIENT_KIND,
-        )
-        return when (resolution) {
-            is OAuthClientResolution.Configured -> resolution.identity
-            is OAuthClientResolution.Malformed -> {
-                signInDiagnostics.log(
-                    "signin",
-                    "the build's supplied sign-in key is malformed " +
-                        "(${resolution.detail}) — sign-in runs " +
-                        "unconfigured until a key is set up in the app",
-                )
-                null
-            }
-            OAuthClientResolution.Absent -> null
+    private fun resolveAndroidClientId(): String? {
+        val raw = BuildConfig.GOOGLE_ANDROID_CLIENT_ID.trim()
+        if (raw.isEmpty()) return null
+        if (!raw.endsWith(".apps.googleusercontent.com")) {
+            signInDiagnostics.log(
+                "signin",
+                "the build's supplied sign-in registration is " +
+                    "malformed — sign-in runs unconfigured",
+            )
+            return null
         }
+        return raw
     }
 
     /**
-     * The identity sign-in starts under (0.8.6): the owner's own
-     * key when one is saved on this device — it outranks the
-     * build's pair, always — else the build-supplied pair, else
-     * none (sign-in unavailable; the wizard is the road in).
+     * Where Google returns the owner after approval: this app's
+     * own scheme + the OAuth redirect host, handled by
+     * OAuthRedirectActivity (see the manifest). Derived from the
+     * package name so each flavour returns to itself.
      */
-    val startupOAuthIdentity: OAuthClientIdentity? =
-        storedOwnKeyIdentity(ownKeyStore) ?: buildOAuthIdentity
+    val googleRedirectUri: String = "${app.packageName}://oauth2redirect"
 
     /**
-     * The Google OAuth client (device-code flow), riding its own
-     * transport instance over the shared OkHttp client — no cookie
-     * rotation callback: OAuth responses carry no session cookies
-     * to rotate, and token material never enters the cookie path.
+     * The Google OAuth client (native authorization-code + PKCE
+     * flow, 0.8.8), riding its own transport instance over the
+     * shared OkHttp client — no cookie rotation callback: OAuth
+     * responses carry no session cookies to rotate, and token
+     * material never enters the cookie path.
      */
-    val googleAuth: GoogleDeviceAuth = GoogleDeviceAuth(
+    val googleAuth: GoogleNativeAuth = GoogleNativeAuth(
         OkHttpTransport(okHttpClient),
-        startupOAuthIdentity,
+        androidClientId,
     )
 
     /**
-     * Owns the Google sign-in (0.7.0, the app's primary session):
-     * the device-code flow, the sealed token store, refresh, and
+     * Owns the Google sign-in (the app's primary session): the
+     * native browser flow, the sealed token store, refresh, and
      * revocation. Constructing it loads any stored Google session.
      */
     val googleSessionManager: GoogleSessionManager = GoogleSessionManager(
@@ -407,34 +374,31 @@ class AppContainer(app: OffleashApp) {
         auth = googleAuth,
         client = client,
         scope = sessionScope,
-        pendingGrantStore = googlePendingGrantStore,
-        signInDiagnostics = signInDiagnostics,
-    )
-
-    /**
-     * The own-key setup wizard's brain (0.8.6): step machine,
-     * sealed progress + draft, the live key test, and the save
-     * that switches sign-in to the owner's pair through the
-     * session manager's client-change gate.
-     */
-    val ownKeySetup: OwnKeySetup = OwnKeySetup(
-        keyStore = ownKeyStore,
-        wizardStore = ownKeyWizardStore,
-        transport = OkHttpTransport(okHttpClient),
-        auth = googleAuth,
-        sessionManager = googleSessionManager,
-        buildIdentity = buildOAuthIdentity,
-        scope = sessionScope,
+        redirectUri = googleRedirectUri,
+        pendingAttemptStore = googlePendingNativeAuthStore,
         signInDiagnostics = signInDiagnostics,
     )
 
     init {
-        // The client-change gate (0.8.6) runs before any account
-        // state is read: a session sealed under a different client
-        // class than this build's live identity ends here, once,
-        // cleanly — so the account snapshot below (and every first
-        // frame) already shows the honest signed-out state with
-        // its reason.
+        // The dead road's sealed remains (0.8.8): the own-key
+        // wizard is gone as a product direction, so a pair or a
+        // wizard draft a pre-0.8.8 build sealed on this device is
+        // destroyed here, once — credentials for a road nothing
+        // presents anymore serve nothing standing. The files are
+        // named literally because the stores that owned them are
+        // deleted with the wizard; this is their migration.
+        for (name in listOf("own_key.bin", "own_key_wizard.bin")) {
+            try {
+                File(app.noBackupFilesDir, name).delete()
+            } catch (t: Throwable) {
+                // Best-effort hygiene; never a startup failure.
+            }
+        }
+        // The client-change gate runs before any account state is
+        // read: a session sealed under a different registration
+        // than this build's ends here, once, cleanly — so the
+        // account snapshot below (and every first frame) already
+        // shows the honest signed-out state with its reason.
         googleSessionManager.applyClientGate()
     }
 
@@ -804,13 +768,5 @@ class AppContainer(app: OffleashApp) {
     private companion object {
         const val REPLAY_CACHE_BYTES: Long = 512L * 1024L * 1024L
         const val SESSION_KEY_ALIAS: String = "offleash-session-key"
-
-        /**
-         * The own-key stores' alias (0.8.7 sweep 2): split
-         * from the session family's so no session-side key
-         * event — above all a regeneration — can ever reach
-         * the owner's own Google key.
-         */
-        const val OWN_KEY_ALIAS: String = "offleash-own-key"
     }
 }

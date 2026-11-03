@@ -71,7 +71,6 @@ import dev.cyberdogs.offleash.playback.HalloweenSplash
 import dev.cyberdogs.offleash.playback.SplashGate
 import dev.cyberdogs.offleash.ui.about.AboutScreen
 import dev.cyberdogs.offleash.ui.about.PlaybackDiagnosticsScreen
-import dev.cyberdogs.offleash.ui.account.OwnKeyWizardScreen
 import dev.cyberdogs.offleash.ui.account.SignInScreen
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.detail.AlbumScreen
@@ -386,7 +385,6 @@ fun OffleashRoot(container: AppContainer) {
                     SettingsScreen(
                         container = container,
                         onSignInClick = { navController.navigate("signin") },
-                        onOwnKeyClick = { navController.navigate("ownkey") },
                     )
                 }
                 composable("signin") {
@@ -394,17 +392,6 @@ fun OffleashRoot(container: AppContainer) {
                         container = container,
                         onSignedIn = { navController.popBackStack() },
                         onBack = { navController.popBackStack() },
-                        onOwnKeyClick = { navController.navigate("ownkey") },
-                    )
-                }
-                composable("ownkey") {
-                    OwnKeyWizardScreen(
-                        container = container,
-                        onBack = { navController.popBackStack() },
-                        onFinished = {
-                            navController.popBackStack()
-                            navController.navigate("signin")
-                        },
                     )
                 }
                 composable("diagnostics") {

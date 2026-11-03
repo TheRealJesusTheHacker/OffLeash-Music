@@ -1,16 +1,15 @@
 package dev.cyberdogs.offleash.ui.account
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.layout.Arrangement
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -28,53 +27,50 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.data.GoogleSignInPhase
 
 /**
- * Sign in with Google (0.7.0): the device-code flow.
+ * Sign in with Google (0.8.8): the native browser flow.
  *
- * The app asks Google for a short code, shows it here, and the
- * owner enters it at `google.com/device` in ANY browser — this
- * phone's own browser is the expected one — and approves with
- * their Google account. Google then hands the app a token, which
- * is stored encrypted on this device and used only to ask YouTube
- * Music for the owner's home feed, playlists, and liked songs.
+ * One tap on "Continue with Google" opens Google's own sign-in
+ * page in the browser (a Chrome Custom Tab where available): the
+ * owner picks the Google account already on the phone and
+ * approves there. Google sends them straight back into the app,
+ * which exchanges the returned code for a sign-in token — stored
+ * encrypted on this device and used only to ask YouTube Music
+ * for the owner's home feed, playlists, and liked songs.
  *
- * No password is ever typed into this app, there is no WebView
- * sign-in page, and no browser cookie is captured or kept — the
- * 0.6.x WebView/paste sign-in that used to live in this file is
- * disconnected from the flow entirely (see docs/AUDITS.md for the
- * exact disconnection inventory; its supporting code remains in
- * the repo for one release as a safety net, unreachable from any
- * navigation).
+ * No password is ever typed into this app, there is no code to
+ * copy, no console setup, and nothing to paste. The device-code
+ * flow this screen used to render (0.7.0–0.8.7) and the own-key
+ * wizard card that stood below it are gone from the sign-in path
+ * entirely.
  *
  * The screen is a pure rendering of the Google session manager's
- * phase + sign-in state: the manager owns the issued grant (it is
- * persisted, sealed, the moment Google issues it) and the poll
- * loop, so leaving this screen — or the app being killed while
- * the owner is in the browser — loses nothing: coming back shows
- * the same code, still being checked, exactly where it stands.
+ * phase + sign-in state: the manager owns the in-flight attempt
+ * (it is persisted, sealed, the moment it is built) and the
+ * token custody, so leaving this screen — or the app being
+ * killed while the owner is in the browser — loses nothing:
+ * coming back shows the same attempt, still waiting, exactly
+ * where it stands.
  */
 @Composable
 fun SignInScreen(
     container: AppContainer,
     onSignedIn: () -> Unit,
     onBack: () -> Unit,
-    onOwnKeyClick: () -> Unit,
 ) {
     val context = LocalContext.current
     val manager = container.googleSessionManager
     val phase by manager.phase.collectAsState()
     val sessionState by manager.uiState.collectAsState()
-    val ownKeyState by container.ownKeySetup.state.collectAsState()
+    val launch by manager.authorizationLaunch.collectAsState()
+    val attemptDurable by manager.pendingAttemptDurability.collectAsState()
 
     // The last crash the app recorded, if any: after a crash this
     // screen is where the owner lands to retry, so this is where
@@ -92,19 +88,36 @@ fun SignInScreen(
         if (sessionState.signedIn) onSignedIn()
     }
 
-    // Ticking clock for the waiting screen's expiry copy (round 3
-    // sweep): the minutes-left text below is computed from the
-    // grant, but without a tick it was computed once at first
-    // composition and then froze — a code with minutes left could
-    // go on reading its opening number long after it stopped being
-    // true. Thirty seconds is plenty of grain for a
-    // minute-granularity sentence.
-    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(phase) {
-        while (true) {
-            nowMs = System.currentTimeMillis()
-            kotlinx.coroutines.delay(30_000L)
+    // Opens Google's page for [url]: a Custom Tab where the
+    // browser offers one (the account picker and approval stay in
+    // Google's own surface, and the return lands back here), a
+    // plain browser view everywhere else. Either way the flow is
+    // the same one tap from the owner's side.
+    fun openGooglePage(url: String) {
+        val uri = Uri.parse(url)
+        try {
+            CustomTabsIntent.Builder()
+                .setShowTitle(true)
+                .build()
+                .launchUrl(context, uri)
+        } catch (e: ActivityNotFoundException) {
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+            } catch (e2: ActivityNotFoundException) {
+                // No browser at all: the waiting card below stays
+                // on screen with its honest text; diagnostics note
+                // the launch failure through the manager's trail
+                // the next time the flow is examined.
+            }
         }
+    }
+
+    // Starts a fresh attempt and opens its page in the same tap:
+    // the attempt is built synchronously, so its launch is
+    // already published when startSignIn returns.
+    fun startAndOpen() {
+        manager.startSignIn()
+        manager.authorizationLaunch.value?.let { openGooglePage(it.url) }
     }
 
     Column(
@@ -121,9 +134,9 @@ fun SignInScreen(
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "You'll get a short code to type on Google's own " +
-                "page. Your password is only ever typed there — " +
-                "never in this app.",
+            text = "Sign in with the Google account on this phone " +
+                "to load your home feed, your playlists, and your " +
+                "liked songs.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -141,17 +154,18 @@ fun SignInScreen(
         }
         if (showSafetyDetails) {
             Text(
-                text = "Sign-in works the way it does on a TV. Google " +
-                    "gives this app a short code; you enter it on " +
-                    "Google's page, in any browser, and approve with " +
-                    "your Google account. Google then hands the app " +
-                    "a sign-in token.\n\n" +
-                    "Your password is typed only on Google's page — " +
-                    "never in this app — and no browser cookies are " +
-                    "used. The token is stored encrypted on this " +
-                    "device, and OffLeash uses it only to ask YouTube " +
-                    "Music for your home feed, your playlists, and " +
-                    "your liked songs.",
+                text = "Tapping Continue opens Google's own sign-in " +
+                    "page in your browser. You pick the account " +
+                    "already on this phone and approve there — " +
+                    "your password is typed only on Google's page, " +
+                    "never in this app, and there is no code to " +
+                    "copy and nothing to set up.\n\n" +
+                    "Google then sends you straight back here and " +
+                    "hands the app a sign-in token. The token is " +
+                    "stored encrypted on this device, and OffLeash " +
+                    "uses it only to ask YouTube Music for your " +
+                    "home feed, your playlists, and your liked " +
+                    "songs.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -196,11 +210,10 @@ fun SignInScreen(
 
         when (val current = phase) {
             GoogleSignInPhase.Idle -> {
-                // The standing end reason, when there is one
-                // (0.8.6): a session the client-change gate ended
-                // lands here with its honest explanation — shown
-                // until the owner signs in again, never as an
-                // error loop.
+                // The standing end reason, when there is one: a
+                // session the client-change gate ended lands here
+                // with its honest explanation — shown until the
+                // owner signs in again, never as an error loop.
                 val endReason = sessionState.lastEndReason
                 if (endReason != null) {
                     Card(
@@ -220,23 +233,26 @@ fun SignInScreen(
                     }
                     Spacer(Modifier.height(16.dp))
                 }
-                if (container.googleAuth.identity != null) {
+                if (container.googleAuth.isConfigured) {
                     Button(
-                        onClick = { manager.startSignIn() },
+                        onClick = { startAndOpen() },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Sign in with Google") }
+                    ) { Text("Continue with Google") }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "You'll get a code to enter on Google's " +
-                            "page. This takes a minute or two.",
+                        text = "You'll pick your account and approve " +
+                            "on Google's own page, then come straight " +
+                            "back here signed in. No code to type, " +
+                            "nothing to set up.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
                     Text(
-                        text = "Set up your own Google key below to " +
-                            "sign in — this build doesn't carry a " +
-                            "shared sign-in.",
+                        text = "Google sign-in isn't set up in this " +
+                            "build of OffLeash yet, so there's " +
+                            "nothing to sign in with. Everything " +
+                            "else in the app works as normal.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -244,148 +260,50 @@ fun SignInScreen(
             }
 
             GoogleSignInPhase.Issuing -> {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
+                Column {
                     CircularProgressIndicator(
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
                     )
+                    Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "Asking Google for your code…",
+                        text = "Opening Google…",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }
 
-            is GoogleSignInPhase.AwaitingApproval -> {
+            is GoogleSignInPhase.AwaitingReturn -> {
                 Text(
-                    text = "Your code",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = current.userCode,
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontFamily = FontFamily.Monospace,
+                    text = "Finish signing in on Google's page",
+                    style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.height(8.dp))
-                // Copy affordance (bug sweep round 13): the code
-                // was display-only — a plain Text is not selectable
-                // in Compose, and there was no clipboard path
-                // anywhere in the app — so on the expected path
-                // (this phone's own browser) the owner had to
-                // memorise the code or app-switch back and forth
-                // to read it in pieces. One tap now puts the exact
-                // code on the clipboard to paste into Google's
-                // page; on another device the code is still read
-                // and typed as before.
-                val clipboardManager = LocalClipboardManager.current
-                var codeCopied by remember(current.userCode) {
-                    mutableStateOf(false)
-                }
-                OutlinedButton(
-                    onClick = {
-                        clipboardManager.setText(AnnotatedString(current.userCode))
-                        codeCopied = true
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
+                Text(
+                    text = "Google's page should be open in your " +
+                        "browser. Pick your account and approve — " +
+                        "you'll come straight back here signed in.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (!attemptDurable) {
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        if (codeCopied) {
-                            "Copied — paste it on Google's page"
-                        } else {
-                            "Copy code"
-                        },
+                        text = "Keep the app open until you're " +
+                            "back — this attempt couldn't be saved, " +
+                            "so it won't survive the app closing.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = {
-                        val intent = Intent(
-                            Intent.ACTION_VIEW,
-                            Uri.parse("https://www.google.com/device"),
-                        )
-                        context.startActivity(intent)
+                        launch?.let { openGooglePage(it.url) }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("Open google.com/device") }
-                Spacer(Modifier.height(16.dp))
-                // The remaining life is computed from the grant
-                // itself (0.7.2 sweep): a code RESUMED after the app
-                // was restarted may have only a few minutes left,
-                // and telling the owner "about 30 minutes" for it
-                // would be a lie of exactly the kind the expired
-                // ending then has to explain.
-                // (Perfection pass: the last partial minute reads
-                // "less than a minute" — the coerceAtLeast(1) this
-                // replaces sold a code with twenty seconds left as
-                // "about 1 minute", a time the grant doesn't give.)
-                val remainingMs = (current.expiresAtEpochMs - nowMs)
-                    .coerceAtLeast(0L)
-                val expiryText = when {
-                    remainingMs < 60_000L -> "less than a minute."
-                    remainingMs < 120_000L -> "about 1 minute."
-                    else -> "about ${remainingMs / 60_000L} minutes."
-                }
-                Text(
-                    text = "1. Open google.com/device in any browser — " +
-                        "this phone's browser works.\n" +
-                        "2. Enter the code above.\n" +
-                        "3. Approve with your Google account.\n\n" +
-                        "This screen finishes on its own once you approve. " +
-                        "The code expires in $expiryText",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (current.connectionTrouble) {
-                    // The approval watch is riding out a connection
-                    // blip (0.8.1 hotfix): the code stands and the
-                    // app is still checking — the note says exactly
-                    // that, where the flow used to end on a failure
-                    // card for a single DNS hiccup.
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = "Connection trouble — still checking. " +
-                            "Your code is still good; approve whenever " +
-                            "you're ready and this screen will finish " +
-                            "on its own once the connection is back.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Text(
-                        text = "Waiting for your approval — the app is " +
-                            "checking with Google on its own…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { manager.checkNow() },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        "Already approved but nothing happened? " +
-                            "Check now",
-                    )
-                }
+                ) { Text("Continue signing in") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { manager.cancelSignIn() },
@@ -433,97 +351,13 @@ fun SignInScreen(
                                 )
                             }
                         }
-                        Spacer(Modifier.height(12.dp))
-                        if (container.googleAuth.identity == null) {
+                        if (container.googleAuth.isConfigured) {
+                            Spacer(Modifier.height(12.dp))
                             Button(
-                                onClick = onOwnKeyClick,
-                            ) { Text("Set up your own Google key") }
-                        } else {
-                            Button(
-                                onClick = { manager.startSignIn() },
+                                onClick = { startAndOpen() },
                             ) { Text("Try again") }
                         }
                     }
-                }
-            }
-        }
-
-        // The own-key entry (0.8.6): Google limits what the
-        // shared sign-in can reach, and this is the fix the app
-        // offers for it — the guided setup wizard. When a key is
-        // already saved this is its management door instead.
-        Spacer(Modifier.height(24.dp))
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                if (ownKeyState.hasOwnKey) {
-                    Text(
-                        text = "You're using your own Google key " +
-                            "for sign-in.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = onOwnKeyClick,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Manage your Google key") }
-                } else if (container.googleAuth.identity == null) {
-                    Text(
-                        text = "Sign-in needs your own Google key",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "This build of OffLeash doesn't " +
-                            "carry a shared sign-in, so signing in " +
-                            "starts with your own Google key. It's " +
-                            "free, takes about 10 minutes, and you " +
-                            "only set it up once.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = onOwnKeyClick,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Set up your own Google key") }
-                } else {
-                    Text(
-                        text = "Your library isn't loading?",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "Google limits what OffLeash's " +
-                            "shared sign-in can reach, so your " +
-                            "playlists and liked songs may not " +
-                            "load. Setting up your own Google key " +
-                            "fixes that — it's free, takes about " +
-                            "10 minutes, and you only do it once.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = onOwnKeyClick,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Set up your own Google key") }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "Rather not? The sign-in above " +
-                            "still works — some libraries just " +
-                            "may not load.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color =
-                            MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }

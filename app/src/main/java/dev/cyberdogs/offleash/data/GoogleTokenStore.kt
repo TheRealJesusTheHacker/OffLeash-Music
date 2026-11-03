@@ -49,6 +49,19 @@ data class StoredGoogleSession(
      * have had. Never the pair itself — classes only.
      */
     val clientKind: String? = null,
+    /**
+     * The issuing registration's client ID (0.8.8): the gate's
+     * identity compare for native ("android"-class) sessions —
+     * the class alone cannot distinguish two Android
+     * registrations, and a session sealed under one can never
+     * refresh under the other. A client ID is a PUBLIC identifier
+     * (it ships inside the APK and names the registration), never
+     * a secret; it is recorded here, inside the sealed record,
+     * for the compare only and never reaches diagnostics. Null on
+     * every record sealed before 0.8.8 and on device-era records,
+     * which carry no Android registration to compare.
+     */
+    val issuingClientId: String? = null,
 )
 
 private val googleSessionJson = Json {

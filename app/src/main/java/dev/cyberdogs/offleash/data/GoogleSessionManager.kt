@@ -4,53 +4,48 @@ import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.auth.ClientChangeGate
 import dev.cyberdogs.offleash.core.auth.ClientGateDecision
-import dev.cyberdogs.offleash.core.auth.DeviceCodeResult
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.CodeExchangeResult
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.auth.GoogleTokens
 import dev.cyberdogs.offleash.core.auth.IdentityLookup
+import dev.cyberdogs.offleash.core.auth.OAuthClientKind
+import dev.cyberdogs.offleash.core.auth.RedirectResult
 import dev.cyberdogs.offleash.core.auth.RefreshResult
-import dev.cyberdogs.offleash.core.auth.TokenPollResult
 import dev.cyberdogs.offleash.core.auth.signInClientLine
 import dev.cyberdogs.offleash.core.model.AccountIdentity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the Google sign-in flow currently stands, for the sign-in screen. */
 sealed interface GoogleSignInPhase {
-    /** No attempt running: the screen offers "Sign in with Google". */
+    /** No attempt running: the screen offers "Continue with Google". */
     object Idle : GoogleSignInPhase
 
     /**
-     * A tap is being turned into a code (0.8.7 sweep 3): the
-     * issuance round-trip takes a moment, and without this phase
-     * the screen sat on Idle — its button still live — while the
-     * request ran, inviting a second tap and showing nothing.
+     * A tap is being turned into Google's page (0.8.7 sweep 3): the
+     * attempt is built and the browser is opening — without this
+     * phase the screen sat on Idle, its button still live, inviting
+     * a second tap and showing nothing.
      */
     object Issuing : GoogleSignInPhase
 
     /**
-     * A code is issued and the poll loop is running: the screen
-     * shows [userCode] and sends the owner to [verificationUrl].
-     * [connectionTrouble] is set while the poll loop is riding out
-     * transient failures (0.8.1 hotfix): the watch is still alive
-     * and the code still good — the screen adds a "connection
-     * trouble — still checking" note instead of the flow ending.
+     * Google's page is open in the browser (0.8.8): the sign-in
+     * finishes when the owner approves there and the browser hands
+     * the answer back to the app. [expiresAtEpochMs] bounds the
+     * wait — an attempt that never comes back dies honestly instead
+     * of being collectable forever.
      */
-    data class AwaitingApproval(
-        val userCode: String,
-        val verificationUrl: String,
+    data class AwaitingReturn(
         val expiresAtEpochMs: Long,
-        val connectionTrouble: Boolean = false,
     ) : GoogleSignInPhase
 
     /** The attempt ended without a sign-in; [reason] says why, plainly. */
@@ -58,38 +53,64 @@ sealed interface GoogleSignInPhase {
 }
 
 /**
- * Owns the Google sign-in (0.7.0): the device-code flow, the
- * encrypted [GoogleTokenStore], automatic refresh, and revocation
- * on sign-out. This is the app's PRIMARY session from 0.7.0; the
+ * A browser launch the sign-in screen must perform (0.8.8): open
+ * [url] in a Chrome Custom Tab. Published once per attempt —
+ * [attemptId] is the flow generation that minted it, so the screen
+ * launches each attempt's page exactly once and never relaunches a
+ * spent one on recomposition.
+ */
+data class NativeSignInLaunch(
+    val url: String,
+    val attemptId: Long,
+)
+
+/**
+ * Owns the Google sign-in (0.7.0; native flow from 0.8.8): the
+ * authorization-code + PKCE sign-in through the system browser,
+ * the encrypted [GoogleTokenStore], automatic refresh, and
+ * revocation on sign-out. This is the app's PRIMARY session; the
  * cookie [SessionManager] remains as the disconnected safety net.
  *
- * Totality discipline, same as the cookie manager: no throw escapes
- * any stage. The device flow's states (pending, slow down, denied,
- * expired) are protocol answers, not errors, and each lands on its
- * own honest [GoogleSignInPhase]. Diagnostics record stages and
- * presence/absence only — a token value is never written anywhere
- * but the sealed store.
+ * The flow (decision brief 2026-11-01, Road C; owner direction
+ * 2026-11-03 — the own-key console wizard was the wrong route,
+ * "we need a better login way", cleaner): one tap on "Continue with
+ * Google" builds a one-time authorization request naming the app's
+ * ANDROID OAuth client, opens it in a Chrome Custom Tab where the
+ * owner picks the Google account already on the phone and approves,
+ * and Google returns the owner to the app with a code the app
+ * exchanges — PKCE verifier in hand — for the token set. No typed
+ * code, no console steps, no pasted keys, no password in the app,
+ * no WebView, no cookies.
+ *
+ * Attempt durability (0.7.1's grant rule, carried to the new flow):
+ * an in-flight attempt is persisted (sealed,
+ * [GooglePendingNativeAuthStore]) the moment it exists, owned by
+ * this manager rather than the screen — the browser leg runs
+ * OUTSIDE the app, and the app may be killed while the owner is
+ * approving; a fresh manager restores a live attempt and still
+ * collects its return, and an expired one is cleared, never
+ * collected.
+ *
+ * Totality discipline, same as the cookie manager: no throw
+ * escapes any stage. The flow's outcomes (granted, declined,
+ * mismatched return, dead code) are protocol answers, not errors,
+ * and each lands on its own honest [GoogleSignInPhase].
+ * Diagnostics record stages and presence/absence only — a token
+ * value, code, or verifier is never written anywhere but the
+ * sealed stores.
  *
  * Threading: [currentBearer] is BLOCKING (it may perform a refresh
  * on the caller's thread) — call it from an IO dispatcher, exactly
  * like the core client's calls. Everything else is suspend or
  * state-flow reads.
- *
- * Grant durability (0.7.1): an issued device grant is persisted
- * (sealed, [GooglePendingGrantStore]) the moment it exists, owned
- * by this manager rather than the sign-in screen or the poll job.
- * Leaving the app — even process death — no longer orphans it: a
- * new manager restores a live grant in `init` and resumes polling
- * it, an expired one is cleared with the plain expired ending,
- * and a new grant is issued only on an explicit start with none
- * live (or after the live one resolves).
  */
 class GoogleSessionManager(
     private val store: GoogleTokenStore,
-    private val auth: GoogleDeviceAuth,
+    private val auth: GoogleNativeAuth,
     private val client: YoutubeiClient,
     private val scope: CoroutineScope,
-    private val pendingGrantStore: GooglePendingGrantStore? = null,
+    private val redirectUri: String,
+    private val pendingAttemptStore: GooglePendingNativeAuthStore? = null,
     private val signInDiagnostics: SignInDiagnostics = SignInDiagnostics(),
     private val nowMs: () -> Long = { System.currentTimeMillis() },
 ) {
@@ -147,28 +168,46 @@ class GoogleSessionManager(
     private var rejectionRetryAtMs: Long = 0L
 
     /**
-     * The issued-but-unapproved device grant (0.7.1), mirrored in
-     * [pendingGrantStore] the moment it exists. This record — not
-     * the screen, not the poll job — is the grant's owner: the
-     * screen only renders it, the poll loop only serves it, and a
-     * fresh manager after process death re-adopts it from the
-     * sealed store and resumes polling it.
+     * The in-flight native sign-in attempt (0.8.8), mirrored in
+     * [pendingAttemptStore] the moment it exists. This record —
+     * not the screen — is the attempt's owner: the screen only
+     * renders its phase and launches its page, and a fresh manager
+     * after process death re-adopts it from the sealed store so
+     * the browser's return still lands.
      */
     @Volatile
-    private var pendingGrant: StoredPendingGrant? = null
-
-    /**
-     * "Check now" wake-ups for the poll loop: a conflated signal the
-     * waiting screen's button and [checkNow] fire so a parked poll
-     * runs immediately against the CURRENT grant (never a new one).
-     */
-    private val checkNowSignal = Channel<Unit>(Channel.CONFLATED)
+    private var pendingAttempt: StoredPendingNativeAuth? = null
 
     private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))
     val uiState: StateFlow<SessionUiState> = _uiState.asStateFlow()
 
     private val _phase = MutableStateFlow<GoogleSignInPhase>(GoogleSignInPhase.Idle)
     val phase: StateFlow<GoogleSignInPhase> = _phase.asStateFlow()
+
+    /**
+     * The browser launch for the standing attempt, published once
+     * per attempt (see [NativeSignInLaunch]). Null when no attempt
+     * is waiting on a launch — before the first tap, after the
+     * return lands, and after a cancel.
+     */
+    private val _authorizationLaunch =
+        MutableStateFlow<NativeSignInLaunch?>(null)
+    val authorizationLaunch: StateFlow<NativeSignInLaunch?> =
+        _authorizationLaunch.asStateFlow()
+
+    /**
+     * Whether the standing attempt is DURABLE — sealed in
+     * [pendingAttemptStore], so it survives the app being killed
+     * in the browser — or lives only in this process because its
+     * save failed (the persist caveat, round 11's pin). True when
+     * no attempt stands: the caveat describes a standing attempt,
+     * and with none standing there is nothing to lose. The screen
+     * reads this to say, honestly and only when it is true, that
+     * an attempt won't survive the app closing.
+     */
+    private val _pendingAttemptDurability = MutableStateFlow(true)
+    val pendingAttemptDurability: StateFlow<Boolean> =
+        _pendingAttemptDurability.asStateFlow()
 
     @Volatile
     private var signInJob: Job? = null
@@ -193,81 +232,57 @@ class GoogleSessionManager(
     }
 
     /**
-     * Publishes [phase] only while [epoch] is still the flow's —
-     * check and publish are ONE locked step (bug sweep round 9).
-     * The branches that use this used to epoch-check and then
-     * publish as two adjacent statements: a cancel/sign-out
-     * landing between them (its bump takes this same lock) had
-     * its ending overwritten by the stale publication anyway —
-     * the check-then-apply shape rounds 7–8 closed in
-     * refreshIdentity and adopt, still open in the poll loop's
-     * non-clearing tails and runSignIn's failure tails.
+     * The terminal step for an attempt that ends WITHOUT a session
+     * (declined / mismatched / dead code): epoch check, the
+     * guarded clear, and the phase publication are ONE locked step
+     * (round 9, carried from the poll loop's endings). The clear
+     * fires only while the standing attempt is still this
+     * attempt — a cancel + fresh start landing in the window must
+     * not lose the NEWER attempt's record to this stale tail.
      */
-    private fun publishPhaseIfCurrent(epoch: Long, phase: GoogleSignInPhase) {
-        synchronized(lock) {
-            if (epoch == flowEpoch) {
-                _phase.value = phase
-            }
-        }
-    }
-
-    /**
-     * The terminal step for a poll of [grant] that ends WITHOUT a
-     * session (expired / denied): epoch check, the guarded clear,
-     * and the phase publication are ONE locked step (round 9).
-     * Round 8 gave the Granted branch a deviceCode-guarded clear,
-     * but these branches still epoch-checked, cleared, and
-     * published as separate statements — a cancel + fresh start
-     * landing in the window let the stale tail's clear wipe the
-     * NEWER grant's record and its Failed publication overwrite
-     * the new flow's awaiting state. The clear fires only while
-     * the standing grant is still this poll's grant, exactly as
-     * in the Granted and SlowDown branches.
-     */
-    private fun finishPollWithFailure(epoch: Long, grant: StoredPendingGrant, reason: String) {
+    private fun finishAttemptWithFailure(
+        epoch: Long,
+        attempt: StoredPendingNativeAuth,
+        reason: String,
+    ) {
         synchronized(lock) {
             if (epoch != flowEpoch) return
-            if (pendingGrant?.deviceCode == grant.deviceCode) {
-                clearPendingGrant()
+            if (pendingAttempt?.state == attempt.state) {
+                clearPendingAttempt()
             }
+            _authorizationLaunch.value = null
             _phase.value = GoogleSignInPhase.Failed(reason)
         }
     }
 
     /**
-     * Makes [grant] the standing pending grant — the in-memory
+     * Makes [attempt] the standing pending attempt — the in-memory
      * assignment AND the sealed-store save — only while [epoch]
-     * is still the flow's, as ONE locked step (bug sweep round
-     * 10). Round 7 moved runSignIn's epoch check to before the
-     * persist, but check and persist remained two statements: a
-     * cancel/sign-out landing between them (its bump takes this
-     * same lock; its clear had nothing to wipe yet) was undone by
-     * the assignment and save that followed anyway — the
-     * cancelled code stood again in memory and in the sealed
-     * store, and while the locked publish below correctly refused
-     * to show it, the NEXT startSignIn (via [livePendingGrant])
-     * or a fresh manager after process death (via
-     * [restorePendingGrant]) revived the flow the owner had
-     * cancelled, breaking cancelSignIn's "a cancelled code is
-     * never resumed" contract one step later. Inside the lock the
-     * ending is atomic against the bump, as with every other
-     * apply in this file. Returns false when the epoch has moved
-     * (nothing was assigned or saved). A save failure is not a
-     * refusal: the attempt still works while this process lives;
-     * only the survive-a-restart guarantee is lost, and the
-     * diagnostics say so rather than hiding it.
+     * is still the flow's, as ONE locked step (round 10, carried
+     * from the grant discipline): check-then-persist as separate
+     * statements once let a cancel landing between them be undone
+     * by the persist that followed. Returns false when the epoch
+     * has moved (nothing was assigned or saved). A save failure is
+     * not a refusal: the attempt still completes while this
+     * process lives; only the survive-a-restart guarantee is lost,
+     * and the diagnostics say so rather than hiding it.
      */
-    private fun persistPendingGrantIfCurrent(epoch: Long, grant: StoredPendingGrant): Boolean {
+    private fun persistPendingAttemptIfCurrent(
+        epoch: Long,
+        attempt: StoredPendingNativeAuth,
+    ): Boolean {
         synchronized(lock) {
             if (epoch != flowEpoch) return false
-            pendingGrant = grant
+            pendingAttempt = attempt
             try {
-                pendingGrantStore?.save(grant)
+                pendingAttemptStore?.save(attempt)
+                _pendingAttemptDurability.value = true
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
+                _pendingAttemptDurability.value = false
                 signInDiagnostics.log(
                     "google-sign-in",
-                    "the sign-in code couldn't be saved for resume " +
+                    "the sign-in attempt couldn't be saved for resume " +
                         "(${t.javaClass.simpleName}) — this attempt still " +
                         "works while the app stays open",
                 )
@@ -275,17 +290,6 @@ class GoogleSessionManager(
             return true
         }
     }
-
-    /**
-     * The poll loop's Granted and SlowDown branches and
-     * [livePendingGrant]'s expired-candidate clear apply the same
-     * discipline inline (bug sweep round 10): their deviceCode
-     * guard and the clear/write-back they protect are one
-     * `synchronized(lock)` step at each site, never a read followed
-     * by an unconditional apply — a cancel + fresh start landing
-     * between the two statements would otherwise let a stale tail
-     * wipe or replace the NEWER grant's record.
-     */
 
     init {
         // Totality (H3): a store whose read fails at the very first
@@ -311,637 +315,319 @@ class GoogleSessionManager(
                 health = SessionHealth.UNKNOWN,
             )
         }
-        restorePendingGrant()
+        restorePendingAttempt()
     }
 
     /**
-     * Re-adopts a persisted pending grant after a restart (0.7.1):
-     * a LIVE grant is republished and its polling resumes on this
-     * manager's scope — the owner comes back to the same code he
-     * left with, and an approval he already gave is collected. An
-     * EXPIRED grant is cleared and lands on the plain expired
-     * ending, so no zombie polling ever runs. When a session is
-     * already stored, a leftover grant is simply stale and wiped.
+     * Re-adopts a persisted pending attempt after a restart
+     * (0.8.8): the browser leg runs outside the app, so the owner
+     * may well approve while no process of ours is alive — a LIVE
+     * attempt is republished with its launch rebuilt, and its
+     * return is still collectable. An EXPIRED attempt is cleared
+     * quietly (no failure card for a browser visit the owner
+     * abandoned while the app was closed — a deliberate divergence
+     * from the device flow's restored-code ending, whose shown
+     * code the owner might still have been typing). When a session
+     * is already stored, a leftover attempt is simply stale and
+     * wiped.
      */
-    private fun restorePendingGrant() {
+    private fun restorePendingAttempt() {
         val persisted = try {
-            pendingGrantStore?.load()
+            pendingAttemptStore?.load()
         } catch (t: Throwable) {
             signInDiagnostics.log(
                 "google-sign-in",
-                "the saved sign-in code couldn't be read (${t.javaClass.simpleName}) — ignoring it",
+                "the saved sign-in attempt couldn't be read (${t.javaClass.simpleName}) — ignoring it",
             )
             null
         } ?: return
         if (stored != null) {
-            clearPendingGrant()
+            clearPendingAttempt()
             return
         }
         if (!persisted.isLiveAt(nowMs())) {
-            clearPendingGrant()
+            clearPendingAttempt()
             signInDiagnostics.log(
                 "google-sign-in",
-                "a saved sign-in code had expired while the app was away — cleared",
+                "a saved sign-in attempt had expired while the app was away — cleared",
             )
-            _phase.value = GoogleSignInPhase.Failed(EXPIRED_REASON)
             return
         }
-        pendingGrant = persisted
+        pendingAttempt = persisted
+        // It was read back from the sealed store: durable by
+        // definition — the caveat cannot apply to it.
+        _pendingAttemptDurability.value = true
         signInDiagnostics.log(
             "google-sign-in",
-            "a sign-in code from before the restart is still live — resuming its check",
+            "a sign-in attempt from before the restart is still live — its return is being watched for",
         )
-        publishAwaiting(persisted)
-        signInJob = scope.launch { pollPendingGrant() }
+        publishAwaitingReturn(persisted)
     }
 
     fun hasStoredSession(): Boolean = stored != null
 
     // ------------------------------------------------------------------
-    // Sign-in: the device-code flow
+    // Sign-in: the native authorization-code flow
     // ------------------------------------------------------------------
 
     /**
      * Starts a sign-in attempt — or RESUMES the one already live.
-     * A grant is issued only when no live grant exists: while a
-     * persisted grant is unexpired, this republishes its code and
-     * makes sure its polling is running, so re-entering the screen
-     * (or tapping again after a failed check) can never burn the
-     * code the owner may already be approving. Runs on the
-     * manager's scope; the screen only renders [phase] + [uiState].
+     * A new attempt is built only when no live attempt exists:
+     * while a persisted attempt is unexpired, this republishes its
+     * waiting state and its launch, so re-entering the screen can
+     * never orphan the browser page the owner may already be
+     * approving on. Building the attempt is local work (state +
+     * PKCE verifier + URL) — nothing is asked of Google until the
+     * owner approves on Google's page.
      */
     fun startSignIn() {
         if (_uiState.value.signedIn) return
-        // A build with no client identity set up (0.8.6) cannot
-        // ask Google for a code at all: end the attempt here with
-        // the honest reason instead of minting a grant under a
-        // borrowed pair or failing opaquely at the wire.
-        if (auth.identity == null) {
+        // A build with no Android client ID (0.8.8) cannot sign in
+        // at all: end the attempt here with the honest reason
+        // instead of opening a browser page that could only fail.
+        if (!auth.isConfigured) {
             _phase.value = GoogleSignInPhase.Failed(NOT_CONFIGURED_REASON)
             signInDiagnostics.log(
                 "google-sign-in",
-                "sign-in was requested, but no sign-in key is set up " +
-                    "in this build — nothing was asked of Google",
+                "sign-in was requested, but this build carries no " +
+                    "Android client registration — nothing was asked of Google",
             )
             return
         }
-        val live = livePendingGrant()
+        val live = livePendingAttempt()
         if (live != null) {
             signInDiagnostics.log(
                 "google-sign-in",
-                "a code is already live — resuming it instead of issuing a new one",
+                "a sign-in attempt is already live — resuming it instead of starting a new one",
             )
-            publishAwaiting(live)
-            ensurePolling()
+            publishAwaitingReturn(live)
             return
         }
-        // An issuance is already in flight (a job is running but no
-        // grant exists yet): a second tap JOINS it instead of
-        // cancelling and re-issuing (0.7.2 sweep). The cancelled
-        // attempt's blocking issuance still completed at Google,
-        // minting a live grant nobody recorded or would ever poll —
-        // and a double-tap is exactly how owners tap buttons.
+        // An exchange is already in flight (a return landed and is
+        // being collected): a fresh tap JOINS the standing flow
+        // instead of minting a competing attempt (0.7.2 sweep's
+        // double-tap rule, carried over).
         if (signInJob?.isActive == true) return
-        // Issuing, not Idle (0.8.7 sweep 3): the tap shows
-        // progress while the code is being asked for.
+        val epoch = flowEpoch
+        // Issuing, not Idle: the tap shows progress while Google's
+        // page opens.
         _phase.value = GoogleSignInPhase.Issuing
-        signInJob = scope.launch {
-            runSignIn()
+        signInDiagnostics.startAttempt()
+        signInDiagnostics.log(
+            "google-sign-in",
+            "native sign-in started — opening Google's page",
+        )
+        val request = auth.beginAuthorization(redirectUri)
+        if (request == null) {
+            // isConfigured said a client ID exists; begin refused
+            // anyway (a blank-after-trim ID). The same honest end.
+            _phase.value = GoogleSignInPhase.Failed(NOT_CONFIGURED_REASON)
+            return
         }
+        val now = nowMs()
+        val attempt = StoredPendingNativeAuth(
+            state = request.state,
+            codeVerifier = request.codeVerifier,
+            clientId = auth.clientId.orEmpty(),
+            redirectUri = redirectUri,
+            issuedAtEpochMs = now,
+            expiresAtEpochMs = now + ATTEMPT_TTL_MS,
+        )
+        if (!persistPendingAttemptIfCurrent(epoch, attempt)) {
+            // A cancel/sign-out raced the build and won: its ending
+            // already published; this attempt was never persisted.
+            return
+        }
+        publishAwaitingReturn(attempt)
     }
 
     /**
-     * Polls the CURRENT persisted grant once, right now — the
-     * waiting screen's "I've approved — check now" button, for
-     * devices that throttle background work. Never issues a grant:
-     * with no live grant this is a no-op, and when the poll loop
-     * is parked it simply wakes it early.
+     * Collects the browser's return (0.8.8): the redirect activity
+     * hands the full returned URI here. Validation is the core
+     * client's — destination, error answer, and above all the
+     * state binding, checked against the SEALED attempt, so a
+     * return this app didn't start (or one replayed after the
+     * attempt resolved) collects nothing. A granted code is
+     * exchanged on the manager's scope and adopted through the
+     * same tail every issuance path uses.
      */
-    fun checkNow() {
+    fun completeSignIn(returnedUri: String) {
         if (_uiState.value.signedIn) return
-        val live = livePendingGrant() ?: return
-        publishAwaiting(live)
-        val job = signInJob
-        if (job != null && job.isActive) {
-            checkNowSignal.trySend(Unit)
-        } else {
-            ensurePolling()
+        val attempt = livePendingAttempt()
+        if (attempt == null) {
+            signInDiagnostics.log(
+                "google-sign-in",
+                "a sign-in return arrived with no live attempt behind it — ignored, nothing collected",
+            )
+            return
+        }
+        val epoch = flowEpoch
+        val parsed = auth.parseRedirect(
+            returnedUri, attempt.redirectUri, attempt.state,
+        )
+        when (parsed) {
+            RedirectResult.Denied -> {
+                signInDiagnostics.log(
+                    "google-sign-in",
+                    "the owner declined the sign-in on Google's page — nothing was stored",
+                )
+                finishAttemptWithFailure(epoch, attempt, DENIED_REASON)
+            }
+            is RedirectResult.Failed -> {
+                signInDiagnostics.log(
+                    "google-sign-in",
+                    "the sign-in return was refused (${parsed.detail}) — nothing was stored",
+                )
+                finishAttemptWithFailure(
+                    epoch,
+                    attempt,
+                    if (parsed.detail == "state_mismatch") {
+                        STATE_MISMATCH_REASON
+                    } else {
+                        RETURN_FAILED_REASON
+                    },
+                )
+            }
+            is RedirectResult.Code -> {
+                signInJob = scope.launch {
+                    val exchanged = withContext(Dispatchers.IO) {
+                        try {
+                            auth.exchangeCode(
+                                parsed.code,
+                                attempt.codeVerifier,
+                                attempt.redirectUri,
+                            )
+                        } catch (t: Throwable) {
+                            if (t is CancellationException) throw t
+                            CodeExchangeResult.Failed(
+                                "transport: ${t.javaClass.simpleName}"
+                            )
+                        }
+                    }
+                    when (exchanged) {
+                        is CodeExchangeResult.Granted -> {
+                            // The attempt is spent: clear it under
+                            // the same state guard the failure
+                            // endings use, then adopt — adoption's
+                            // own epoch discipline decides whether
+                            // the tokens may land.
+                            synchronized(lock) {
+                                if (pendingAttempt?.state == attempt.state) {
+                                    clearPendingAttempt()
+                                }
+                                _authorizationLaunch.value = null
+                            }
+                            adopt(exchanged.tokens, epoch)
+                        }
+                        is CodeExchangeResult.Failed -> {
+                            signInDiagnostics.log(
+                                "google-sign-in",
+                                "finishing the sign-in failed (${exchanged.detail}) — nothing was stored",
+                            )
+                            finishAttemptWithFailure(
+                                epoch, attempt, EXCHANGE_FAILED_REASON,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
     /**
-     * Stops a running attempt AND abandons its grant: the
-     * persisted record is wiped, so a cancelled code is never
-     * resumed later. Nothing was or will be stored for it.
+     * Stops a running attempt AND abandons it: the persisted
+     * record is wiped, so a cancelled attempt's return is never
+     * collected later. Nothing was or will be stored for it.
      */
     fun cancelSignIn() {
         bumpFlowEpoch()
         signInJob?.cancel()
         signInJob = null
-        clearPendingGrant()
+        clearPendingAttempt()
+        _authorizationLaunch.value = null
         if (!_uiState.value.signedIn) {
             _phase.value = GoogleSignInPhase.Idle
         }
     }
 
-    /** The live pending grant, from memory or the sealed store. */
-    private fun livePendingGrant(): StoredPendingGrant? {
-        val inMemory = pendingGrant
+    /** The live pending attempt, from memory or the sealed store. */
+    private fun livePendingAttempt(): StoredPendingNativeAuth? {
+        val inMemory = pendingAttempt
         val candidate = inMemory ?: try {
-            pendingGrantStore?.load()
+            pendingAttemptStore?.load()
         } catch (t: Throwable) {
             null
         }
         if (candidate == null) return null
         if (!candidate.isLiveAt(nowMs())) {
             // The expired clear fires only while the standing
-            // grant is still THIS candidate (round 10): the read
-            // above and an unconditional clear were two statements,
-            // and a fresh persist landing between them would have
-            // its newer record wiped by this stale expiry.
+            // attempt is still THIS candidate (round 10's rule,
+            // carried over): a fresh persist landing between the
+            // read and the clear must not lose its newer record.
             synchronized(lock) {
-                val standing = pendingGrant ?: try {
-                    pendingGrantStore?.load()
+                val standing = pendingAttempt ?: try {
+                    pendingAttemptStore?.load()
                 } catch (t: Throwable) {
                     null
                 }
-                if (standing?.deviceCode == candidate.deviceCode) {
-                    clearPendingGrant()
+                if (standing?.state == candidate.state) {
+                    clearPendingAttempt()
+                }
+                if (pendingAttempt == null) {
+                    _authorizationLaunch.value = null
                 }
             }
             signInDiagnostics.log(
                 "google-sign-in",
-                "the saved sign-in code has expired — cleared",
+                "the saved sign-in attempt has expired — cleared",
             )
             return null
         }
         if (inMemory == null) {
             // Adopt the store-loaded candidate only while no
-            // grant has been assigned since the read (round 10):
-            // overwriting a newer in-memory grant with this older
-            // candidate would republish and poll a superseded code.
-            // And return the STANDING grant, not the candidate
-            // (round 11): a fresh persist landing between the read
-            // and this lock leaves the memory correct under the
-            // round-10 guard, but the old unconditional return
-            // handed the caller the stale candidate anyway — the
-            // screen published its code while the poll loop ran
-            // the newer grant, so an approval of the shown code
-            // would never have been collected.
+            // attempt has been assigned since the read, and return
+            // the STANDING attempt (rounds 10–11, carried over).
             val standing = synchronized(lock) {
-                if (pendingGrant == null) pendingGrant = candidate
-                pendingGrant
+                if (pendingAttempt == null) pendingAttempt = candidate
+                pendingAttempt
             }
             return standing ?: candidate
         }
         return candidate
     }
 
-    /** Starts the poll loop for [pendingGrant] unless one is running. */
-    private fun ensurePolling() {
-        val job = signInJob
-        if (job != null && job.isActive) return
-        signInJob = scope.launch { pollPendingGrant() }
-    }
-
-    /** Publishes the waiting state for [grant] — the screen renders this. */
-    private fun publishAwaiting(grant: StoredPendingGrant) {
-        _phase.value = GoogleSignInPhase.AwaitingApproval(
-            userCode = grant.userCode,
-            verificationUrl = grant.verificationUrl,
-            expiresAtEpochMs = grant.expiresAtEpochMs,
+    /** Publishes the waiting state + browser launch for [attempt]. */
+    private fun publishAwaitingReturn(attempt: StoredPendingNativeAuth) {
+        _phase.value = GoogleSignInPhase.AwaitingReturn(
+            expiresAtEpochMs = attempt.expiresAtEpochMs,
+        )
+        _authorizationLaunch.value = NativeSignInLaunch(
+            url = auth.authorizationUrl(
+                attempt.clientId,
+                attempt.redirectUri,
+                attempt.state,
+                attempt.codeVerifier,
+            ),
+            attemptId = flowEpoch,
         )
     }
 
     /**
-     * Drops the pending grant everywhere (memory + sealed store).
-     * Called at every terminal outcome — adopted, declined,
-     * expired, cancelled, signed out — so a resolved grant can
-     * never be polled or resumed again.
+     * Drops the pending attempt everywhere (memory + sealed
+     * store). Called at every terminal outcome — adopted,
+     * declined, expired, cancelled, signed out — so a resolved
+     * attempt can never be collected or resumed again.
      */
-    private fun clearPendingGrant() {
-        pendingGrant = null
+    private fun clearPendingAttempt() {
+        pendingAttempt = null
+        _pendingAttemptDurability.value = true
         try {
-            pendingGrantStore?.wipe()
+            pendingAttemptStore?.wipe()
         } catch (t: Throwable) {
             signInDiagnostics.log(
                 "google-sign-in",
-                "the saved sign-in code couldn't be cleared (${t.javaClass.simpleName})",
+                "the saved sign-in attempt couldn't be cleared (${t.javaClass.simpleName})",
             )
-        }
-    }
-
-    /**
-     * Issues a NEW grant (only reached when none is live),
-     * persists it BEFORE the first poll — the persistence is what
-     * lets the attempt survive the owner leaving for the browser —
-     * and hands it to the poll loop.
-     */
-    private suspend fun runSignIn() {
-        val epoch = flowEpoch
-        // The issuing client's class, read now (0.8.7 sweep 1):
-        // the grant this run persists is stamped with the client
-        // that minted the code, never with whatever identity is
-        // current by the time the network answers.
-        val issuingKind = auth.identity?.kind?.label
-        signInDiagnostics.startAttempt()
-        signInDiagnostics.log("google-sign-in", "device-code flow started")
-        try {
-            val issued = withContext(Dispatchers.IO) {
-                try {
-                    auth.requestDeviceCode()
-                } catch (t: Throwable) {
-                    if (t is CancellationException) throw t
-                    DeviceCodeResult.Failed("transport: ${t.javaClass.simpleName}")
-                }
-            }
-            val code = when (issued) {
-                is DeviceCodeResult.Failed -> {
-                    signInDiagnostics.log(
-                        "google-sign-in",
-                        "Google refused to issue a code (${issued.detail})",
-                    )
-                    // A cancel/sign-out that landed while the code
-                    // was being issued already published the ending
-                    // it wanted (round 7): this stale refusal must
-                    // not overwrite it. The check and the publish
-                    // are one locked step (round 9) — as two
-                    // statements, a cancel landing between them was
-                    // overwritten by this Failed ending anyway.
-                    publishPhaseIfCurrent(
-                        epoch,
-                        GoogleSignInPhase.Failed(
-                            "Google couldn't start the sign-in (${issued.detail}). " +
-                                "Nothing was stored. Check your connection and try again."
-                        ),
-                    )
-                    return
-                }
-                is DeviceCodeResult.Issued -> issued.code
-            }
-            // The grant is persisted only inside a locked,
-            // epoch-checked step (rounds 7 + 10): round 7 moved
-            // the epoch check ahead of the persist, but as two
-            // statements a cancel/sign-out landing between the
-            // check and the assignment/save below still undid
-            // itself — the cancelled code stood again in memory
-            // and in the sealed store, and a later startSignIn or
-            // a fresh manager after process death revived it (see
-            // [persistPendingGrantIfCurrent]). The check and the
-            // persist are now one locked step against the bump,
-            // like every other apply in this file.
-            val now = nowMs()
-            val grant = StoredPendingGrant(
-                deviceCode = code.deviceCode,
-                userCode = code.userCode,
-                verificationUrl = code.verificationUrl,
-                issuedAtEpochMs = now,
-                expiresAtEpochMs = now + code.expiresInSeconds * 1000L,
-                intervalSeconds = code.intervalSeconds,
-                clientKind = issuingKind,
-            )
-            if (!persistPendingGrantIfCurrent(epoch, grant)) {
-                signInDiagnostics.log(
-                    "google-sign-in",
-                    "the sign-in was ended while its code was being issued — nothing was stored",
-                )
-                return
-            }
-            signInDiagnostics.log(
-                "google-sign-in",
-                "code issued — polling every ${code.intervalSeconds}s, " +
-                    "expires in ${code.expiresInSeconds}s",
-            )
-            // A cancel/sign-out that landed while the code was
-            // being issued (or saved) ends this attempt silently:
-            // the grant record was already wiped by that path, and
-            // publishing its code now would resurrect a flow the
-            // owner just abandoned. (Death in the same window is
-            // harmless by ordering: the code is only ever PUBLISHED
-            // after the persist attempt, so a code the owner never
-            // saw can never be approved — it simply expires at
-            // Google, unrecorded.)
-            // The re-check and the publication are one locked
-            // step (round 9), for the same reason as the failure
-            // tail above: a cancel landing between a bare check
-            // and this publish had its Idle ending overwritten by
-            // the awaiting state of a grant it had just wiped —
-            // a dead code on screen, with its poll never running
-            // (pollPendingGrant below reads the wiped grant and
-            // returns). Inside the lock the ending is atomic
-            // against the bump.
-            synchronized(lock) {
-                if (epoch != flowEpoch) return
-                publishAwaiting(grant)
-            }
-            pollPendingGrant()
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            signInDiagnostics.log(
-                "google-sign-in",
-                "the attempt failed unexpectedly (${t.javaClass.simpleName}) — nothing was stored",
-            )
-            publishPhaseIfCurrent(epoch, GoogleSignInPhase.Failed(UNEXPECTED_REASON))
-        }
-    }
-
-    /**
-     * The poll loop for the CURRENT [pendingGrant], owned by the
-     * manager's (app) scope — never by the screen. It runs while
-     * the app is backgrounded, and a fresh manager resumes it from
-     * the persisted grant after process death (see
-     * [restorePendingGrant]). Each terminal outcome clears the
-     * persisted grant before landing; a mere transport failure
-     * keeps it, so checking can resume against the same code.
-     */
-    private suspend fun pollPendingGrant() {
-        val grant = pendingGrant ?: return
-        val epoch = flowEpoch
-        // A check-now signal is spent on the watch it was tapped
-        // in (0.8.7 sweep 1): the conflated channel otherwise
-        // carried a leftover tap — from an earlier grant, or one
-        // delivered while no watch was running — into this loop's
-        // first park, polling immediately against the interval
-        // (and any slow_down) Google set.
-        while (checkNowSignal.tryReceive().isSuccess) {
-            // Draining stale signals only; the loop below re-arms.
-        }
-        try {
-            var intervalSeconds =
-                grant.intervalSeconds.coerceIn(1L, MAX_POLL_INTERVAL_SECONDS)
-            // Transient-failure state (0.8.1 hotfix): consecutive
-            // polls that got NO protocol answer (transport / 5xx),
-            // the backoff the next park uses instead of the plain
-            // interval, and whether the waiting screen is already
-            // showing the "connection trouble" note. Any definitive
-            // answer from Google resets all three.
-            var consecutiveTransients = 0
-            var transientBackoffMs: Long? = null
-            var troubleShown = false
-            while (true) {
-                // Park until the next due poll — or wake at once on
-                // a "check now" signal, coalesced by the channel.
-                // The park is capped at the grant's remaining life
-                // (0.7.2 sweep): with a long poll interval, parking
-                // the full interval would sleep straight past the
-                // expiry and leave a dead code on screen for hours.
-                // While riding out transient failures the park is
-                // the backoff instead of the interval (0.8.1).
-                val remainingMs = (grant.expiresAtEpochMs - nowMs()).coerceAtLeast(0L)
-                withTimeoutOrNull(
-                    minOf(transientBackoffMs ?: (intervalSeconds * 1000L), remainingMs)
-                ) {
-                    checkNowSignal.receive()
-                }
-                if (nowMs() >= grant.expiresAtEpochMs) {
-                    signInDiagnostics.log("google-sign-in", "the code expired unapproved")
-                    // Terminal outcomes apply only while this loop
-                    // still owns the flow — as ONE locked step
-                    // (round 7's rule, round 9's shape): after a
-                    // cancel/sign-out, clearing could wipe a NEWER
-                    // grant and the phase overwrite would undo the
-                    // ending that path already published, and a
-                    // check-then-clear as separate statements left
-                    // exactly that window open between them.
-                    finishPollWithFailure(epoch, grant, EXPIRED_REASON)
-                    return
-                }
-                val poll = withContext(Dispatchers.IO) {
-                    try {
-                        auth.pollForToken(grant.deviceCode)
-                    } catch (t: Throwable) {
-                        if (t is CancellationException) throw t
-                        // The auth client maps its own failures to
-                        // values; a throw escaping it is a transport
-                        // event by shape — transient, like the
-                        // client's own mapping (0.8.1 hotfix).
-                        TokenPollResult.Transient("transport: ${t.javaClass.simpleName}")
-                    }
-                }
-                when (poll) {
-                    is TokenPollResult.Granted -> {
-                        signInDiagnostics.log(
-                            "google-sign-in",
-                            "approved — token granted (expires in " +
-                                "${poll.tokens.expiresInSeconds}s), adopting",
-                        )
-                        // The grant is spent the moment Google
-                        // issues tokens; clear it before adopting
-                        // so no path can ever poll it again. Death
-                        // inside the adoption that follows loses
-                        // the approval (the owner signs in again) —
-                        // the alternative ordering resurrects a
-                        // spent grant after restart, which can be
-                        // polled against an invalid_grant answer
-                        // forever; a clean re-sign-in is the honest
-                        // failure, a zombie grant is not.
-                        // The clear is guarded by the grant's own
-                        // identity (round 8 — the SlowDown branch's
-                        // discipline, which this branch alone
-                        // lacked): every other terminal branch
-                        // epoch-checks before clearing, but this one
-                        // cleared unconditionally ahead of adopt()'s
-                        // check, so a cancel + fresh start landing
-                        // in this tail would have the SPENT grant's
-                        // clear wipe the NEWER grant's record —
-                        // silently breaking the new flow's
-                        // resume-after-restart guarantee. Clearing
-                        // only while the standing grant is still
-                        // THIS one keeps the spent-grant discipline
-                        // and touches nothing newer.
-                        // The guarded clear is one locked step
-                        // (round 10): round 8's shape read the
-                        // standing grant's deviceCode and cleared
-                        // as a second statement, so a cancel +
-                        // fresh start landing between them would
-                        // have this spent grant's clear wipe the
-                        // NEWER grant's record after all.
-                        synchronized(lock) {
-                            if (pendingGrant?.deviceCode == grant.deviceCode) {
-                                clearPendingGrant()
-                            }
-                        }
-                        adopt(poll.tokens, epoch)
-                        return
-                    }
-                    TokenPollResult.Pending -> {
-                        signInDiagnostics.log("google-sign-in", "poll: still pending")
-                        // A definitive answer: the connection works,
-                        // so any transient run and its note end here.
-                        consecutiveTransients = 0
-                        transientBackoffMs = null
-                        if (troubleShown) {
-                            troubleShown = false
-                            publishPhaseIfCurrent(
-                                epoch,
-                                GoogleSignInPhase.AwaitingApproval(
-                                    grant.userCode,
-                                    grant.verificationUrl,
-                                    grant.expiresAtEpochMs,
-                                ),
-                            )
-                        }
-                    }
-                    TokenPollResult.SlowDown -> {
-                        // Also a definitive answer (Google replied):
-                        // the transient run ends here too.
-                        consecutiveTransients = 0
-                        transientBackoffMs = null
-                        if (troubleShown) {
-                            troubleShown = false
-                            publishPhaseIfCurrent(
-                                epoch,
-                                GoogleSignInPhase.AwaitingApproval(
-                                    grant.userCode,
-                                    grant.verificationUrl,
-                                    grant.expiresAtEpochMs,
-                                ),
-                            )
-                        }
-                        intervalSeconds =
-                            (intervalSeconds + SLOW_DOWN_INCREMENT_SECONDS)
-                                .coerceAtMost(MAX_POLL_INTERVAL_SECONDS)
-                        signInDiagnostics.log(
-                            "google-sign-in",
-                            "poll: Google asked to slow down — interval now ${intervalSeconds}s",
-                        )
-                        // The longer interval is persisted with the
-                        // grant (0.7.2 sweep): a restart mid-slow-down
-                        // used to resume at the ORIGINAL cadence —
-                        // the one Google had just refused — and earn
-                        // another slow_down (or worse) on its first
-                        // poll.
-                        val slowed = grant.copy(intervalSeconds = intervalSeconds)
-                        // The guarded write-back is one locked step
-                        // (round 10), for the Granted branch's reason
-                        // above: check, assign, and save as separate
-                        // statements left a window where a cancel +
-                        // fresh start's newer grant could be replaced
-                        // by this stale slowed copy.
-                        synchronized(lock) {
-                            if (pendingGrant?.deviceCode == grant.deviceCode) {
-                                pendingGrant = slowed
-                                try {
-                                    pendingGrantStore?.save(slowed)
-                                } catch (t: Throwable) {
-                                    if (t is CancellationException) throw t
-                                    signInDiagnostics.log(
-                                        "google-sign-in",
-                                        "the slower poll interval couldn't be saved " +
-                                            "(${t.javaClass.simpleName}) — this attempt still uses it",
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    TokenPollResult.Denied -> {
-                        signInDiagnostics.log("google-sign-in", "poll: declined by the owner")
-                        finishPollWithFailure(epoch, grant, DENIED_REASON)
-                        return
-                    }
-                    TokenPollResult.Expired -> {
-                        signInDiagnostics.log("google-sign-in", "poll: the code expired")
-                        finishPollWithFailure(epoch, grant, EXPIRED_REASON)
-                        return
-                    }
-                    TokenPollResult.InvalidGrant -> {
-                        // Terminal like Expired (perfection pass):
-                        // Google says this code no longer stands —
-                        // keeping it would park the owner on a
-                        // zombie code whose failure copy claims it
-                        // "is still good until it expires".
-                        signInDiagnostics.log(
-                            "google-sign-in",
-                            "poll: the code is no longer valid at Google",
-                        )
-                        finishPollWithFailure(epoch, grant, INVALID_GRANT_REASON)
-                        return
-                    }
-                    is TokenPollResult.Transient -> {
-                        // NO protocol answer arrived (0.8.1
-                        // hotfix): a DNS hiccup, a timeout, an IO
-                        // blip, a Google 5xx. The code's standing is
-                        // unchanged, so the watch does NOT end — the
-                        // loop backs off and keeps checking inside
-                        // the grant's remaining life, and the waiting
-                        // screen shows a "connection trouble" note
-                        // instead of the failure card. The owner's
-                        // first 0.8.0 attempt died here: eight clean
-                        // pending polls, one UnknownHostException,
-                        // and the old Failed mapping landed the flow
-                        // on the terminal card mid-approval-window.
-                        consecutiveTransients++
-                        if (consecutiveTransients > MAX_CONSECUTIVE_TRANSIENT_POLLS) {
-                            // The budget is spent: this is no
-                            // longer a blip. The ending is the
-                            // failure card — with the code KEPT, so
-                            // "try again" resumes this same code
-                            // rather than burning it.
-                            signInDiagnostics.log(
-                                "google-sign-in",
-                                "poll: connection still unreachable after " +
-                                    "$MAX_CONSECUTIVE_TRANSIENT_POLLS tries " +
-                                    "(${poll.detail}) — the code is kept",
-                            )
-                            publishPhaseIfCurrent(
-                                epoch,
-                                GoogleSignInPhase.Failed(TRANSPORT_EXHAUSTED_REASON),
-                            )
-                            return
-                        }
-                        transientBackoffMs =
-                            transientBackoffMs(consecutiveTransients, intervalSeconds)
-                        signInDiagnostics.log(
-                            "google-sign-in",
-                            "poll: connection trouble (${poll.detail}) — still " +
-                                "checking ($consecutiveTransients in a row, next " +
-                                "check in ${transientBackoffMs!! / 1000L}s)",
-                        )
-                        if (!troubleShown) {
-                            troubleShown = true
-                            publishPhaseIfCurrent(
-                                epoch,
-                                GoogleSignInPhase.AwaitingApproval(
-                                    grant.userCode,
-                                    grant.verificationUrl,
-                                    grant.expiresAtEpochMs,
-                                    connectionTrouble = true,
-                                ),
-                            )
-                        }
-                    }
-                    is TokenPollResult.Failed -> {
-                        // A NON-transient failure (0.8.1: transport
-                        // and 5xx outcomes are Transient now): an
-                        // answer arrived that is neither a named
-                        // state nor retryable. The code itself is
-                        // still good, so the persisted grant is
-                        // KEPT — "try again" / "check now" resume
-                        // checking this same code, and a restart
-                        // resumes it too.
-                        signInDiagnostics.log(
-                            "google-sign-in",
-                            "poll failed (${poll.detail}) — the code is kept",
-                        )
-                        publishPhaseIfCurrent(
-                            epoch,
-                            GoogleSignInPhase.Failed(
-                                "Couldn't finish checking with Google (${poll.detail}). " +
-                                    "Nothing was stored, but your code is still good " +
-                                    "until it expires — try again to keep checking for it."
-                            ),
-                        )
-                        return
-                    }
-                }
-            }
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            signInDiagnostics.log(
-                "google-sign-in",
-                "polling failed unexpectedly (${t.javaClass.simpleName}) — the code is kept",
-            )
-            publishPhaseIfCurrent(epoch, GoogleSignInPhase.Failed(UNEXPECTED_REASON))
         }
     }
 
@@ -1039,7 +725,14 @@ class GoogleSessionManager(
             // The issuing client class (0.8.6): the marker the
             // client-change gate reads at the next launch — the
             // class only, never the pair.
-            clientKind = auth.identity?.kind?.label,
+            // The issuing registration (0.8.8): the native
+            // flow's Android client — the class the gate reads,
+            // plus the client ID itself (a public identifier)
+            // so a DIFFERENT Android registration also ends the
+            // session once, cleanly, instead of failing refresh
+            // after refresh.
+            clientKind = OAuthClientKind.ANDROID.label,
+            issuingClientId = auth.clientId,
             grantedAtEpochMs = now,
             lastValidatedEpochMs = if (selected != null) now else 0L,
         )
@@ -1108,7 +801,7 @@ class GoogleSessionManager(
         )
     }
 
-    // ------------------------------------------------------------------
+
     // Token access + refresh
     // ------------------------------------------------------------------
 
@@ -1595,7 +1288,7 @@ class GoogleSessionManager(
         bumpFlowEpoch()
         signInJob?.cancel()
         signInJob = null
-        clearPendingGrant()
+        clearPendingAttempt()
         val session = synchronized(lock) {
             // Bump AGAIN at the wipe itself (round 8): the first
             // bump and this wipe are separated by the pending-grant
@@ -1686,23 +1379,77 @@ class GoogleSessionManager(
      * the sealed tokens name the old registration and cannot
      * refresh under the new one either).
      */
+
+    /**
+     * The client-change gate (0.8.6; native form 0.8.8): run once
+     * at container build (before any account state is read) and
+     * again whenever the live client identity changes. Tokens are
+     * bound to the client that issued them: a session sealed under
+     * a different registration than this build's Android client —
+     * a device-flow class (owner / shared / pre-marker), or a
+     * DIFFERENT Android client ID — can never refresh here, so it
+     * ends HERE, once, cleanly: sealed store wiped, signed-out
+     * state published with the honest reason, instead of degrading
+     * into refresh failures the owner would meet as a mystery
+     * sign-out or an error loop. The ending is LOCAL only: no
+     * revocation is attempted at Google, because revocation names
+     * the issuing client and this build may no longer hold it; the
+     * abandoned grant simply dies unused.
+     *
+     * The kind-level verdict is the core gate's
+     * ([ClientChangeGate.decide] — its matrix is pinned by core
+     * tests); this manager adds the identity compare the kind
+     * alone cannot see (0.8.7 sweep 1's B-H3 rule): an android
+     * session carries only when its recorded issuing client ID IS
+     * this build's client ID.
+     *
+     * Always logs the one diagnostics line naming the client class
+     * in use (`signin: client=android` / `client=unconfigured`) —
+     * the class only, never a value.
+     *
+     * [forceCleanResign] covers a same-class identity change a
+     * caller has already established — kept from the 0.8.6 gate
+     * for parity; the native build's identity is fixed at build
+     * time, so in practice the compare above decides.
+     */
     fun applyClientGate(forceCleanResign: Boolean = false) {
-        val buildKind = auth.identity?.kind
-        signInDiagnostics.log("signin", signInClientLine(buildKind))
+        val currentClientId = auth.clientId?.takeIf { it.isNotBlank() }
+        signInDiagnostics.log(
+            "signin",
+            signInClientLine(
+                if (currentClientId != null) {
+                    OAuthClientKind.ANDROID
+                } else {
+                    null
+                }
+            ),
+        )
         // The in-flight half of this gate is at the bottom: when
         // nothing stands and nothing is saved, the epoch moves so
-        // an issuance blocked in its network call — which has
+        // an exchange blocked in its network call — which has
         // persisted nothing yet — cannot land afterwards stamped
         // with the NEW client's class (the zombie-code shape,
-        // 0.8.7 sweep 1). A standing session or grant is handled
-        // by the branches below, and a resumed grant's poll (same
-        // class, nothing changed) is never epoch-killed here.
+        // 0.8.7 sweep 1). A standing session or attempt is handled
+        // by the branches below, and a resumed attempt's return
+        // (same registration, nothing changed) is never
+        // epoch-killed here.
         val session = synchronized(lock) { stored }
         if (session != null) {
-            val decision = if (forceCleanResign) {
-                ClientGateDecision.CLEAN_RESIGN
-            } else {
-                ClientChangeGate.decide(session.clientKind, buildKind)
+            val kindDecision = ClientChangeGate.decide(
+                session.clientKind,
+                if (currentClientId != null) {
+                    OAuthClientKind.ANDROID
+                } else {
+                    null
+                },
+            )
+            val decision = when {
+                forceCleanResign -> ClientGateDecision.CLEAN_RESIGN
+                kindDecision != ClientGateDecision.CARRY ->
+                    kindDecision
+                session.issuingClientId == currentClientId ->
+                    ClientGateDecision.CARRY
+                else -> ClientGateDecision.CLEAN_RESIGN
             }
             if (decision != ClientGateDecision.CARRY) {
                 endSessionForClientChange(
@@ -1716,30 +1463,27 @@ class GoogleSessionManager(
             }
         }
         // No session stands (or it carries): a leftover pending
-        // grant minted under another class can never be collected
-        // under this one — clear it rather than resuming a code
-        // whose polls could only fail.
-        val grant = pendingGrant
-        if (grant != null) {
-            val grantDecision = if (forceCleanResign) {
-                ClientGateDecision.CLEAN_RESIGN
-            } else {
-                ClientChangeGate.decide(grant.clientKind, buildKind)
-            }
-            if (grantDecision != ClientGateDecision.CARRY) {
-                bumpFlowEpoch()
-                signInJob?.cancel()
-                signInJob = null
-                clearPendingGrant()
-                signInDiagnostics.log(
-                    "google-sign-in",
-                    "a saved sign-in code from the previous sign-in " +
-                        "setup was cleared — it could never be " +
-                        "collected under this one",
-                )
-            }
+        // attempt minted under another registration can never be
+        // collected under this one — clear it rather than watching
+        // for a return whose exchange could only fail.
+        val attempt = pendingAttempt
+        if (attempt != null &&
+            (forceCleanResign || attempt.clientId != currentClientId)
+        ) {
+            bumpFlowEpoch()
+            signInJob?.cancel()
+            signInJob = null
+            clearPendingAttempt()
+            _authorizationLaunch.value = null
+            _phase.value = GoogleSignInPhase.Idle
+            signInDiagnostics.log(
+                "google-sign-in",
+                "a saved sign-in attempt from the previous sign-in " +
+                    "setup was cleared — it could never be " +
+                    "collected under this one",
+            )
         }
-        if (session == null && pendingGrant == null) {
+        if (session == null && pendingAttempt == null) {
             // Nothing stands and nothing is saved: anything still
             // in flight was minted under the client declaration
             // this gate just replaced — move the epoch so it can
@@ -1760,7 +1504,8 @@ class GoogleSessionManager(
         bumpFlowEpoch()
         signInJob?.cancel()
         signInJob = null
-        clearPendingGrant()
+        clearPendingAttempt()
+        _authorizationLaunch.value = null
         synchronized(lock) {
             // Atomic with the wipe, as at sign-out (round 8): work
             // that started before it sees a moved epoch, and work
@@ -1790,16 +1535,15 @@ class GoogleSessionManager(
         /** Refresh when the access token has less than this left. */
         const val REFRESH_SKEW_MS = 60_000L
 
-        /** RFC 8628: a slow_down answer adds 5 seconds to the interval. */
-        const val SLOW_DOWN_INCREMENT_SECONDS = 5L
-
         /**
-         * The poll interval's ceiling (0.8.7 sweep 1): slow_down
-         * increments accumulate on the grant and persist across
-         * restarts, so an unlucky run could park a code nearly to
-         * its expiry; the interval never grows past five minutes.
+         * How long a native sign-in attempt stays collectable:
+         * the browser leg is a minute of the owner's time, but the
+         * app may sit dead for most of it (the owner approving
+         * slowly, the phone busy) — thirty minutes matches the
+         * device flow's grant life, and past it the return's code
+         * would be dying at Google anyway.
          */
-        const val MAX_POLL_INTERVAL_SECONDS = 300L
+        const val ATTEMPT_TTL_MS = 30L * 60L * 1000L
 
         /**
          * How long a transiently failed forced refresh waits
@@ -1808,52 +1552,26 @@ class GoogleSessionManager(
          */
         const val REJECTION_RETRY_COOLDOWN_MS = 60_000L
 
-        /**
-         * The transient-poll budget (0.8.1 hotfix): at most this
-         * many CONSECUTIVE no-answer polls (transport / 5xx) are
-         * ridden out inside the approval watch before the ending
-         * is the failure card. At the 5s cadence Google issues,
-         * the backoff schedule below (5, 10, 20, 40, then 60s
-         * capped) sums to roughly 17½ minutes across 20 tries —
-         * most of a standard 30-minute grant — and the grant's
-         * own expiry usually ends the watch first, honestly.
-         */
-        const val MAX_CONSECUTIVE_TRANSIENT_POLLS = 20
-
-        /** The cap on one transient-backoff park, milliseconds. */
-        const val MAX_TRANSIENT_BACKOFF_MS = 60_000L
-
-        /**
-         * The park after the [consecutiveTransients]-th consecutive
-         * no-answer poll: the poll interval doubled per failure
-         * (interval, 2×, 4×, 8×…), capped at
-         * [MAX_TRANSIENT_BACKOFF_MS].
-         */
-        fun transientBackoffMs(consecutiveTransients: Int, intervalSeconds: Long): Long {
-            val doublings = (consecutiveTransients - 1).coerceIn(0, 6)
-            val scaled = intervalSeconds.coerceAtLeast(1L) * 1000L * (1L shl doublings)
-            return minOf(scaled, MAX_TRANSIENT_BACKOFF_MS)
-        }
-
-        const val TRANSPORT_EXHAUSTED_REASON =
-            "Checking with Google kept failing — the connection " +
-                "couldn't be reached. Nothing was stored, but your " +
-                "code is still good until it expires — try again " +
-                "to keep checking for it."
-
         const val DENIED_REASON =
-            "The sign-in was declined on Google's page, so no sign-in " +
-                "was created and nothing was stored. Start again " +
-                "whenever you're ready."
+            "You closed or declined the sign-in on Google's page, " +
+                "so no sign-in was created and nothing was stored. " +
+                "Start again whenever you're ready."
 
-        const val EXPIRED_REASON =
-            "That code expired before it was approved. " +
-                "Start again to get a fresh code."
-        // The perfection pass dropped this ending's old "a code
-        // lasts about 30 minutes" clause: the grant's real life is
-        // whatever Google issued (expires_in rides the grant and
-        // drives the waiting screen's countdown) — a hardcoded
-        // duration in the ending would lie for any other value.
+        const val STATE_MISMATCH_REASON =
+            "The answer that came back from Google doesn't match " +
+                "the sign-in this app started, so it was refused " +
+                "and nothing was stored. Start again to sign in."
+
+        const val RETURN_FAILED_REASON =
+            "Google's answer couldn't be used to finish the " +
+                "sign-in, and nothing was stored. Start again " +
+                "to sign in."
+
+        const val EXCHANGE_FAILED_REASON =
+            "Google approved the sign-in, but finishing it " +
+                "failed — the connection or Google's answer let " +
+                "it down. Nothing was stored. Start again to " +
+                "sign in."
 
         const val STORE_REASON =
             "Google confirmed your account, but the app couldn't save " +
@@ -1871,10 +1589,10 @@ class GoogleSessionManager(
 
         /**
          * The client-change gate's landing copy (0.8.6): the
-         * session ended because the sign-in setup changed — the
-         * owner's own key replaced the shared sign-in, or one key
-         * replaced another. Plain about what happened and what to
-         * do; shown on the sign-in screen until the next sign-in.
+         * session ended because the sign-in setup changed — one
+         * client registration replaced another. Plain about what
+         * happened and what to do; shown on the sign-in screen
+         * until the next sign-in.
          */
         const val CLIENT_CHANGED_REASON =
             "You were signed out because OffLeash's sign-in " +
@@ -1884,33 +1602,29 @@ class GoogleSessionManager(
 
         /**
          * The gate's landing copy when the build carries no
-         * sign-in at all (0.8.6): the sealed session could never
-         * refresh here, and the road back is the setup wizard.
+         * sign-in at all (0.8.6; native wording 0.8.8): the sealed
+         * session could never refresh here.
          */
         const val UNCONFIGURED_END_REASON =
             "You were signed out because this build of OffLeash " +
-                "has no sign-in set up. Set up your own Google key " +
-                "from the sign-in screen, then sign in again."
+                "has no Google sign-in set up, so the saved sign-in " +
+                "could never be used here. Your playlists and " +
+                "downloads on this device are untouched."
 
         /**
          * The phase copy when a sign-in is attempted in a build
-         * with no client identity (0.8.6): the attempt ends before
-         * anything is asked of Google, saying exactly why and
-         * naming the road in.
+         * with no client registration (0.8.6; native wording
+         * 0.8.8): the attempt ends before anything is asked of
+         * Google, saying exactly why — and naming no homework,
+         * because there is none the owner can do in the app.
          */
         const val NOT_CONFIGURED_REASON =
             "Google sign-in isn't set up in this build of " +
-                "OffLeash yet. Set up your own Google key — it's " +
-                "free and takes about 10 minutes — using the card " +
-                "below, then sign in."
+                "OffLeash yet, so there's nothing to sign in " +
+                "with. Everything else in the app works as normal."
 
         const val UNEXPECTED_REASON =
             "Something went wrong during Google sign-in. " +
                 "Nothing was saved. Try signing in again."
-
-        const val INVALID_GRANT_REASON =
-            "Google cancelled that code before it was approved, so " +
-                "it can't be used anymore. Nothing was stored. " +
-                "Start again to get a fresh code."
     }
 }
