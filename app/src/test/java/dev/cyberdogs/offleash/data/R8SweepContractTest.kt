@@ -125,22 +125,27 @@ class R8SweepContractTest {
 
 
     @Test
-    fun pollGrantedBranchClearsOnlyItsOwnGrant() {
-        val poll = manager()
-            .substringAfter("private suspend fun pollPendingGrant()")
-            .substringBefore("private suspend fun adopt(")
-        val granted = poll
-            .substringAfter("is TokenPollResult.Granted")
-            .substringBefore("TokenPollResult.Pending")
+    fun completionGrantedBranchClearsOnlyItsOwnAttempt() {
+        // Native heir (0.8.8) of the poll Granted branch's
+        // deviceCode-guarded clear: the completion's Granted
+        // branch clears the attempt under the state identity of
+        // the attempt whose code was exchanged.
+        val completion = manager()
+            .substringAfter("fun completeSignIn(")
+            .substringBefore("fun cancelSignIn()")
+        val granted = completion
+            .substringAfter("is CodeExchangeResult.Granted")
+            .substringBefore("is CodeExchangeResult.Failed")
         assertTrue(
-            "the Granted branch must guard its clear with the deviceCode " +
-                "identity of the grant it polled (the SlowDown discipline)",
-            granted.contains("pendingGrant?.deviceCode == grant.deviceCode"),
+            "the Granted branch must guard its clear with the state " +
+                "identity of the attempt it collected (the terminal " +
+                "step's discipline)",
+            granted.contains("pendingAttempt?.state == attempt.state"),
         )
         assertTrue(
-            "the clear must sit behind the deviceCode guard, never ahead of it",
-            granted.indexOf("clearPendingGrant()") >
-                granted.indexOf("pendingGrant?.deviceCode"),
+            "the clear must sit behind the state guard, never ahead of it",
+            granted.indexOf("clearPendingAttempt()") >
+                granted.indexOf("pendingAttempt?.state"),
         )
     }
 

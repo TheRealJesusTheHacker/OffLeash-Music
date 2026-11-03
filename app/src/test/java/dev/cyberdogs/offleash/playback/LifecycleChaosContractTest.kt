@@ -206,22 +206,30 @@ class LifecycleChaosContractTest {
     @Test
     fun signInWaitingStateIsManagerHeldNotScreenHeld() {
         // Rotation (or process death) during the wait must re-render
-        // the SAME grant: the phase lives in the manager, and the
-        // screen holds no copy of the code in composition state.
+        // the SAME attempt: the phase and the browser launch live in
+        // the manager, and the screen holds no copy of the attempt
+        // in composition state. (Native heir, 0.8.8: the device-era
+        // pin rendered the manager-held user code; the native
+        // screen renders the manager-held launch instead — and the
+        // attempt's verifier never reaches the screen at all.)
         val screen = source("dev/cyberdogs/offleash/ui/account/SignInScreen.kt")
         assertTrue(screen.contains("val manager = container.googleSessionManager"))
         assertTrue(screen.contains("manager.phase.collectAsState()"))
         assertTrue(
-            "the rendered code must come from the manager's phase",
-            screen.contains("current.userCode"),
+            "the rendered launch must come from the manager's held launch",
+            screen.contains("manager.authorizationLaunch.collectAsState()"),
         )
         assertFalse(
-            "the screen must not remember its own copy of the grant",
-            screen.contains("userCode by remember") || screen.contains("remember { mutableStateOf(current"),
+            "the screen must never hold the attempt's verifier",
+            screen.contains("codeVerifier"),
+        )
+        assertFalse(
+            "the screen must not remember its own copy of the attempt",
+            screen.contains("attempt by remember") || screen.contains("remember { mutableStateOf(current"),
         )
         assertTrue(
-            "a transport-failed poll must land on the Failed phase (the spinner " +
-                "unmounts) rather than leaving a dead 'still checking' wait",
+            "a transport-failed exchange must land on the Failed phase (the wait " +
+                "unmounts) rather than leaving a dead 'still waiting' screen",
             source("dev/cyberdogs/offleash/data/GoogleSessionManager.kt")
                 .contains("GoogleSignInPhase.Failed("),
         )

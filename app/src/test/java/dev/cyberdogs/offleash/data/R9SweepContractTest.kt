@@ -7,23 +7,22 @@ import java.io.File
 
 /**
  * Round 9 sweep contracts (confirmation round — breaking the
- * round-8 fixes):
+ * round-8 fixes), carried to the native flow (0.8.8):
  *
  * 1. GoogleSessionManager, re-read as ONE hand-merged file: the
- *    poll loop's clearing terminal branches (expiry-at-top,
- *    Denied, Expired) and the non-clearing phase tails (poll
- *    transient Failed, poll/runSignIn unexpected catches,
- *    runSignIn's issuance refusal and its post-persist awaiting
- *    publish) were still round 7's check-then-apply shape —
- *    adjacent statements, not locked steps — while their siblings
- *    (Granted's deviceCode-guarded clear, adopt's and
- *    refreshIdentity's locked publishes) had moved on. A cancel +
- *    fresh start landing in a clearing branch's window let the
- *    stale tail wipe the NEWER grant and overwrite its phase.
- *    All of them now apply through one locked step each
- *    (`finishPollWithFailure` / `publishPhaseIfCurrent` / the
- *    locked publishAwaiting). The race windows have no runtime
- *    injection point, so the shape is the pin (house style).
+ *    device flow's clearing terminal branches and non-clearing
+ *    phase tails were round 7's check-then-apply shape —
+ *    adjacent statements, not locked steps. A cancel + fresh
+ *    start landing in a clearing branch's window let the stale
+ *    tail wipe the NEWER grant and overwrite its phase. The
+ *    native flow's heirs: the completion's three failure endings
+ *    apply through ONE locked terminal step
+ *    (`finishAttemptWithFailure`), the completion carries no
+ *    direct failure publish at all, and startSignIn's awaiting
+ *    publish is gated on the locked epoch-checked persist
+ *    (`persistPendingAttemptIfCurrent`). The race windows have
+ *    no runtime injection point, so the shape is the pin
+ *    (house style).
  *
  * 2. AutoDownloadLikedWorker: the cookie road must be gated by
  *    the legacy DORMANCY rule at capture and at re-check (a
@@ -35,115 +34,137 @@ import java.io.File
 class R9SweepContractTest {
 
     @Test
-    fun pollClearingTerminalBranchesApplyThroughOneLockedStep() {
+    fun completionFailureBranchesApplyThroughOneLockedStep() {
+        // Native heir (0.8.8) of the poll loop's locked terminal
+        // step: the completion's three failure endings (declined,
+        // refused return, dead code) all end through
+        // finishAttemptWithFailure — epoch check, state-guarded
+        // clear, and phase publication as ONE locked step.
         val manager = manager()
         val helper = manager
-            .substringAfter("private fun finishPollWithFailure(")
-            .substringBefore("    init {")
+            .substringAfter("private fun finishAttemptWithFailure(")
+            .substringBefore("private fun persistPendingAttemptIfCurrent(")
         val block = synchronizedBlock(helper)
         assertTrue(
             "the terminal step's epoch check must live inside the lock",
             block.contains("if (epoch != flowEpoch) return"),
         )
         assertTrue(
-            "the terminal step's clear must be guarded by the polled " +
-                "grant's deviceCode (the Granted/SlowDown discipline)",
-            block.contains("pendingGrant?.deviceCode == grant.deviceCode") &&
-                block.contains("clearPendingGrant()"),
+            "the terminal step's clear must be guarded by the " +
+                "attempt's state identity (the Granted discipline)",
+            block.contains("pendingAttempt?.state == attempt.state") &&
+                block.contains("clearPendingAttempt()"),
         )
         assertTrue(
             "the terminal step must publish its phase inside the lock",
             block.contains("_phase.value = GoogleSignInPhase.Failed(reason)"),
         )
-        val poll = pollBody()
+        val completion = manager
+            .substringAfter("fun completeSignIn(")
+            .substringBefore("fun cancelSignIn()")
         assertTrue(
             "the Denied branch must end through the locked terminal step",
-            poll.contains("finishPollWithFailure(epoch, grant, DENIED_REASON)"),
+            completion.contains(
+                "finishAttemptWithFailure(epoch, attempt, DENIED_REASON)",
+            ),
+        )
+        assertTrue(
+            "the exchange-failure branch must end through the locked " +
+                "terminal step",
+            completion.contains("EXCHANGE_FAILED_REASON"),
         )
         assertEquals(
-            "expiry-at-top and the Expired branch must both end through " +
-                "the locked terminal step",
-            2,
-            Regex("finishPollWithFailure\\(epoch, grant, EXPIRED_REASON\\)")
-                .findAll(poll).count(),
+            "all three failure endings (declined, refused return, " +
+                "dead code) must end through the locked terminal step",
+            3,
+            Regex("finishAttemptWithFailure\\(")
+                .findAll(completion).count(),
         )
-        val denied = poll
-            .substringAfter("TokenPollResult.Denied")
-            .substringBefore("TokenPollResult.Expired")
+        val denied = completion
+            .substringAfter("RedirectResult.Denied")
+            .substringBefore("is RedirectResult.Failed")
         assertTrue(
             "no bare clear may remain in the Denied branch itself",
-            !denied.contains("clearPendingGrant()"),
+            !denied.contains("clearPendingAttempt()"),
         )
-        val expiryTop = poll.substringBefore("val poll =")
+        val refused = completion
+            .substringAfter("is RedirectResult.Failed")
+            .substringBefore("is RedirectResult.Code")
         assertTrue(
-            "no bare clear may remain in the expiry-at-top branch",
-            !expiryTop.contains("clearPendingGrant()"),
-        )
-        // Round 10 strengthening: the Expired branch was the one
-        // clearing branch whose no-bare-clear half went unasserted
-        // (its routing was counted above, but an ADDITIONAL bare
-        // clear beside the helper call would have passed). The
-        // claim covers all three clearing branches, so all three
-        // slices are asserted.
-        val expired = poll
-            .substringAfter("TokenPollResult.Expired")
-            .substringBefore("is TokenPollResult.Failed")
-        assertTrue(
-            "no bare clear may remain in the Expired branch itself",
-            !expired.contains("clearPendingGrant()"),
+            "no bare clear may remain in the refused-return branch itself",
+            !refused.contains("clearPendingAttempt()"),
         )
     }
 
     @Test
-    fun nonClearingPhaseTailsPublishThroughTheLockedHelper() {
+    fun completionFailureTailsNeverPublishDirectly() {
+        // The device flow's non-clearing tails published through
+        // publishPhaseIfCurrent; the native completion has no
+        // non-clearing failure tails at all — every failure
+        // ending clears through the one locked terminal step, so
+        // no direct Failed publish may exist in the completion.
+        val completion = manager()
+            .substringAfter("fun completeSignIn(")
+            .substringBefore("fun cancelSignIn()")
+        assertTrue(
+            "no direct Failed publish may remain in the completion — " +
+                "every failure ending goes through the locked step",
+            !completion.contains("_phase.value = GoogleSignInPhase.Failed"),
+        )
+        // startSignIn's two honest refusals (unconfigured build,
+        // blank-after-trim client ID) publish Failed directly —
+        // they are PRE-attempt (no attempt exists, no epoch can
+        // race them), so both must sit before the persist step.
+        val start = manager()
+            .substringAfter("fun startSignIn()")
+            .substringBefore("fun completeSignIn(")
+        val persistAt = start.indexOf("persistPendingAttemptIfCurrent")
+        assertTrue(
+            "startSignIn's refusal publishes must precede the persist step",
+            start.indexOf("_phase.value = GoogleSignInPhase.Failed") in
+                0 until persistAt &&
+                start.lastIndexOf(
+                    "_phase.value = GoogleSignInPhase.Failed",
+                ) < persistAt,
+        )
+    }
+
+    @Test
+    fun startSignInAwaitingPublishIsGatedByTheLockedPersistStep() {
+        // The device flow published its awaiting state inside the
+        // epoch-checked lock; the native start publishes only
+        // after the locked epoch-checked persist ACCEPTS the
+        // attempt — a raced cancel makes the persist refuse, and
+        // no publish follows.
         val manager = manager()
+        val start = manager
+            .substringAfter("fun startSignIn()")
+            .substringBefore("fun completeSignIn(")
+        val gateAt = start.indexOf(
+            "if (!persistPendingAttemptIfCurrent(epoch, attempt))",
+        )
+        assertTrue(
+            "startSignIn must gate on the locked persist step",
+            gateAt >= 0,
+        )
+        assertTrue(
+            "the awaiting publish must come after the persist gate",
+            start.indexOf("publishAwaitingReturn(attempt)") > gateAt,
+        )
+        assertTrue(
+            "no awaiting publish of the fresh attempt may precede " +
+                "the persist gate",
+            !start.substring(0, gateAt).contains(
+                "publishAwaitingReturn(attempt)",
+            ),
+        )
         val helper = manager
-            .substringAfter("private fun publishPhaseIfCurrent(")
-            .substringBefore("private fun finishPollWithFailure(")
+            .substringAfter("private fun persistPendingAttemptIfCurrent(")
+            .substringBefore("    init {")
         val block = synchronizedBlock(helper)
         assertTrue(
-            "the helper's epoch check must live inside its lock",
-            block.contains("if (epoch == flowEpoch)"),
-        )
-        assertTrue(
-            "the helper must publish inside its lock",
-            block.contains("_phase.value = phase"),
-        )
-        val runSignIn = manager
-            .substringAfter("private suspend fun runSignIn()")
-            .substringBefore("private suspend fun pollPendingGrant()")
-        assertTrue(
-            "runSignIn's issuance refusal and its unexpected-failure " +
-                "tail must both publish through the locked helper",
-            Regex("publishPhaseIfCurrent\\(").findAll(runSignIn).count() >= 2,
-        )
-        val poll = pollBody()
-        assertTrue(
-            "the poll loop's transient-Failed branch and its " +
-                "unexpected-failure tail must both publish through " +
-                "the locked helper",
-            Regex("publishPhaseIfCurrent\\(").findAll(poll).count() >= 2,
-        )
-    }
-
-    @Test
-    fun runSignInAwaitingPublishIsInsideTheEpochCheckedLock() {
-        val runSignIn = manager()
-            .substringAfter("private suspend fun runSignIn()")
-            .substringBefore("private suspend fun pollPendingGrant()")
-        val block = synchronizedBlock(runSignIn)
-        assertTrue(
-            "the awaiting publish's epoch check must live inside the lock",
-            block.contains("if (epoch != flowEpoch) return"),
-        )
-        assertTrue(
-            "the awaiting publish must live inside the locked step",
-            block.contains("publishAwaiting(grant)"),
-        )
-        assertTrue(
-            "no awaiting publish may remain outside the locked step " +
-                "in runSignIn",
-            !runSignIn.substringAfter(block).contains("publishAwaiting(grant)"),
+            "the persist step's epoch check must live inside the lock",
+            block.contains("if (epoch != flowEpoch) return false"),
         )
     }
 
@@ -171,10 +192,6 @@ class R9SweepContractTest {
                 body.contains("fetchSessionGeneration = if (session != null) generation else null"),
         )
     }
-
-    private fun pollBody(): String = manager()
-        .substringAfter("private suspend fun pollPendingGrant()")
-        .substringBefore("private suspend fun adopt(")
 
     private fun doWorkBody(): String {
         val worker = mainSource("java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt")

@@ -83,10 +83,11 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to (4 to 0),
             "dev/cyberdogs/offleash/data/SessionManager.kt" to (0 to 1),
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to (0 to 10),
-            // 0.8.6 census event: the own-key wizard's backend —
-            // one funneled publish site, enumerated like every
-            // other state writer in the module.
-            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to (1 to 0),
+            // 0.8.8 census event: the own-key wizard's backend
+            // (OwnKeySetup.kt, one `_state.value =` publish) left
+            // the module with the dead road; the native attempt
+            // store and the redirect activity write no `_state` /
+            // `_uiState` flows and stand at the (0 to 0) default.
         )
         for ((path, text) in files) {
             val expected = expectedStateWrites[path] ?: (0 to 0)
@@ -342,12 +343,12 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/data/DownloadStore.kt",
             "dev/cyberdogs/offleash/data/Downloads.kt",
             "dev/cyberdogs/offleash/data/GooglePendingGrantStore.kt",
+            "dev/cyberdogs/offleash/data/GooglePendingNativeAuthStore.kt",
             "dev/cyberdogs/offleash/data/GoogleSessionManager.kt",
             "dev/cyberdogs/offleash/data/GoogleSignInSeenMarker.kt",
             "dev/cyberdogs/offleash/data/GoogleTokenStore.kt",
             "dev/cyberdogs/offleash/data/LikeController.kt",
             "dev/cyberdogs/offleash/data/OkHttpTransport.kt",
-            "dev/cyberdogs/offleash/data/OwnKeySetup.kt",
             "dev/cyberdogs/offleash/data/ParityPreferences.kt",
             "dev/cyberdogs/offleash/data/RangeInterceptor.kt",
             "dev/cyberdogs/offleash/data/SecretBox.kt",
@@ -375,7 +376,7 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/SplashScreen.kt",
             "dev/cyberdogs/offleash/ui/about/AboutScreen.kt",
             "dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt",
-            "dev/cyberdogs/offleash/ui/account/OwnKeyWizardScreen.kt",
+            "dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt",
             "dev/cyberdogs/offleash/ui/account/SignInScreen.kt",
             "dev/cyberdogs/offleash/ui/components/BatteryRestrictionCard.kt",
             "dev/cyberdogs/offleash/ui/components/Common.kt",

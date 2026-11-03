@@ -1,7 +1,7 @@
 package dev.cyberdogs.offleash.data
 
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -92,10 +92,12 @@ class StoreTotalityTest {
 
         val googleManager = GoogleSessionManager(
             store = GoogleTokenStore(ThrowingStorage(), testSecretBox()),
-            auth = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(transport, NativeTestSupport.ANDROID_ID),
             client = client,
             scope = scope,
-            pendingGrantStore = GooglePendingGrantStore(ThrowingStorage(), testSecretBox()),
+            redirectUri = NativeTestSupport.REDIRECT,
+            pendingAttemptStore =
+                GooglePendingNativeAuthStore(ThrowingStorage(), testSecretBox()),
             signInDiagnostics = SignInDiagnostics(),
         )
         assertFalse(googleManager.uiState.value.signedIn)

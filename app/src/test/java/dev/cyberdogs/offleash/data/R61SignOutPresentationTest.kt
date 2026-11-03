@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.auth.GoogleOAuth
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -99,9 +99,10 @@ class R61SignOutPresentationTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = GoogleSessionManager(
             store = store,
-            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
             client = YoutubeiClient(BlockingRevokeTransport()),
             scope = scope,
+            redirectUri = NativeTestSupport.REDIRECT,
             signInDiagnostics = SignInDiagnostics(),
         )
         assertTrue("the stored session must present as signed in", manager.uiState.value.signedIn)

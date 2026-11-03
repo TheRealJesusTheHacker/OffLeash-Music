@@ -114,6 +114,7 @@ class R53SweepContractTest {
             "app:dev/cyberdogs/offleash/data/SecretBox.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/SplashScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 2,
+            "app:dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
             "core:dev/cyberdogs/offleash/core/playback/PlayQueue.kt" to 1,
         )
@@ -290,13 +291,16 @@ class R53SweepContractTest {
     @Test
     fun channelAndFlowBuilderFamilyIsCensusedModuleWide() {
         val flowBuilder = Regex("""(?<![A-Za-z])flow\s*\{""")
+        // 0.8.8 census event: the native flow removed the
+        // manager's check-now signal Channel (and its trySend) —
+        // the browser return arrives as an activity result, not
+        // a polled signal — so both maps stand at their defaults
+        // for GoogleSessionManager; AtomicFileWrite's FileChannel
+        // substring remains the one Channel spelling in the tree.
         val expectedChannel: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/AtomicFileWrite.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 3,
         )
-        val expectedTrySend: Map<String, Int> = mapOf(
-            "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 1,
-        )
+        val expectedTrySend: Map<String, Int> = mapOf()
         for ((label, sources) in listOf(
             "app" to moduleSources(),
             "core" to coreSources(),

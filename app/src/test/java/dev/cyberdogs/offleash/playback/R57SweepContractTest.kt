@@ -268,13 +268,11 @@ class R57SweepContractTest {
                 "diagnostics.snapshot" to 1,
                 "container.accountUiState" to 1,
             ),
-            "dev/cyberdogs/offleash/ui/account/OwnKeyWizardScreen.kt" to mapOf(
-                "setup.state" to 1,
-            ),
             "dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to mapOf(
                 "manager.phase" to 1,
                 "manager.uiState" to 1,
-                "container.ownKeySetup.state" to 1,
+                "manager.authorizationLaunch" to 1,
+                "manager.pendingAttemptDurability" to 1,
             ),
             "dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to mapOf(
                 "downloadManager.records" to 1,
@@ -323,7 +321,6 @@ class R57SweepContractTest {
                 "viewModel.loadMoreError" to 1,
             ),
             "dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to mapOf(
-                "container.ownKeySetup.state" to 1,
                 "container.appPreferences.streamQualityFlow" to 1,
                 "container.parityPreferences.downloadQualityFlow" to 1,
                 "container.parityPreferences.autoDownloadLikedFlow" to 1,

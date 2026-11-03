@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,16 +17,18 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 /**
- * The Google session manager end to end on the JVM (0.7.0): the
- * real [GoogleDeviceAuth] and [YoutubeiClient] run against scripted
- * transports — only the wire is faked. The response bodies are
- * hand-built to Google's documented OAuth/userinfo shapes; the
- * owner's on-device approval is the final proof, not this suite.
+ * The Google session manager end to end on the JVM (0.8.8): the
+ * real [GoogleNativeAuth] and [YoutubeiClient] run against
+ * scripted transports — only the wire is faked. The response
+ * bodies are hand-built to Google's documented OAuth/userinfo
+ * shapes; the owner's on-device sign-in is the final proof, not
+ * this suite.
  *
- * Covered: the device-flow adoption (code shown, poll converges,
- * tokens sealed with the confirmed identity), the denial ending,
- * proactive refresh, the revoked-grant wipe, and sign-out's
- * revoke + verified wipe.
+ * Covered: the native adoption (attempt launched, the return's
+ * code exchanged, tokens sealed with the confirmed identity and
+ * the issuing registration), the denial ending, a state-mismatched
+ * return refused, proactive refresh, the revoked-grant wipe, and
+ * sign-out's revoke + verified wipe.
  */
 class GoogleSessionManagerTest {
 
@@ -73,9 +75,11 @@ class GoogleSessionManagerTest {
         userinfoStatus: Int = 200,
     ): GoogleSessionManager = GoogleSessionManager(
         store = store,
-        auth = GoogleDeviceAuth(formTransport, TestOAuthIdentity.SHARED),
+        auth = GoogleNativeAuth(formTransport, NativeTestSupport.ANDROID_ID),
         client = YoutubeiClient(UserinfoTransport(status = userinfoStatus)),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        redirectUri = NativeTestSupport.REDIRECT,
+        pendingAttemptStore = NativeTestSupport.attemptStore(),
         signInDiagnostics = SignInDiagnostics(),
     )
 
@@ -93,19 +97,8 @@ class GoogleSessionManagerTest {
     }
 
     @Test
-    fun deviceFlowAdoptsTheGrantWithItsConfirmedIdentity() = runBlocking {
+    fun nativeFlowAdoptsTheGrantWithItsConfirmedIdentity() = runBlocking {
         val form = ScriptedFormTransport()
-        // interval 0 in the body: the manager floors it at 1s, so two
-        // polls cost ~2s of test time.
-        form.responses.add(
-            HttpResponse(
-                200,
-                """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
-                    """"verification_url":"https://www.google.com/device",""" +
-                    """"expires_in":1800,"interval":0}""",
-            )
-        )
-        form.responses.add(HttpResponse(400, """{"error":"authorization_pending"}"""))
         form.responses.add(
             HttpResponse(
                 200,
@@ -117,48 +110,74 @@ class GoogleSessionManagerTest {
         val manager = manager(form, store)
 
         manager.startSignIn()
-        awaitTrue { manager.phase.value is GoogleSignInPhase.AwaitingApproval }
-        val awaiting = manager.phase.value as GoogleSignInPhase.AwaitingApproval
-        assertEquals("WDJB-MJHT", awaiting.userCode)
-        assertEquals("https://www.google.com/device", awaiting.verificationUrl)
+        // No network has happened yet: the attempt is built locally
+        // and published for the browser leg.
+        assertTrue(manager.phase.value is GoogleSignInPhase.AwaitingReturn)
+        val launch = manager.authorizationLaunch.value
+        assertTrue("a launch must be published", launch != null)
+        assertTrue(launch!!.url.startsWith("https://accounts.google.com/"))
+        assertTrue(manager.pendingAttemptDurability.value)
 
+        manager.completeSignIn(
+            NativeTestSupport.codeRedirect(NativeTestSupport.stateFrom(launch.url))
+        )
         awaitTrue { manager.uiState.value.signedIn }
         val ui = manager.uiState.value
         assertEquals("Test Listener", ui.identityName)
         assertEquals("listener@example.com", ui.identityEmail)
         assertEquals(SessionHealth.HEALTHY, ui.health)
         assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
+        assertNull(manager.authorizationLaunch.value)
 
         val stored = store.load()
         assertTrue("the grant must be sealed in the store", stored != null)
         assertEquals("ya29.granted", stored!!.accessToken)
         assertEquals("rt-1", stored.refreshToken)
         assertEquals("Test Listener", stored.identityName)
+        // The session names its issuing registration (0.8.8): the
+        // android class and the exact client ID, for the gate.
+        assertEquals("android", stored.clientKind)
+        assertEquals(NativeTestSupport.ANDROID_ID, stored.issuingClientId)
         // The adopted bearer is served without a network round trip.
         assertEquals("ya29.granted", manager.currentBearer())
     }
 
     @Test
-    fun deviceFlowDenialEndsTheAttemptAndStoresNothing() = runBlocking {
+    fun nativeFlowDenialEndsTheAttemptAndStoresNothing() = runBlocking {
         val form = ScriptedFormTransport()
-        form.responses.add(
-            HttpResponse(
-                200,
-                """{"device_code":"dc-2","user_code":"ABCD-EFGH",""" +
-                    """"verification_url":"https://www.google.com/device",""" +
-                    """"expires_in":1800,"interval":0}""",
-            )
-        )
-        form.responses.add(HttpResponse(400, """{"error":"access_denied"}"""))
         val store = testStore()
         val manager = manager(form, store)
 
         manager.startSignIn()
+        val launch = manager.authorizationLaunch.value!!
+        manager.completeSignIn(
+            NativeTestSupport.deniedRedirect(NativeTestSupport.stateFrom(launch.url))
+        )
         awaitTrue { manager.phase.value is GoogleSignInPhase.Failed }
         val failed = manager.phase.value as GoogleSignInPhase.Failed
         assertTrue(failed.reason.contains("declined"))
         assertFalse(manager.uiState.value.signedIn)
         assertNull(store.load())
+    }
+
+    @Test
+    fun returnWithTheWrongStateIsRefusedAndStoresNothing() = runBlocking {
+        val form = ScriptedFormTransport()
+        val store = testStore()
+        val manager = manager(form, store)
+
+        manager.startSignIn()
+        manager.completeSignIn(
+            NativeTestSupport.codeRedirect(state = "not-the-attempts-state")
+        )
+        awaitTrue { manager.phase.value is GoogleSignInPhase.Failed }
+        val failed = manager.phase.value as GoogleSignInPhase.Failed
+        assertTrue(failed.reason.contains("doesn't match"))
+        assertFalse(manager.uiState.value.signedIn)
+        assertNull(store.load())
+        // The exchange is never even attempted for a foreign return.
+        assertTrue(form.responses.isEmpty())
+        assertNull(form.lastFormBody)
     }
 
     @Test

@@ -338,9 +338,10 @@ class R59SweepContractTest {
                 "activity-alias (round-59 doctor: a second " +
                 "MAIN/LAUNCHER entry point, GREEN) was no " +
                 "component at all to the pin; the shipped " +
-                "census is exactly the two real components",
+                "census is exactly the three real components",
             sortedMapOf(
                 "activity:.MainActivity" to "true",
+                "activity:.ui.account.OAuthRedirectActivity" to "true",
                 "service:.playback.PlaybackService" to "true",
             ),
             exportedByComponent,
@@ -540,12 +541,12 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/data/DownloadStore.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/Downloads.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/GooglePendingGrantStore.kt",
+                "app/src/main/java/dev/cyberdogs/offleash/data/GooglePendingNativeAuthStore.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/GoogleSessionManager.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/GoogleSignInSeenMarker.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/GoogleTokenStore.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/LikeController.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/OkHttpTransport.kt",
-            "app/src/main/java/dev/cyberdogs/offleash/data/OwnKeySetup.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/ParityPreferences.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/RangeInterceptor.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/SecretBox.kt",
@@ -573,7 +574,7 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/ui/SplashScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/about/AboutScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/ui/account/OwnKeyWizardScreen.kt",
+            "app/src/main/java/dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt",
             "app/src/main/java/dev/cyberdogs/offleash/ui/account/SignInScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/components/BatteryRestrictionCard.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/components/Common.kt",
@@ -606,6 +607,7 @@ class R59SweepContractTest {
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/api/YoutubeiContexts.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/AuthSession.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/GoogleAuth.kt",
+            "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/SessionCookies.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/error/OffleashException.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/model/Lyrics.kt",

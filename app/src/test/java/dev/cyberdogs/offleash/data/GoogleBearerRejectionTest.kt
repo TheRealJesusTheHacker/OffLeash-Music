@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.auth.GoogleOAuth
 import dev.cyberdogs.offleash.core.auth.IdentityLookup
 import java.util.concurrent.atomic.AtomicInteger
@@ -38,19 +38,17 @@ import org.junit.Test
 class GoogleBearerRejectionTest {
 
     /**
-     * Form-POST transport routed like Google's endpoints: issuance
-     * is counted and answered from a queue of bodies; polls answer
-     * via [onPoll]; refreshes are counted and answered by
-     * [onRefresh].
+     * Form-POST transport routed like Google's endpoints: code
+     * exchanges are counted and answered by [onExchange];
+     * refreshes are counted and answered by [onRefresh].
      */
     private class RoutingFormTransport : HttpTransport {
-        val deviceCodeRequests = AtomicInteger(0)
+        val exchangeRequests = AtomicInteger(0)
         val refreshRequests = AtomicInteger(0)
-        val issueBodies = ArrayDeque<String>()
 
         @Volatile
-        var onPoll: () -> HttpResponse = {
-            HttpResponse(400, """{"error":"authorization_pending"}""")
+        var onExchange: () -> HttpResponse = {
+            HttpResponse(200, GRANT_BODY)
         }
 
         @Volatile
@@ -69,11 +67,11 @@ class GoogleBearerRejectionTest {
             headers: Map<String, String>,
             formBody: String,
         ): HttpResponse = when {
-            url == GoogleOAuth.DEVICE_CODE_URL -> {
-                deviceCodeRequests.incrementAndGet()
-                HttpResponse(200, issueBodies.removeFirst())
+            url == GoogleOAuth.TOKEN_URL &&
+                formBody.contains("grant_type=authorization_code") -> {
+                exchangeRequests.incrementAndGet()
+                onExchange()
             }
-            url == GoogleOAuth.TOKEN_URL && formBody.contains("device_code=") -> onPoll()
             url == GoogleOAuth.TOKEN_URL && formBody.contains("grant_type=refresh_token") -> {
                 refreshRequests.incrementAndGet()
                 onRefresh()
@@ -97,8 +95,8 @@ class GoogleBearerRejectionTest {
     private fun testTokenStore(): GoogleTokenStore =
         GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
 
-    private fun testPendingStore(): GooglePendingGrantStore =
-        GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
+    private fun testPendingStore(): GooglePendingNativeAuthStore =
+        GooglePendingNativeAuthStore(InMemorySecretStorage(), testSecretBox())
 
     /**
      * A manager over a store primed with the stale-but-locally-
@@ -109,7 +107,7 @@ class GoogleBearerRejectionTest {
     private fun primedManager(
         form: RoutingFormTransport,
         tokenStore: GoogleTokenStore,
-        pendingStore: GooglePendingGrantStore? = null,
+        pendingStore: GooglePendingNativeAuthStore? = null,
         refreshToken: String? = "rt-1",
     ): GoogleSessionManager {
         tokenStore.save(
@@ -125,10 +123,11 @@ class GoogleBearerRejectionTest {
         )
         return GoogleSessionManager(
             store = tokenStore,
-            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
             client = YoutubeiClient(UnusedTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-            pendingGrantStore = pendingStore,
+            redirectUri = NativeTestSupport.REDIRECT,
+            pendingAttemptStore = pendingStore,
             signInDiagnostics = SignInDiagnostics(),
             nowMs = { NOW },
         )
@@ -232,9 +231,10 @@ class GoogleBearerRejectionTest {
         val form = RoutingFormTransport()
         val manager = GoogleSessionManager(
             store = testTokenStore(),
-            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
             client = YoutubeiClient(UnusedTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            redirectUri = NativeTestSupport.REDIRECT,
             signInDiagnostics = SignInDiagnostics(),
             nowMs = { NOW },
         )
@@ -346,7 +346,7 @@ class GoogleBearerRejectionTest {
     }
 
     // ------------------------------------------------------------------
-    // Poll endings
+    // Exchange endings
     // ------------------------------------------------------------------
 
     private suspend fun awaitTrue(timeoutMs: Long = 15_000, condition: () -> Boolean) {
@@ -359,11 +359,9 @@ class GoogleBearerRejectionTest {
     }
 
     @Test
-    fun aPollInvalidGrantEndsTerminallyAndTheNextStartIssuesFresh() = runBlocking {
+    fun anExchangeInvalidGrantEndsTerminallyAndTheNextStartIsFresh() = runBlocking {
         val form = RoutingFormTransport()
-        form.issueBodies.add(ISSUE_BODY_ONE)
-        form.issueBodies.add(ISSUE_BODY_TWO)
-        form.onPoll = {
+        form.onExchange = {
             HttpResponse(400, """{"error":"invalid_grant"}""")
         }
         val tokenStore = testTokenStore()
@@ -371,54 +369,53 @@ class GoogleBearerRejectionTest {
         val manager = emptySessionManager(form, tokenStore, pendingStore)
 
         manager.startSignIn()
+        val firstLaunch = manager.authorizationLaunch.value!!
+        val firstState = NativeTestSupport.stateFrom(firstLaunch.url)
+        manager.completeSignIn(NativeTestSupport.codeRedirect(firstState))
         awaitTrue { manager.phase.value is GoogleSignInPhase.Failed }
 
-        val reason = (manager.phase.value as GoogleSignInPhase.Failed).reason
-        assertTrue(reason.contains("cancelled that code"))
-        assertTrue(reason.contains("fresh code"))
-        // The dead code is GONE — not kept for a zombie resume —
+        // The dead attempt is GONE — not kept for a zombie resume —
         // and nothing was adopted.
         assertNull(pendingStore.load())
         assertNull(tokenStore.load())
+        assertNull(manager.authorizationLaunch.value)
 
-        // Starting again issues a NEW grant rather than resuming
-        // the cancelled one.
+        // Starting again mints a NEW attempt (a fresh state)
+        // rather than resuming the dead one.
         manager.startSignIn()
-        awaitTrue {
-            (manager.phase.value as? GoogleSignInPhase.AwaitingApproval)
-                ?.userCode == "KQXR-TWZN"
-        }
-        assertEquals(2, form.deviceCodeRequests.get())
+        val secondLaunch = manager.authorizationLaunch.value!!
+        assertTrue(
+            NativeTestSupport.stateFrom(secondLaunch.url) != firstState
+        )
+        assertEquals(1, form.exchangeRequests.get())
     }
 
     @Test
-    fun theExpiredEndingPromisesNoCodeLifetime() {
-        // A persisted grant that expired while the app was away
-        // lands on the expired ending at manager construction.
-        // The ending must not state a duration ("about 30
-        // minutes"): Google sets each grant's life, the waiting
-        // screen counts down from the grant itself, and a
-        // hardcoded lifetime in the ending would lie for any
-        // other issued value.
+    fun anExpiredPersistedAttemptIsClearedQuietlyAtConstruction() {
+        // A persisted attempt that expired while the app was away
+        // is cleared at manager construction WITHOUT an ending:
+        // the owner never saw this attempt (0.8.8's deliberate
+        // divergence from the device flow's expired ending — a
+        // browser attempt they may never even have opened must
+        // not greet them with a failure for something they didn't
+        // do). The sign-in screen simply offers a fresh start.
         val pendingStore = testPendingStore()
         pendingStore.save(
-            StoredPendingGrant(
-                deviceCode = "dc-dead",
-                userCode = "WDJB-MJHT",
-                verificationUrl = "https://www.google.com/device",
+            StoredPendingNativeAuth(
+                state = "dead-state",
+                codeVerifier = "dead-verifier",
+                clientId = NativeTestSupport.ANDROID_ID,
+                redirectUri = NativeTestSupport.REDIRECT,
                 issuedAtEpochMs = NOW - 1_800_000L,
                 expiresAtEpochMs = NOW - 1_000L,
-                intervalSeconds = 5L,
             )
         )
         val manager = emptySessionManager(
             RoutingFormTransport(), testTokenStore(), pendingStore,
         )
 
-        val failed = manager.phase.value as GoogleSignInPhase.Failed
-        assertFalse(failed.reason.contains("30"))
-        assertFalse(failed.reason.contains("minutes"))
-        assertTrue(failed.reason.contains("fresh code"))
+        assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
+        assertNull(manager.authorizationLaunch.value)
         assertNull(pendingStore.load())
     }
 
@@ -426,13 +423,14 @@ class GoogleBearerRejectionTest {
     private fun emptySessionManager(
         form: RoutingFormTransport,
         tokenStore: GoogleTokenStore,
-        pendingStore: GooglePendingGrantStore,
+        pendingStore: GooglePendingNativeAuthStore,
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+        auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
         client = YoutubeiClient(UnusedTransport()),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-        pendingGrantStore = pendingStore,
+        redirectUri = NativeTestSupport.REDIRECT,
+        pendingAttemptStore = pendingStore,
         signInDiagnostics = SignInDiagnostics(),
         nowMs = { NOW },
     )
@@ -446,20 +444,14 @@ class GoogleBearerRejectionTest {
             """{"access_token":"ya29.fresh","expires_in":3599,""" +
                 """"refresh_token":"rt-2","token_type":"Bearer"}"""
 
+        const val GRANT_BODY =
+            """{"access_token":"ya29.granted","expires_in":3599,""" +
+                """"refresh_token":"rt-1","token_type":"Bearer"}"""
+
         const val USERINFO_BODY =
             """{"sub":"123","name":"Test Listener",""" +
                 """"email":"listener@example.com",""" +
                 """"picture":"https://example.com/avatar.png"}"""
-
-        const val ISSUE_BODY_ONE =
-            """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
-                """"verification_url":"https://www.google.com/device",""" +
-                """"expires_in":1800,"interval":0}"""
-
-        const val ISSUE_BODY_TWO =
-            """{"device_code":"dc-2","user_code":"KQXR-TWZN",""" +
-                """"verification_url":"https://www.google.com/device",""" +
-                """"expires_in":1800,"interval":0}"""
     }
 
     // ---------------------------------------------------------------
@@ -490,9 +482,10 @@ class GoogleBearerRejectionTest {
         )
         val primed = GoogleSessionManager(
             store = store,
-            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
             client = YoutubeiClient(UnusedTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            redirectUri = NativeTestSupport.REDIRECT,
             signInDiagnostics = SignInDiagnostics(),
             nowMs = { clock },
         )
@@ -554,9 +547,10 @@ class GoogleBearerRejectionTest {
         )
         val manager = GoogleSessionManager(
             store = store,
-            auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
             client = YoutubeiClient(UnusedTransport()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            redirectUri = NativeTestSupport.REDIRECT,
             signInDiagnostics = SignInDiagnostics(),
             nowMs = { NOW },
         )

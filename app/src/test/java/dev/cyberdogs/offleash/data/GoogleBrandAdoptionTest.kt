@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -73,11 +73,25 @@ class GoogleBrandAdoptionTest {
         clientTransport: HttpTransport = IdentityTransport(),
     ): GoogleSessionManager = GoogleSessionManager(
         store = store,
-        auth = GoogleDeviceAuth(formTransport, TestOAuthIdentity.SHARED),
+        auth = GoogleNativeAuth(formTransport, NativeTestSupport.ANDROID_ID),
         client = YoutubeiClient(clientTransport),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        redirectUri = NativeTestSupport.REDIRECT,
+        pendingAttemptStore = NativeTestSupport.attemptStore(),
         signInDiagnostics = SignInDiagnostics(),
     )
+
+    /** Drives a native sign-in from launch to the code's return. */
+    private fun signIn(manager: GoogleSessionManager) {
+        manager.startSignIn()
+        val launch = manager.authorizationLaunch.value
+        assertTrue("a launch must be published", launch != null)
+        manager.completeSignIn(
+            NativeTestSupport.codeRedirect(
+                NativeTestSupport.stateFrom(launch!!.url)
+            )
+        )
+    }
 
     private fun testStore(): GoogleTokenStore =
         GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
@@ -96,14 +110,6 @@ class GoogleBrandAdoptionTest {
         form.responses.add(
             HttpResponse(
                 200,
-                """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
-                    """"verification_url":"https://www.google.com/device",""" +
-                    """"expires_in":1800,"interval":0}""",
-            )
-        )
-        form.responses.add(
-            HttpResponse(
-                200,
                 """{"access_token":"ya29.granted","expires_in":3599,""" +
                     """"refresh_token":"rt-1","token_type":"Bearer",""" +
                     """"scope":"https://www.googleapis.com/auth/youtube openid profile email"}""",
@@ -117,7 +123,7 @@ class GoogleBrandAdoptionTest {
         val store = testStore()
         val manager = manager(scriptedGrant(), store)
 
-        manager.startSignIn()
+        signIn(manager)
         awaitTrue { manager.uiState.value.signedIn }
 
         val stored = store.load()
@@ -139,7 +145,7 @@ class GoogleBrandAdoptionTest {
             IdentityTransport(menuStatus = 401, menuBody = AUTH_ERROR_BODY),
         )
 
-        manager.startSignIn()
+        signIn(manager)
         awaitTrue { manager.uiState.value.signedIn }
 
         assertEquals(SessionHealth.HEALTHY, manager.uiState.value.health)

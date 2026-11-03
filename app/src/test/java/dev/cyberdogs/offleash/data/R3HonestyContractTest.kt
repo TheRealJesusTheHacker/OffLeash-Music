@@ -53,15 +53,23 @@ class R3HonestyContractTest {
     }
 
     @Test
-    fun signInExpiryCopyTicksInsteadOfFreezingAtFirstComposition() {
+    fun signInWaitingScreenMakesNoExpiryPromise() {
+        // The device-era pin guarded the code's minutes-left
+        // copy: computed from the grant, ticking so it never
+        // froze into a lie. The native waiting screen (0.8.8)
+        // renders NO countdown at all — the attempt's life is
+        // the manager's bookkeeping, not a promise on screen —
+        // so the hazard the pin guarded cannot occur. What must
+        // never come back is a displayed expiry in ANY form:
+        // frozen, ticking, or hardcoded.
         val screen = mainSource("java/dev/cyberdogs/offleash/ui/account/SignInScreen.kt")
-        assertTrue(
-            "the waiting screen must re-read the clock on a tick",
-            screen.contains("kotlinx.coroutines.delay(30_000L)"),
+        assertFalse(
+            "the waiting screen must not display an expiry countdown",
+            screen.contains("expires in"),
         )
-        assertTrue(
-            "minutes-left must be computed from the ticking clock, not a one-off read",
-            screen.contains("(current.expiresAtEpochMs - nowMs)"),
+        assertFalse(
+            "the waiting screen must not render the attempt's expiry",
+            screen.contains("expiresAtEpochMs"),
         )
     }
 

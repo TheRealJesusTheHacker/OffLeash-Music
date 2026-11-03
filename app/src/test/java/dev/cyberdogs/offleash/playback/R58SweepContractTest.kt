@@ -221,7 +221,7 @@ class R58SweepContractTest {
         // own slice.
         val googleAuthSlice = slice(
             app,
-            "val googleAuth: GoogleDeviceAuth = GoogleDeviceAuth(",
+            "val googleAuth: GoogleNativeAuth = GoogleNativeAuth(",
             "val googleSessionManager",
             "googleAuth construction",
         )
@@ -245,7 +245,8 @@ class R58SweepContractTest {
                 "auth = googleAuth,",
                 "client = client,",
                 "scope = sessionScope,",
-                "pendingGrantStore = googlePendingGrantStore,",
+                "redirectUri = googleRedirectUri,",
+                "pendingAttemptStore = googlePendingNativeAuthStore,",
                 "signInDiagnostics = signInDiagnostics,",
             ),
             "googleSessionManager construction",
@@ -464,6 +465,7 @@ class R58SweepContractTest {
                 "is the manifest's exposure surface",
             sortedMapOf(
                 "activity:.MainActivity" to "true",
+                "activity:.ui.account.OAuthRedirectActivity" to "true",
                 "service:.playback.PlaybackService" to "true",
             ),
             exportedByComponent,

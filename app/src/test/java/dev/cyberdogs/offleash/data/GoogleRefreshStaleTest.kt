@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,9 +83,10 @@ class GoogleRefreshStaleTest {
         )
         val manager = GoogleSessionManager(
             store = store,
-            auth = GoogleDeviceAuth(RevokeTransport(), TestOAuthIdentity.SHARED),
+            auth = GoogleNativeAuth(RevokeTransport(), NativeTestSupport.ANDROID_ID),
             client = YoutubeiClient(userinfo),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            redirectUri = NativeTestSupport.REDIRECT,
             signInDiagnostics = SignInDiagnostics(),
         )
         assertTrue(manager.uiState.value.signedIn)

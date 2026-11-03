@@ -6,13 +6,17 @@ import org.junit.Test
 import java.io.File
 
 /**
- * The sign-in screen's source-shape contract (0.7.2 sweep),
- * following the repo's contract-test style for Compose code the
- * JVM subset cannot compile: every manager phase has a live
- * rendering with a working action (no dead ends), the last-crash
- * display carried over from the 0.6.x screen is still wired, the
- * approval code's remaining life is computed from the grant (not
- * a hardcoded half hour), and CrashReporter is installed before
+ * The sign-in screen's source-shape contract (0.8.8), following
+ * the repo's contract-test style for Compose code the JVM subset
+ * cannot compile: the native flow's every phase has a live
+ * rendering with a working action (no dead ends), the one
+ * primary action is "Continue with Google", the browser launch
+ * is a Custom Tab with a plain-view fallback, the unconfigured
+ * state is honest and carries NO setup road (the wizard is gone
+ * from the product, not just from this screen), the device-era
+ * machinery (typed code, clipboard, google.com/device, checkNow)
+ * is absent, the last-crash display carried over from the 0.6.x
+ * screen is still wired, and CrashReporter is installed before
  * the container is built in the Application.
  */
 class SignInScreenContractTest {
@@ -24,61 +28,56 @@ class SignInScreenContractTest {
     @Test
     fun everyPhaseRendersWithItsAction() {
         assertTrue(screen.contains("GoogleSignInPhase.Idle"))
-        assertTrue(screen.contains("GoogleSignInPhase.AwaitingApproval"))
+        assertTrue(screen.contains("GoogleSignInPhase.Issuing"))
+        assertTrue(screen.contains("GoogleSignInPhase.AwaitingReturn"))
         assertTrue(screen.contains("GoogleSignInPhase.Failed"))
-        // Idle's fresh start, the waiting state's two live actions,
-        // and the failure card's retry all reach the manager.
+        // Idle's fresh start, the waiting state's relaunch +
+        // cancel, and the failure card's retry all reach the
+        // manager.
         assertTrue(screen.contains("manager.startSignIn()"))
-        assertTrue(screen.contains("manager.checkNow()"))
         assertTrue(screen.contains("manager.cancelSignIn()"))
+        assertTrue(screen.contains("manager.authorizationLaunch"))
     }
 
     @Test
-    fun approvalCodeCanBeCopiedToTheClipboard() {
-        // Round 13: the code was display-only (a plain Compose
-        // Text is not selectable, and no clipboard path existed
-        // anywhere in the app), so the expected same-phone path
-        // forced the owner to memorise the code or app-switch to
-        // re-read it. The waiting state must offer a copy action
-        // that puts the grant's exact code on the clipboard.
+    fun theOnePrimaryActionIsContinueWithGoogle() {
         assertTrue(
-            "the waiting state must offer a visible Copy code action",
-            screen.contains("\"Copy code\""),
+            "the primary button is the normal phone way in",
+            screen.contains("\"Continue with Google\""),
         )
+        assertTrue(screen.contains("\"Try again\""))
+        assertTrue(screen.contains("\"Continue signing in\""))
+    }
+
+    @Test
+    fun theBrowserLaunchIsACustomTabWithAPlainFallback() {
+        assertTrue(screen.contains("CustomTabsIntent"))
+        assertTrue(screen.contains("launchUrl(context, uri)"))
         assertTrue(
-            "the copy action must write the shown code itself — " +
-                "copying anything else (or a hardcoded string) would " +
-                "paste a code Google never issued",
-            screen.contains(
-                "setText(AnnotatedString(current.userCode))",
-            ),
+            "a browser without Custom Tabs still gets the page",
+            screen.contains("Intent.ACTION_VIEW"),
         )
-        // Round 14 strengthening: the round-13 pin above was
-        // deletion-sensitive for the button and the copied value,
-        // but HOLLOW for the tap feedback — deleting the feedback
-        // text (or the state flip that shows it) left both
-        // assertions above untouched and the pin green, while the
-        // owner would tap and see no confirmation the copy
-        // happened. The feedback is part of the fix's claim, so
-        // it is pinned too: the copied-state label and the flip
-        // that selects it. (Each literal occurs exactly once in
-        // the screen, inside the button, so removing the button
-        // entirely still fails every assertion here.)
+    }
+
+    @Test
+    fun theDeviceEraMachineryIsGone() {
+        assertFalse(screen.contains("checkNow"))
+        assertFalse(screen.contains("userCode"))
+        assertFalse(screen.contains("google.com/device"))
+        assertFalse(screen.contains("Copy code"))
+        assertFalse(screen.contains("LocalClipboardManager"))
+        assertFalse(screen.contains("OwnKey"))
+        assertFalse(screen.contains("ownkey"))
+        assertFalse(screen.contains("Set up your own Google key"))
+    }
+
+    @Test
+    fun theUnconfiguredStateIsHonestAndOffersNoSetupRoad() {
         assertTrue(
-            "a tap must flip the copy state that drives the feedback",
-            screen.contains("codeCopied = true"),
+            screen.contains("isn't set up in this") &&
+                screen.contains("build of OffLeash yet"),
         )
-        assertTrue(
-            "the button must show the copied feedback once tapped",
-            screen.contains(
-                "\"Copied — paste it on Google's page\"",
-            ),
-        )
-        assertTrue(
-            "the feedback label must be conditional on the copy " +
-                "state, not a static second label",
-            screen.contains("if (codeCopied)"),
-        )
+        assertTrue(screen.contains("googleAuth.isConfigured"))
     }
 
     @Test
@@ -89,15 +88,16 @@ class SignInScreenContractTest {
     }
 
     @Test
-    fun approvalCodeLifeIsComputedFromTheGrant() {
-        assertTrue(
-            "the waiting copy must derive its minutes from the grant's expiry",
-            screen.contains("current.expiresAtEpochMs"),
+    fun theRedirectActivityHandsTheReturnToTheManager() {
+        val activity = mainSource(
+            "java/dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt"
         )
-        assertFalse(
-            "a resumed code must not be sold as a fresh 30 minutes",
-            screen.contains("expires in about 30 minutes"),
-        )
+        assertTrue(activity.contains("completeSignIn(returned)"))
+        assertTrue(activity.contains("MainActivity"))
+        val manifest = mainSource("AndroidManifest.xml")
+        assertTrue(manifest.contains("OAuthRedirectActivity"))
+        assertTrue(manifest.contains("oauth2redirect"))
+        assertTrue(manifest.contains("\${applicationId}"))
     }
 
     @Test

@@ -114,7 +114,18 @@ class LegacyRoadRemovedTest {
     @Test
     fun noMainSourceCallsTheRemovedRoad() {
         val javaRoot = locateMainJavaRoot()
-        val forbidden = listOf("completeSignIn", "validateNow(", "legacySessionValidationShouldRun")
+        // 0.8.8: the bare name `completeSignIn` is no longer a
+        // usable ban — the NATIVE flow's return entry point
+        // (GoogleSessionManager.completeSignIn, a different road
+        // entirely: an OAuth redirect binding, no cookies) carries
+        // it now. The ban re-points at the legacy receiver: a call
+        // on the container's legacy SessionManager is the removed
+        // road's call shape, and it stays banned module-wide.
+        val forbidden = listOf(
+            "sessionManager.completeSignIn",
+            "validateNow(",
+            "legacySessionValidationShouldRun",
+        )
         val offenders = mutableListOf<String>()
         javaRoot.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }

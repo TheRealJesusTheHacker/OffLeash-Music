@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.auth.GoogleOAuth
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -24,15 +24,13 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 /**
- * The 0.7.2 full-sweep lifecycle suite for the Google sign-in:
- * the races and honest-state edges the 0.7.1 grant-durability
- * suite did not cover.
+ * The full-sweep lifecycle suite for the Google sign-in, carried
+ * to the native flow (0.8.8): the races and honest-state edges of
+ * the session's life.
  *
- * - a double-tap DURING issuance must not cancel-and-reissue
- *   (the cancelled attempt's code still minted at Google, and
- *   nobody would ever poll it);
- * - sign-out while a grant is pending wipes the record and stops
- *   the poll loop;
+ * - a double-tap while an attempt stands joins it — the same
+ *   attempt, never a second one minted over it;
+ * - sign-out while an attempt is pending wipes the record;
  * - sign-out racing an adoption's final save is total — the
  *   adoption cannot re-store or re-publish behind its back;
  * - an expired token with NO refresh token ends the session
@@ -40,11 +38,8 @@ import org.junit.Test
  * - a TRANSIENT refresh failure never wipes the session, and a
  *   not-yet-expired token is still served;
  * - concurrent bearer calls share ONE refresh (single-flight);
- * - a slow_down cadence is persisted with the grant, so a restart
- *   does not resume at the cadence Google just refused;
- * - a grant with a long poll interval still expires PROMPTLY —
- *   the park is capped at its remaining life;
- * - a leftover grant beside a stored session is stale at restore;
+ * - a leftover attempt beside a stored session is stale at
+ *   restore and is wiped, never resumed;
  * - identity answers that carry an email but no name never store
  *   a blank name, and a partial identity refresh never erases the
  *   name/avatar the store already knows;
@@ -55,21 +50,12 @@ class GoogleLifecycleSweepTest {
 
     /** Form-POST transport routed by endpoint + body, all counted. */
     private class SweepFormTransport : HttpTransport {
-        val deviceCodeRequests = AtomicInteger(0)
-        val pollRequests = AtomicInteger(0)
+        val exchangeRequests = AtomicInteger(0)
         val refreshRequests = AtomicInteger(0)
         val revokeRequests = AtomicInteger(0)
 
         @Volatile
-        var issueBody: String = ISSUE_BODY_FAST
-
-        @Volatile
-        var issueGate: CountDownLatch? = null
-
-        @Volatile
-        var onPoll: () -> HttpResponse = {
-            HttpResponse(400, """{"error":"authorization_pending"}""")
-        }
+        var onExchange: () -> HttpResponse = { grantedResponse() }
 
         @Volatile
         var onRefresh: () -> HttpResponse = {
@@ -90,14 +76,10 @@ class GoogleLifecycleSweepTest {
             headers: Map<String, String>,
             formBody: String,
         ): HttpResponse = when {
-            url == GoogleOAuth.DEVICE_CODE_URL -> {
-                deviceCodeRequests.incrementAndGet()
-                issueGate?.await(10, TimeUnit.SECONDS)
-                HttpResponse(200, issueBody)
-            }
-            url == GoogleOAuth.TOKEN_URL && formBody.contains("device_code=") -> {
-                pollRequests.incrementAndGet()
-                onPoll()
+            url == GoogleOAuth.TOKEN_URL &&
+                formBody.contains("grant_type=authorization_code") -> {
+                exchangeRequests.incrementAndGet()
+                onExchange()
             }
             url == GoogleOAuth.TOKEN_URL && formBody.contains("grant_type=refresh_token") -> {
                 refreshRequests.incrementAndGet()
@@ -152,19 +134,18 @@ class GoogleLifecycleSweepTest {
     private fun manager(
         form: SweepFormTransport,
         tokenStore: GoogleTokenStore,
-        pendingStore: GooglePendingGrantStore? = GooglePendingGrantStore(
-            InMemorySecretStorage(),
-            testSecretBox(),
-        ),
+        attemptStore: GooglePendingNativeAuthStore? =
+            NativeTestSupport.attemptStore(),
         scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         userinfoBody: String = USERINFO_BODY,
         nowMs: () -> Long = { System.currentTimeMillis() },
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+        auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
         client = YoutubeiClient(UserinfoTransport(body = userinfoBody)),
         scope = scope,
-        pendingGrantStore = pendingStore,
+        redirectUri = NativeTestSupport.REDIRECT,
+        pendingAttemptStore = attemptStore,
         signInDiagnostics = SignInDiagnostics(),
         nowMs = nowMs,
     )
@@ -172,11 +153,17 @@ class GoogleLifecycleSweepTest {
     private fun testTokenStore(): GoogleTokenStore =
         GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
 
-    private fun grantedResponse(): HttpResponse = HttpResponse(
-        200,
-        """{"access_token":"ya29.granted","expires_in":3599,""" +
-            """"refresh_token":"rt-1","token_type":"Bearer"}""",
-    )
+    /** Drives a native sign-in from launch to the code's return. */
+    private fun signIn(manager: GoogleSessionManager) {
+        manager.startSignIn()
+        val launch = manager.authorizationLaunch.value
+        assertTrue("a launch must be published", launch != null)
+        manager.completeSignIn(
+            NativeTestSupport.codeRedirect(
+                NativeTestSupport.stateFrom(launch!!.url)
+            )
+        )
+    }
 
     /** Polls [condition] until it holds or [timeoutMs] passes. */
     private suspend fun awaitTrue(timeoutMs: Long = 15_000, condition: () -> Boolean) {
@@ -189,86 +176,60 @@ class GoogleLifecycleSweepTest {
     }
 
     @Test
-    fun doubleTapDuringIssuanceIssuesOnlyOneGrant() = runBlocking {
+    fun doubleTapWhileAnAttemptStandsJoinsIt() = runBlocking {
         val form = SweepFormTransport()
-        form.issueGate = CountDownLatch(1)
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
+        val attemptStore = NativeTestSupport.attemptStore()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = manager(form, testTokenStore(), pendingStore, scope)
+        val manager = manager(form, testTokenStore(), attemptStore, scope)
 
         manager.startSignIn()
-        awaitTrue { form.deviceCodeRequests.get() >= 1 }
-        // The issuance is parked at Google. A second (and third)
-        // tap — plus a check-now — must JOIN it, not restart it.
+        val first = manager.authorizationLaunch.value!!
+        // A second (and third) tap while the attempt stands must
+        // JOIN it — the browser may already be open on it, and a
+        // fresh attempt would orphan the approval in flight.
         manager.startSignIn()
         manager.startSignIn()
-        manager.checkNow()
-        delay(400)
+        assertEquals(first.attemptId, manager.authorizationLaunch.value?.attemptId)
         assertEquals(
-            "a second tap during issuance must not re-issue",
-            1,
-            form.deviceCodeRequests.get(),
+            NativeTestSupport.stateFrom(first.url),
+            NativeTestSupport.stateFrom(manager.authorizationLaunch.value!!.url),
         )
-
-        form.issueGate!!.countDown()
-        awaitTrue { manager.phase.value is GoogleSignInPhase.AwaitingApproval }
-        assertEquals(1, form.deviceCodeRequests.get())
-        assertEquals("dc-1", pendingStore.load()!!.deviceCode)
+        assertEquals(
+            NativeTestSupport.stateFrom(first.url),
+            attemptStore.load()?.state,
+        )
         manager.cancelSignIn()
         scope.cancel()
     }
 
     @Test
-    fun checkNowWithNoGrantIssuesAndPollsNothing() = runBlocking {
+    fun signOutWhileAnAttemptIsPendingWipesIt() = runBlocking {
         val form = SweepFormTransport()
+        val attemptStore = NativeTestSupport.attemptStore()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = manager(form, testTokenStore(), scope = scope)
-
-        manager.checkNow()
-        delay(400)
-        assertEquals(0, form.deviceCodeRequests.get())
-        assertEquals(0, form.pollRequests.get())
-        assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
-        scope.cancel()
-    }
-
-    @Test
-    fun signOutWhileGrantIsPendingWipesItAndStopsPolling() = runBlocking {
-        val form = SweepFormTransport()
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = manager(form, testTokenStore(), pendingStore, scope)
+        val manager = manager(form, testTokenStore(), attemptStore, scope)
 
         manager.startSignIn()
-        awaitTrue { manager.phase.value is GoogleSignInPhase.AwaitingApproval }
-        assertTrue(pendingStore.load() != null)
+        awaitTrue { manager.phase.value is GoogleSignInPhase.AwaitingReturn }
+        assertTrue(attemptStore.load() != null)
 
         manager.signOut()
 
-        assertNull("sign-out must wipe a pending grant", pendingStore.load())
+        assertNull("sign-out must wipe a pending attempt", attemptStore.load())
         assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
         assertFalse(manager.uiState.value.signedIn)
-        delay(300) // let any in-flight poll land before counting
-        val pollsAtSignOut = form.pollRequests.get()
-        delay(2_500)
-        assertEquals(
-            "no poll may run after sign-out",
-            pollsAtSignOut,
-            form.pollRequests.get(),
-        )
         scope.cancel()
     }
 
     @Test
     fun signOutRacingTheAdoptionSaveIsTotal() = runBlocking {
         val form = SweepFormTransport()
-        form.onPoll = { grantedResponse() }
         val blockingStorage = BlockingFirstWriteStorage()
         val tokenStore = GoogleTokenStore(blockingStorage, testSecretBox())
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = manager(form, tokenStore, scope = scope)
 
-        manager.startSignIn()
+        signIn(manager)
         // The adoption is parked INSIDE the token store's first
         // write — its final, non-suspending stretch.
         assertTrue(
@@ -405,54 +366,7 @@ class GoogleLifecycleSweepTest {
     }
 
     @Test
-    fun slowDownCadenceIsPersistedWithTheGrant() = runBlocking {
-        val form = SweepFormTransport()
-        val polls = AtomicInteger(0)
-        form.onPoll = {
-            if (polls.incrementAndGet() == 1) {
-                HttpResponse(400, """{"error":"slow_down"}""")
-            } else {
-                HttpResponse(400, """{"error":"authorization_pending"}""")
-            }
-        }
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = manager(form, testTokenStore(), pendingStore, scope)
-
-        manager.startSignIn()
-        awaitTrue { manager.phase.value is GoogleSignInPhase.AwaitingApproval }
-        // Issued with interval 0; Google's slow_down adds 5s to the
-        // floored 1s cadence — the persisted record must say 6, so
-        // a restart resumes at the cadence Google asked for.
-        awaitTrue { pendingStore.load()?.intervalSeconds == 6L }
-        manager.cancelSignIn()
-        scope.cancel()
-    }
-
-    @Test
-    fun longIntervalGrantStillExpiresPromptly() = runBlocking {
-        val form = SweepFormTransport()
-        form.issueBody =
-            """{"device_code":"dc-short","user_code":"SHRT-LIFE",""" +
-                """"verification_url":"https://www.google.com/device",""" +
-                """"expires_in":2,"interval":3600}"""
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = manager(form, testTokenStore(), pendingStore, scope)
-
-        manager.startSignIn()
-        awaitTrue(timeoutMs = 10_000) {
-            manager.phase.value is GoogleSignInPhase.Failed
-        }
-        val failed = manager.phase.value as GoogleSignInPhase.Failed
-        assertTrue(failed.reason.contains("expired"))
-        assertEquals("an expired grant is never polled", 0, form.pollRequests.get())
-        assertNull(pendingStore.load())
-        scope.cancel()
-    }
-
-    @Test
-    fun aStoredSessionMakesALeftoverGrantStaleAtRestore() = runBlocking {
+    fun aStoredSessionMakesALeftoverAttemptStaleAtRestore() = runBlocking {
         val form = SweepFormTransport()
         val tokenStore = testTokenStore()
         tokenStore.save(
@@ -463,33 +377,34 @@ class GoogleLifecycleSweepTest {
                 identityName = "Test Listener",
             )
         )
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), testSecretBox())
+        val attemptStore = NativeTestSupport.attemptStore()
         val now = System.currentTimeMillis()
-        pendingStore.save(
-            StoredPendingGrant(
-                deviceCode = "dc-leftover",
-                userCode = "LEFT-OVER",
-                verificationUrl = "https://www.google.com/device",
+        attemptStore.save(
+            StoredPendingNativeAuth(
+                state = "leftover-state",
+                codeVerifier = "leftover-verifier",
+                clientId = NativeTestSupport.ANDROID_ID,
+                redirectUri = NativeTestSupport.REDIRECT,
                 issuedAtEpochMs = now,
                 expiresAtEpochMs = now + 1_800_000L,
-                intervalSeconds = 5L,
             )
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = manager(form, tokenStore, pendingStore, scope)
+        val manager = manager(form, tokenStore, attemptStore, scope)
 
         assertTrue(manager.uiState.value.signedIn)
-        assertNull("a leftover grant beside a session is wiped", pendingStore.load())
-        delay(1_200)
-        assertEquals(0, form.deviceCodeRequests.get())
-        assertEquals(0, form.pollRequests.get())
+        assertNull(
+            "a leftover attempt beside a session is wiped",
+            attemptStore.load(),
+        )
+        assertNull(manager.authorizationLaunch.value)
+        assertEquals(0, form.exchangeRequests.get())
         scope.cancel()
     }
 
     @Test
     fun adoptionOfAnEmailOnlyIdentityStoresNoBlankName() = runBlocking {
         val form = SweepFormTransport()
-        form.onPoll = { grantedResponse() }
         val tokenStore = testTokenStore()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = manager(
@@ -499,7 +414,7 @@ class GoogleLifecycleSweepTest {
             userinfoBody = """{"sub":"123","email":"listener@example.com"}""",
         )
 
-        manager.startSignIn()
+        signIn(manager)
         awaitTrue { manager.uiState.value.signedIn }
         val stored = tokenStore.load()!!
         assertNull("a blank name is not a name", stored.identityName)
@@ -539,7 +454,6 @@ class GoogleLifecycleSweepTest {
     @Test
     fun adoptionSaveFailureEndsOnTheStoreCardAndStoresNothing() = runBlocking {
         val form = SweepFormTransport()
-        form.onPoll = { grantedResponse() }
         val throwingWriteStorage = object : SecretStorage {
             override fun read(): ByteArray? = null
             override fun write(bytes: ByteArray) {
@@ -551,21 +465,21 @@ class GoogleLifecycleSweepTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = manager(form, tokenStore, scope = scope)
 
-        manager.startSignIn()
+        signIn(manager)
         awaitTrue { manager.phase.value is GoogleSignInPhase.Failed }
         val failed = manager.phase.value as GoogleSignInPhase.Failed
-        assertTrue(failed.reason.contains("couldn't save the sign-in"))
+        assertTrue(failed.reason.contains("couldn't save"))
         assertFalse(manager.uiState.value.signedIn)
         assertNull(tokenStore.load())
         scope.cancel()
     }
 
     private companion object {
-        /** interval 0: the manager floors it at 1s of poll cadence. */
-        const val ISSUE_BODY_FAST =
-            """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
-                """"verification_url":"https://www.google.com/device",""" +
-                """"expires_in":1800,"interval":0}"""
+        fun grantedResponse(): HttpResponse = HttpResponse(
+            200,
+            """{"access_token":"ya29.granted","expires_in":3599,""" +
+                """"refresh_token":"rt-1","token_type":"Bearer"}""",
+        )
 
         const val USERINFO_BODY =
             """{"sub":"123","name":"Test Listener",""" +

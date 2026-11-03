@@ -122,9 +122,8 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_accountUiState" to 2, "_showPlayerRequests" to 1),
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2, "_streamQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to mapOf("_records" to 1),
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_phase" to 12, "_uiState" to 10),
+            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_authorizationLaunch" to 7, "_phase" to 12, "_pendingAttemptDurability" to 4, "_uiState" to 10),
             "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
-            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to mapOf("_state" to 1),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
@@ -141,9 +140,8 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt" to 3,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 8,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 22,
+            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 33,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
-            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to 1,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
             "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
@@ -160,9 +158,8 @@ class R63SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt" to 2,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 4,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 2,
+            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 4,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
-            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to 1,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
             "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
             "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
@@ -241,16 +238,19 @@ class R63SweepContractTest {
         }
         assertEquals(
             "the module's shipped StateFlow write total on " +
-                "the normalized view is 111, as on raw text " +
+                "the normalized view is 121, as on raw text " +
                 "(112 through 0.8.2; -5 at 0.8.3's legacy-road " +
-                "removal, +4 at 0.8.6's own-client build)",
-            111,
+                "removal, +4 at 0.8.6's own-client build, +10 " +
+                "net at 0.8.8: the session manager's writes " +
+                "grew 22 to 33 with the native flow's two added " +
+                "flows, and the wizard's single write left)",
+            121,
             grandTotal,
         )
         assertEquals(
             "the module's shipped MutableStateFlow namings " +
-                "on the normalized view total 41, as on raw text",
-            41,
+                "on the normalized view total 42, as on raw text",
+            42,
             grandBirths,
         )
     }
@@ -347,8 +347,7 @@ class R63SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 7,
             "app:dev/cyberdogs/offleash/ui/about/AboutScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/account/OwnKeyWizardScreen.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 3,
+            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 4,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 8,
             "app:dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
@@ -357,7 +356,7 @@ class R63SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 9,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 6,
+            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 5,
         )
         val expectedLifecycle: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 2,

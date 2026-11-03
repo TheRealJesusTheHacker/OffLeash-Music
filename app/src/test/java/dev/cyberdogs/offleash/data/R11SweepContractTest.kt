@@ -6,58 +6,62 @@ import java.io.File
 
 /**
  * Round 11 sweep contracts (confirmation round — breaking the
- * round-10 Google locked applies):
+ * round-10 Google locked applies), carried to the native flow
+ * (0.8.8):
  *
- * Round 10 guarded livePendingGrant's store-loaded candidate
- * adoption: the candidate is assigned only while `pendingGrant`
+ * Round 10 guarded livePendingAttempt's store-loaded candidate
+ * adoption: the candidate is assigned only while `pendingAttempt`
  * is still null, so an older candidate cannot overwrite a newer
- * in-memory grant. But the function's RETURN kept the pre-round-10
- * shape: it returned the candidate unconditionally. A fresh
- * persist landing between the store read and the adoption lock
- * (its grant is precisely the one the guard protects) leaves the
- * memory correct — and the caller (startSignIn / checkNow)
- * publishing and resuming the STALE candidate anyway: the screen
- * would show the superseded code while the poll loop runs the
- * newer grant, so an approval of the shown code is never
- * collected. The adoption step must hand back the standing
- * grant, not the candidate it carried in.
+ * in-memory attempt. But the function's RETURN kept the
+ * pre-round-10 shape: it returned the candidate unconditionally.
+ * A fresh persist landing between the store read and the
+ * adoption lock (its attempt is precisely the one the guard
+ * protects) leaves the memory correct — and the caller
+ * (startSignIn) publishing and resuming the STALE candidate
+ * anyway: the screen would hand the browser a superseded
+ * authorization while the manager tracks the newer attempt, so
+ * the return's state could never match. The adoption step must
+ * hand back the standing attempt, not the candidate it carried
+ * in.
  *
  * The window has no runtime injection point (it needs a sealed
- * candidate standing while no grant is in memory, mid-issuance),
- * so the shape is the pin (house style, as with the round-10
- * F2 applies it completes).
+ * candidate standing while no attempt is in memory,
+ * mid-issuance), so the shape is the pin (house style, as with
+ * the round-10 F2 applies it completes).
  */
 class R11SweepContractTest {
 
     @Test
-    fun livePendingGrantAdoptionReturnsTheStandingGrantNotTheStaleCandidate() {
+    fun livePendingAttemptAdoptionReturnsTheStandingAttemptNotTheStaleCandidate() {
         // Round 12 presence guard (meta-audit, the r11a F2
         // pattern): the pin's literals are unique to this
         // function today (deletion-sensitive, verified by grep),
         // but the anchor itself was unasserted; the guard makes
         // that sensitivity explicit rather than accidental.
         assertTrue(
-            "livePendingGrant must exist at all",
-            manager().contains("private fun livePendingGrant()"),
+            "livePendingAttempt must exist at all",
+            manager().contains("private fun livePendingAttempt()"),
         )
         val live = manager()
-            .substringAfter("private fun livePendingGrant()")
-            .substringBefore("private fun ensurePolling()")
+            .substringAfter("private fun livePendingAttempt()")
+            .substringBefore("private fun publishAwaitingReturn")
         assertTrue(
-            "the adoption must capture the standing grant inside its lock",
+            "the adoption must capture the standing attempt inside its lock",
             live.contains("val standing = synchronized(lock)"),
         )
         val adoption = live.substringAfter("val standing = synchronized(lock)")
         assertTrue(
             "the adoption's in-lock step must keep round 10's " +
                 "assign-only-while-null guard",
-            adoption.contains("if (pendingGrant == null) pendingGrant = candidate"),
+            adoption.contains(
+                "if (pendingAttempt == null) pendingAttempt = candidate",
+            ),
         )
         assertTrue(
-            "livePendingGrant must return the standing grant its " +
-                "adoption step found — returning the candidate " +
-                "unconditionally republishes a superseded code while " +
-                "the poll loop runs the newer grant",
+            "livePendingAttempt must return the standing attempt " +
+                "its adoption step found — returning the candidate " +
+                "unconditionally republishes a superseded attempt " +
+                "whose state the return could never match",
             adoption.contains("return standing ?: candidate"),
         )
     }

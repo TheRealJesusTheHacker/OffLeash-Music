@@ -3,7 +3,7 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.auth.GoogleOAuth
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -22,29 +22,39 @@ import org.junit.Test
 
 /**
  * Bug sweep round 2 (lane C3): repeated lifecycle churn and clock
- * chaos against the Google session manager, with fake transports.
+ * chaos against the Google session manager, with fake transports —
+ * carried to the native flow (0.8.8).
  *
  * - 200 sign-in → sign-out cycles: no state leaks — the token file
- *   and the pending-grant file are wiped every cycle, exactly one
- *   grant is issued and one revocation sent per cycle, and a fresh
+ *   and the pending-attempt file are wiped every cycle, exactly
+ *   one exchange and one revocation per cycle, and a fresh
  *   manager over the same stores afterwards is cleanly signed out
- *   with no zombie grant to resume.
- * - Clock jumps across a pending grant: +1h kills it honestly at
- *   restore with zero polls; −1h leaves it locally live, but the
- *   SERVER's expired answer is what ends it (Google expires grants
- *   server-side; the poll mapping handles it).
- * - Clock jumps across token expiry: −10min forces no refresh (the
- *   stored expiry and the clock move together); a jump past expiry
- *   with a revoked refresh grant ends the session honestly.
+ *   with no zombie attempt to resume.
+ * - Clock jumps across a pending attempt: +1h past its expiry
+ *   clears it quietly at restore with zero network; −1h leaves it
+ *   locally live, but the SERVER's verdict on the returned code
+ *   (invalid_grant — the code is dead server-side) is what ends
+ *   it. The local clock never keeps a dead attempt alive.
+ * - Clock jumps across token expiry: −10min forces no refresh
+ *   (the stored expiry and the clock move together); a jump past
+ *   expiry with a revoked refresh grant ends the session honestly.
  */
 class GoogleChurnSweepTest {
 
-    /** Form transport: issuance counted, polls grant at once, refresh/revoke scripted. */
+    /** Form transport: exchanges grant at once; refresh/revoke scripted + counted. */
     private class ChurnTransport : HttpTransport {
-        val deviceCodeRequests = AtomicInteger(0)
-        val pollRequests = AtomicInteger(0)
+        val exchangeRequests = AtomicInteger(0)
         val refreshRequests = AtomicInteger(0)
         val revokeRequests = AtomicInteger(0)
+
+        @Volatile
+        var onExchange: () -> HttpResponse = {
+            HttpResponse(
+                200,
+                """{"access_token":"ya29.granted","expires_in":3599,""" +
+                    """"refresh_token":"rt-1","token_type":"Bearer"}""",
+            )
+        }
 
         @Volatile
         var onRefresh: () -> HttpResponse = {
@@ -62,17 +72,10 @@ class GoogleChurnSweepTest {
             headers: Map<String, String>,
             formBody: String,
         ): HttpResponse = when {
-            url == GoogleOAuth.DEVICE_CODE_URL -> {
-                deviceCodeRequests.incrementAndGet()
-                HttpResponse(200, ISSUE_BODY)
-            }
-            url == GoogleOAuth.TOKEN_URL && formBody.contains("device_code=") -> {
-                pollRequests.incrementAndGet()
-                HttpResponse(
-                    200,
-                    """{"access_token":"ya29.granted","expires_in":3599,""" +
-                        """"refresh_token":"rt-1","token_type":"Bearer"}""",
-                )
+            url == GoogleOAuth.TOKEN_URL &&
+                formBody.contains("grant_type=authorization_code") -> {
+                exchangeRequests.incrementAndGet()
+                onExchange()
             }
             url == GoogleOAuth.TOKEN_URL && formBody.contains("grant_type=refresh_token") -> {
                 refreshRequests.incrementAndGet()
@@ -92,15 +95,16 @@ class GoogleChurnSweepTest {
     private fun manager(
         form: ChurnTransport,
         tokenStore: GoogleTokenStore,
-        pendingStore: GooglePendingGrantStore,
+        attemptStore: GooglePendingNativeAuthStore,
         scope: CoroutineScope,
         nowMs: () -> Long = { System.currentTimeMillis() },
     ): GoogleSessionManager = GoogleSessionManager(
         store = tokenStore,
-        auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
+        auth = GoogleNativeAuth(form, NativeTestSupport.ANDROID_ID),
         client = YoutubeiClient(form),
         scope = scope,
-        pendingGrantStore = pendingStore,
+        redirectUri = NativeTestSupport.REDIRECT,
+        pendingAttemptStore = attemptStore,
         signInDiagnostics = SignInDiagnostics(),
         nowMs = nowMs,
     )
@@ -119,16 +123,23 @@ class GoogleChurnSweepTest {
         val form = ChurnTransport()
         val box = testSecretBox()
         val tokenStorage = InMemorySecretStorage()
-        val pendingStorage = InMemorySecretStorage()
+        val attemptStorage = InMemorySecretStorage()
         val tokenStore = GoogleTokenStore(tokenStorage, box)
-        val pendingStore = GooglePendingGrantStore(pendingStorage, box)
+        val attemptStore = GooglePendingNativeAuthStore(attemptStorage, box)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val manager = manager(form, tokenStore, pendingStore, scope)
+            val manager = manager(form, tokenStore, attemptStore, scope)
             repeat(200) { cycle ->
                 manager.startSignIn()
-                awaitTrue { manager.phase.value is GoogleSignInPhase.AwaitingApproval }
-                manager.checkNow()
+                awaitTrue {
+                    manager.phase.value is GoogleSignInPhase.AwaitingReturn
+                }
+                val launch = manager.authorizationLaunch.value!!
+                manager.completeSignIn(
+                    NativeTestSupport.codeRedirect(
+                        NativeTestSupport.stateFrom(launch.url)
+                    )
+                )
                 awaitTrue { manager.uiState.value.signedIn }
                 assertTrue(
                     "cycle $cycle: tokens must be stored while signed in",
@@ -141,135 +152,121 @@ class GoogleChurnSweepTest {
                     tokenStore.isWipedClean(),
                 )
                 assertTrue(
-                    "cycle $cycle: no pending grant may survive sign-out",
-                    pendingStore.isWipedClean(),
+                    "cycle $cycle: no pending attempt may survive sign-out",
+                    attemptStore.isWipedClean(),
                 )
             }
-            // Exactly one grant issued and one revocation sent per
-            // cycle — no leaked poll jobs re-issuing or re-polling
-            // behind the cycles' backs.
-            assertEquals(200, form.deviceCodeRequests.get())
+            // Exactly one exchange and one revocation per cycle —
+            // no leaked work re-issuing behind the cycles' backs.
+            assertEquals(200, form.exchangeRequests.get())
             assertEquals(200, form.revokeRequests.get())
-            val pollsAfterCycles = form.pollRequests.get()
-            delay(300)
-            assertEquals(
-                "no zombie poll may run after the last sign-out",
-                pollsAfterCycles,
-                form.pollRequests.get(),
-            )
-            // A fresh manager (process restart) over the same stores
-            // is signed out and resumes nothing.
-            val fresh = manager(form, tokenStore, pendingStore, scope)
+            // A fresh manager (process restart) over the same
+            // stores is signed out and resumes nothing.
+            val fresh = manager(form, tokenStore, attemptStore, scope)
             assertFalse(fresh.uiState.value.signedIn)
             assertFalse(fresh.hasStoredSession())
             assertEquals(GoogleSignInPhase.Idle, fresh.phase.value)
-            assertEquals(200, form.deviceCodeRequests.get())
+            assertNull(fresh.authorizationLaunch.value)
+            assertEquals(200, form.exchangeRequests.get())
         } finally {
             scope.cancel()
         }
     }
 
     @Test
-    fun clockJumpForwardPastGrantExpiryClearsItAtRestoreWithNoPolling() = runBlocking {
+    fun clockJumpForwardPastAttemptExpiryClearsItAtRestoreQuietly() = runBlocking {
         val form = ChurnTransport()
         val box = testSecretBox()
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), box)
+        val attemptStore =
+            GooglePendingNativeAuthStore(InMemorySecretStorage(), box)
         val issuedAt = 1_700_000_000_000L
-        pendingStore.save(
-            StoredPendingGrant(
-                deviceCode = "dc-old",
-                userCode = "WDJB-MJHT",
-                verificationUrl = "https://www.google.com/device",
+        attemptStore.save(
+            StoredPendingNativeAuth(
+                state = "old-state",
+                codeVerifier = "old-verifier",
+                clientId = NativeTestSupport.ANDROID_ID,
+                redirectUri = NativeTestSupport.REDIRECT,
                 issuedAtEpochMs = issuedAt,
                 expiresAtEpochMs = issuedAt + 30 * 60_000L,
-                intervalSeconds = 5L,
             ),
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             // The device clock jumps +1h while the app is dead: at
-            // restore the grant is expired — cleared, landed on the
-            // plain expired ending, and NEVER polled (no zombie).
+            // restore the attempt is expired — cleared quietly
+            // (no failure ending for an attempt the owner may
+            // never have opened; 0.8.8's divergence from the
+            // device flow) and never completed (no zombie).
             val manager = manager(
                 form,
                 GoogleTokenStore(InMemorySecretStorage(), box),
-                pendingStore,
+                attemptStore,
                 scope,
                 nowMs = { issuedAt + 61 * 60_000L },
             )
-            assertTrue(manager.phase.value is GoogleSignInPhase.Failed)
-            assertTrue(pendingStore.isWipedClean())
+            assertEquals(GoogleSignInPhase.Idle, manager.phase.value)
+            assertNull(manager.authorizationLaunch.value)
+            assertTrue(attemptStore.isWipedClean())
             delay(300)
-            assertEquals(0, form.pollRequests.get())
+            assertEquals(0, form.exchangeRequests.get())
         } finally {
             scope.cancel()
         }
     }
 
     @Test
-    fun clockJumpBackwardLeavesGrantLocallyLiveButTheServersExpiredAnswerEndsIt() = runBlocking {
-        // Polls answer "expired" — Google's server-side verdict.
-        val form = object : HttpTransport {
-            val polls = AtomicInteger(0)
-
-            override fun post(
-                url: String,
-                headers: Map<String, String>,
-                body: String,
-            ): HttpResponse = throw UnsupportedOperationException("form POSTs only")
-
-            override fun postForm(
-                url: String,
-                headers: Map<String, String>,
-                formBody: String,
-            ): HttpResponse = when {
-                url == GoogleOAuth.TOKEN_URL && formBody.contains("device_code=") -> {
-                    polls.incrementAndGet()
-                    HttpResponse(400, """{"error":"expired_token"}""")
-                }
-                else -> throw AssertionError("unexpected form POST: $url")
+    fun clockJumpBackwardLeavesAttemptLocallyLiveButTheServersVerdictEndsIt() =
+        runBlocking {
+            // The exchange answers invalid_grant — Google's
+            // server-side verdict on a code whose life has ended.
+            val form = ChurnTransport()
+            form.onExchange = {
+                HttpResponse(400, """{"error":"invalid_grant"}""")
             }
-
-            override fun get(url: String, headers: Map<String, String>): HttpResponse =
-                HttpResponse(200, USERINFO_BODY)
-        }
-        val box = testSecretBox()
-        val pendingStore = GooglePendingGrantStore(InMemorySecretStorage(), box)
-        val issuedAt = 1_700_000_000_000L
-        pendingStore.save(
-            StoredPendingGrant(
-                deviceCode = "dc-old",
-                userCode = "WDJB-MJHT",
-                verificationUrl = "https://www.google.com/device",
-                issuedAtEpochMs = issuedAt - 25 * 60_000L,
-                expiresAtEpochMs = issuedAt + 5 * 60_000L,
-                intervalSeconds = 5L,
-            ),
-        )
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        try {
-            // Clock at −1h: locally the grant still looks live, so
-            // polling resumes — and the server's expired answer is
-            // mapped to the honest expired ending + a wiped store.
-            // The local clock never gets to keep a dead grant alive.
-            val manager = GoogleSessionManager(
-                store = GoogleTokenStore(InMemorySecretStorage(), box),
-                auth = GoogleDeviceAuth(form, TestOAuthIdentity.SHARED),
-                client = YoutubeiClient(form),
-                scope = scope,
-                pendingGrantStore = pendingStore,
-                signInDiagnostics = SignInDiagnostics(),
-                nowMs = { issuedAt - 60 * 60_000L },
+            val box = testSecretBox()
+            val attemptStore =
+                GooglePendingNativeAuthStore(InMemorySecretStorage(), box)
+            val issuedAt = 1_700_000_000_000L
+            attemptStore.save(
+                StoredPendingNativeAuth(
+                    state = "old-state",
+                    codeVerifier = "old-verifier",
+                    clientId = NativeTestSupport.ANDROID_ID,
+                    redirectUri = NativeTestSupport.REDIRECT,
+                    issuedAtEpochMs = issuedAt - 25 * 60_000L,
+                    expiresAtEpochMs = issuedAt + 5 * 60_000L,
+                ),
             )
-            assertTrue(manager.phase.value is GoogleSignInPhase.AwaitingApproval)
-            manager.checkNow()
-            awaitTrue { manager.phase.value is GoogleSignInPhase.Failed }
-            assertTrue(pendingStore.isWipedClean())
-            assertTrue(form.polls.get() >= 1)
-        } finally {
-            scope.cancel()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            try {
+                // Clock at −1h: locally the attempt still looks
+                // live, so it is resumed — and when its return
+                // arrives, the server's verdict ends it honestly
+                // with the store wiped. The local clock never gets
+                // to keep a dead attempt alive.
+                val manager = manager(
+                    form,
+                    GoogleTokenStore(InMemorySecretStorage(), box),
+                    attemptStore,
+                    scope,
+                    nowMs = { issuedAt - 60 * 60_000L },
+                )
+                assertTrue(
+                    manager.phase.value is GoogleSignInPhase.AwaitingReturn
+                )
+                val launch = manager.authorizationLaunch.value!!
+                manager.completeSignIn(
+                    NativeTestSupport.codeRedirect(
+                        NativeTestSupport.stateFrom(launch.url)
+                    )
+                )
+                awaitTrue { manager.phase.value is GoogleSignInPhase.Failed }
+                assertTrue(attemptStore.isWipedClean())
+                assertEquals(1, form.exchangeRequests.get())
+            } finally {
+                scope.cancel()
+            }
         }
-    }
 
     @Test
     fun clockJumpsAcrossTokenExpiryBehaveHonestly() {
@@ -292,7 +289,7 @@ class GoogleChurnSweepTest {
             val manager = manager(
                 form,
                 tokenStore,
-                GooglePendingGrantStore(InMemorySecretStorage(), box),
+                GooglePendingNativeAuthStore(InMemorySecretStorage(), box),
                 scope,
                 nowMs = { now.get() },
             )
@@ -302,9 +299,10 @@ class GoogleChurnSweepTest {
             now.set(grantTime)
             assertEquals("ya29.stored", manager.currentBearer())
             assertEquals(0, form.refreshRequests.get())
-            // Clock jumps past the real expiry and the refresh grant
-            // is revoked server-side: the session ends honestly —
-            // store wiped, no token served, NEEDS_SIGN_IN state.
+            // Clock jumps past the real expiry and the refresh
+            // grant is revoked server-side: the session ends
+            // honestly — store wiped, no token served,
+            // NEEDS_SIGN_IN state.
             now.set(expiry + 60_000L)
             assertNull(manager.currentBearer())
             assertEquals(1, form.refreshRequests.get())
@@ -317,12 +315,6 @@ class GoogleChurnSweepTest {
     }
 
     private companion object {
-        /** interval 0: the manager floors the poll cadence at 1s; checkNow wakes it. */
-        const val ISSUE_BODY =
-            """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
-                """"verification_url":"https://www.google.com/device",""" +
-                """"expires_in":1800,"interval":0}"""
-
         const val USERINFO_BODY =
             """{"sub":"123","name":"Test Listener",""" +
                 """"email":"listener@example.com",""" +

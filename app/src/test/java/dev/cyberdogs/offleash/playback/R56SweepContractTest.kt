@@ -187,8 +187,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 7,
             "app:dev/cyberdogs/offleash/ui/about/AboutScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/account/OwnKeyWizardScreen.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 3,
+            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 4,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 8,
             "app:dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
@@ -197,7 +196,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 9,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 6,
+            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 5,
         )
         val expectedLifecycle: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 2,
@@ -327,7 +326,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/data/DownloadManager.kt" to 2,
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 4,
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 5,
+            "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 6,
             "app:dev/cyberdogs/offleash/data/SessionStore.kt" to 1,
             "app:dev/cyberdogs/offleash/data/Stores.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 2,
@@ -337,6 +336,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "core:dev/cyberdogs/offleash/core/api/YoutubeiClient.kt" to 3,
             "core:dev/cyberdogs/offleash/core/auth/AuthSession.kt" to 1,
+            "core:dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt" to 3,
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 6,
             "core:dev/cyberdogs/offleash/core/error/OffleashException.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/JsonNav.kt" to 1,
@@ -470,6 +470,10 @@ class R56SweepContractTest {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
+    // Chrome Custom Tabs (0.8.8): Google's sign-in page opens in
+    // the browser's own surface, and the return lands back in the
+    // app — the native authorization flow's browser leg.
+    implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")

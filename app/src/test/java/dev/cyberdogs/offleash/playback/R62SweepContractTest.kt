@@ -61,7 +61,7 @@ class R62SweepContractTest {
             "dev/cyberdogs/offleash/OffleashApp.kt" to 2,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 4,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 2,
+            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 4,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
             "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to 1,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
@@ -101,10 +101,14 @@ class R62SweepContractTest {
             )
         }
         assertEquals(
-            "the module must hold exactly its 41 shipped " +
+            "the module must hold exactly its 42 shipped " +
                 "MutableStateFlow namings (round 61's census, " +
-                "+1 at 0.8.2 for Home's feedNote flow, +1 at 0.8.6 for the own-key wizard's state flow)",
-            41,
+                "+1 at 0.8.2 for Home's feedNote flow, +1 at 0.8.6 " +
+                "for the own-key wizard's state flow, +1 net at " +
+                "0.8.8: the wizard's flow left with the dead road " +
+                "and the native sign-in added two — the held " +
+                "browser launch and the attempt-durability flag)",
+            42,
             total,
         )
     }

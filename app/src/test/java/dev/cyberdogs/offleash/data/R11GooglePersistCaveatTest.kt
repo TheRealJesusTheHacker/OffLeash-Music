@@ -3,47 +3,49 @@ package dev.cyberdogs.offleash.data
 import dev.cyberdogs.offleash.core.api.HttpResponse
 import dev.cyberdogs.offleash.core.api.HttpTransport
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleDeviceAuth
+import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.auth.GoogleOAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Round 11 (breaking the round-10 persist helper): the helper's
- * preserved caveat, pinned at runtime. Round 10 moved the grant
- * persist into persistPendingGrantIfCurrent — assignment BEFORE
- * the sealed save, inside the lock — deliberately unlike adopt(),
- * which saves before assigning: a device grant's poll runs from
- * memory, so a save failure must not kill the attempt. The
- * claims under attack, and their verdicts in this test:
+ * Round 11 (breaking the round-10 persist helper): the persist
+ * caveat, pinned at runtime — carried to the native flow (0.8.8).
  *
- * - A non-CancellationException save failure is CONTAINED in the
- *   helper (it does not escape into runSignIn's catch, which
- *   would have landed the attempt on the Failed card): the
- *   phase reaches AwaitingApproval.
- * - The in-memory grant STANDS after the failed save: a second
- *   startSignIn resumes it instead of issuing a new code
- *   (issuance count stays 1).
- * - Nothing is SEALED: the pending store stays empty, and a
+ * The device-era original pinned the grant persist's deliberate
+ * caveat: assignment before the sealed save, so a save failure
+ * must not kill an attempt whose poll runs from memory. The
+ * native attempt persist carries the same caveat in
+ * [GoogleSessionManager.startSignIn]: the attempt is assigned and
+ * published first, the sealed save is attempted inside the same
+ * locked step, and a failure is contained — recorded on
+ * [GoogleSessionManager.pendingAttemptDurability] and in
+ * diagnostics — never thrown into the flow. The claims under
+ * attack, and their verdicts in this test:
+ *
+ * - A save failure is CONTAINED: the phase reaches
+ *   AwaitingReturn and the launch is published.
+ * - The in-memory attempt STANDS after the failed save: a
+ *   second startSignIn resumes the SAME attempt (same launch)
+ *   instead of minting a new one, and the return still completes
+ *   the sign-in in this process.
+ * - Nothing is SEALED: the attempt store stays empty, and a
  *   fresh manager over the same stores starts at Idle — only
  *   the survive-a-restart guarantee is lost, exactly as the
  *   caveat (and its diagnostics line) says.
  */
 class R11GooglePersistCaveatTest {
 
-    /** Form transport that counts device-code issuances. */
-    private class CountingIssueTransport(
-        val issuances: AtomicInteger,
-    ) : HttpTransport {
+    /** Form transport answering the code exchange with a grant. */
+    private class GrantTransport : HttpTransport {
         override fun post(
             url: String,
             headers: Map<String, String>,
@@ -55,16 +57,11 @@ class R11GooglePersistCaveatTest {
             headers: Map<String, String>,
             formBody: String,
         ): HttpResponse = when {
-            url == GoogleOAuth.DEVICE_CODE_URL -> {
-                issuances.incrementAndGet()
-                HttpResponse(
-                    200,
-                    """{"device_code":"dc-1","user_code":"WDJB-MJHT",""" +
-                        """"verification_url":"https://www.google.com/device",""" +
-                        """"expires_in":1800,"interval":3600}""",
-                )
-            }
-            url == GoogleOAuth.TOKEN_URL -> HttpResponse(200, "")
+            url == GoogleOAuth.TOKEN_URL -> HttpResponse(
+                200,
+                """{"access_token":"ya29.granted","expires_in":3599,""" +
+                    """"refresh_token":"rt-1","token_type":"Bearer"}""",
+            )
             else -> throw AssertionError("unexpected form POST: $url")
         }
     }
@@ -80,7 +77,7 @@ class R11GooglePersistCaveatTest {
             HttpResponse(200, """{"sub":"1","name":"T","email":"t@example.com"}""")
     }
 
-    /** A pending-grant storage whose every write fails. */
+    /** A pending-attempt storage whose every write fails. */
     private class ThrowingWriteStorage : SecretStorage {
         override fun read(): ByteArray? = null
         override fun write(bytes: ByteArray) {
@@ -90,66 +87,80 @@ class R11GooglePersistCaveatTest {
     }
 
     @Test
-    fun grantSaveFailureKeepsTheAttemptAliveInProcessAndSealsNothing() = runBlocking {
-        val issuances = AtomicInteger(0)
-        val transport = CountingIssueTransport(issuances)
-        val tokenStore = GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
-        val pendingStore = GooglePendingGrantStore(ThrowingWriteStorage(), testSecretBox())
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val manager = GoogleSessionManager(
-            store = tokenStore,
-            auth = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED),
-            client = YoutubeiClient(UserinfoTransport()),
-            scope = scope,
-            pendingGrantStore = pendingStore,
-            signInDiagnostics = SignInDiagnostics(),
-        )
+    fun attemptSaveFailureKeepsTheAttemptAliveInProcessAndSealsNothing() =
+        runBlocking {
+            val tokenStore =
+                GoogleTokenStore(InMemorySecretStorage(), testSecretBox())
+            val attemptStore = GooglePendingNativeAuthStore(
+                ThrowingWriteStorage(), testSecretBox()
+            )
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val manager = GoogleSessionManager(
+                store = tokenStore,
+                auth = GoogleNativeAuth(
+                    GrantTransport(), NativeTestSupport.ANDROID_ID
+                ),
+                client = YoutubeiClient(UserinfoTransport()),
+                scope = scope,
+                redirectUri = NativeTestSupport.REDIRECT,
+                pendingAttemptStore = attemptStore,
+                signInDiagnostics = SignInDiagnostics(),
+            )
 
-        manager.startSignIn()
-        awaitTrue {
-            manager.phase.value is GoogleSignInPhase.AwaitingApproval
+            manager.startSignIn()
+            assertTrue(
+                manager.phase.value is GoogleSignInPhase.AwaitingReturn
+            )
+            val launch = manager.authorizationLaunch.value
+            assertTrue("the launch must be published", launch != null)
+            assertFalse(
+                "the durability caveat must be recorded",
+                manager.pendingAttemptDurability.value,
+            )
+            assertNull(
+                "a failed save must leave nothing sealed",
+                attemptStore.load(),
+            )
+
+            // The in-memory attempt stands: starting again resumes
+            // the SAME attempt instead of minting a new one.
+            manager.startSignIn()
+            assertEquals(
+                "a save failure must not lose the in-process attempt",
+                launch!!.attemptId,
+                manager.authorizationLaunch.value?.attemptId,
+            )
+
+            // And the return still completes the sign-in in this
+            // process — the caveat costs restart-survival only.
+            manager.completeSignIn(
+                NativeTestSupport.codeRedirect(
+                    NativeTestSupport.stateFrom(launch.url)
+                )
+            )
+            assertTrue(manager.uiState.value.signedIn)
+
+            // The caveat's other half: with nothing sealed, a
+            // fresh manager after process death has nothing to
+            // resume. (Fresh token store too: the sign-in above
+            // sealed a session, which is not what is under test.)
+            val scope2 = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val relaunched = GoogleSessionManager(
+                store = GoogleTokenStore(
+                    InMemorySecretStorage(), testSecretBox()
+                ),
+                auth = GoogleNativeAuth(
+                    GrantTransport(), NativeTestSupport.ANDROID_ID
+                ),
+                client = YoutubeiClient(UserinfoTransport()),
+                scope = scope2,
+                redirectUri = NativeTestSupport.REDIRECT,
+                pendingAttemptStore = attemptStore,
+                signInDiagnostics = SignInDiagnostics(),
+            )
+            assertEquals(GoogleSignInPhase.Idle, relaunched.phase.value)
+            assertNull(relaunched.authorizationLaunch.value)
+            scope.cancel()
+            scope2.cancel()
         }
-        assertNull(
-            "a failed save must leave nothing sealed",
-            pendingStore.load(),
-        )
-        assertEquals(1, issuances.get())
-
-        // The in-memory grant stands: starting again resumes it
-        // instead of burning a second code at Google.
-        manager.startSignIn()
-        delay(250)
-        assertEquals(
-            "a save failure must not lose the in-process grant: the " +
-                "second start resumes it rather than re-issuing",
-            1,
-            issuances.get(),
-        )
-        assertTrue(manager.phase.value is GoogleSignInPhase.AwaitingApproval)
-
-        // The caveat's other half: with nothing sealed, a fresh
-        // manager after process death has nothing to resume.
-        val scope2 = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val relaunched = GoogleSessionManager(
-            store = tokenStore,
-            auth = GoogleDeviceAuth(transport, TestOAuthIdentity.SHARED),
-            client = YoutubeiClient(UserinfoTransport()),
-            scope = scope2,
-            pendingGrantStore = pendingStore,
-            signInDiagnostics = SignInDiagnostics(),
-        )
-        assertEquals(GoogleSignInPhase.Idle, relaunched.phase.value)
-        scope.cancel()
-        scope2.cancel()
-    }
-
-    private suspend fun awaitTrue(timeoutMs: Long = 15_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) {
-                throw AssertionError("condition not met within ${timeoutMs}ms")
-            }
-            delay(25)
-        }
-    }
 }

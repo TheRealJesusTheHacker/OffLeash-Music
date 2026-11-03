@@ -193,6 +193,7 @@ class R54SweepContractTest {
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 1,
+            "core:dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt" to 1,
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/JsonNav.kt" to 1,
         )
@@ -201,7 +202,7 @@ class R54SweepContractTest {
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 7,
-            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 3,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 4,
