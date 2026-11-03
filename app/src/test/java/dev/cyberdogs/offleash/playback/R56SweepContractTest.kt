@@ -569,7 +569,7 @@ include(":core", ":app")""".trim(),
                 "lock (the act that would legitimise a new " +
                 "dependency in CI) is itself a test-visible " +
                 "act, never a silent companion change",
-            "5b0a34219f3d6819417136ab51143100f7751278942af1fc747ca6d3f6b67c5c",
+            "394eef0236a94eea5fe4b9193d5e60eb7ed17fa0a97cddea6faf9ee6e022987e",
             digest,
         )
     }
