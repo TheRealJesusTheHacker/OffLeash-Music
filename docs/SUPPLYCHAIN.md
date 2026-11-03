@@ -90,17 +90,19 @@ metadata was green.
    the generation run resolved the real configurations that consume
    the BOM. The BOM does not bypass verification.
 
-7. **Build-supplied sign-in credentials are not secrets.**
-   The OAuth client pair a build may carry (Gradle properties /
-   Actions secrets → `BuildConfig`) is plain text inside the
-   shipped APK and readable by anyone who downloads it — by
-   design and by platform, not by oversight. It is therefore
-   never treated as confidential anywhere in this repo: the
-   standing release supplies no pair, and the credential that
-   IS private — the owner's own key — never enters a build at
-   all; it is entered in the app and sealed on the device under
-   its own Keystore alias (0.8.7). See the warning at the supply
-   site in `app/build.gradle.kts`.
+7. **The sign-in client ID is not a secret — and no secret
+   exists.** Since 0.8.8 the app signs in through an
+   Android-type OAuth client (authorization code + PKCE). An
+   Android client's ID is public by design: it is bound to the
+   app by its package name and signing-certificate fingerprint
+   registered with Google, and there is NO client secret for
+   this client type — nothing confidential exists to leak. The
+   ID reaches the build as a Gradle property →
+   `BuildConfig` value and is readable by anyone who downloads
+   the APK, which is expected and harmless. (Pre-0.8.8 builds
+   used a device-code flow with client pairs; that road and its
+   in-app key wizard were removed in 0.8.8 — see the note at the
+   supply site in `app/build.gradle.kts`.)
 
 ## Other install surfaces in this repo
 

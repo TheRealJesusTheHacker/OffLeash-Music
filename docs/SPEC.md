@@ -241,6 +241,20 @@ Phase 1 contract, and §10 is the Phase 2 contract.
 
 ## 10. Phase 2 — account access (landed 2026-10-23)
 
+> **Superseded in part (0.8.8).** The device-code flow named in
+> the 0.7.0 note below was itself REPLACED as the app's sign-in
+> by the native Android flow: one "Continue with Google" action
+> opens Google's own authorization page (Chrome Custom Tab) for
+> the app's registered Android OAuth client; the return lands
+> back in the app and the authorization code is exchanged with
+> a PKCE verifier — no typed code, no console steps, no client
+> ID or secret paste (Android clients have no secret). The
+> 0.8.6–0.8.7 own-key setup wizard is removed entirely. The
+> device-code engine remains in the core module for one release
+> as a non-presented rollback kit; nothing in the UI can reach
+> it. Token custody, refresh, revocation, and the client-change
+> gate stand as described in the current code and AUDITS.
+
 > **Superseded in part (0.7.0; noted by the round-4 sweep).** The sign-in described below — the embedded WebView flow
 > and its cookie-paste fallback — was REPLACED as the app's sign-in
 > by the Google device-code flow: the app shows a code, the owner

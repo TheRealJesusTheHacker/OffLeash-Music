@@ -32,6 +32,16 @@ Anonymous, no account:
 
 ## Phase 2 — accounts (BUILT, 2026-10-23; security pass in `docs/AUDITS.md`)
 
+> **Sign-in superseded again (0.8.8).** The device-code flow named
+> in the 0.7.0 note below was itself replaced by the native Android
+> flow: "Continue with Google" opens Google's own authorization
+> page for the app's registered Android OAuth client, the return
+> lands back in the app, and the code is exchanged with a PKCE
+> verifier — no typed code, no console steps, no key wizard (the
+> 0.8.6–0.8.7 own-key wizard is removed). The device-code engine
+> remains in the core module for one release as a non-presented
+> rollback kit.
+
 > **Sign-in superseded (0.7.0; noted by the round-4 sweep).** The
 > WebView sign-in below was replaced as the app's sign-in by the
 > Google device-code flow: the app shows a code, the owner approves
