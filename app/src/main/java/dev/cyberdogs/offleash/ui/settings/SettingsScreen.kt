@@ -186,6 +186,7 @@ fun SettingsScreen(
             },
         )
     }
+}
 
 /** One selectable stream-quality row: radio, label, and caption. */
 @Composable
