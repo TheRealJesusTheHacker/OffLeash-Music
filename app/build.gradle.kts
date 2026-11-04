@@ -14,16 +14,19 @@ plugins {
 // this is inert and builds behave exactly as stock (auto debug keystore).
 val ciDebugKeystore: String? = providers.gradleProperty("offleashDebugKeystore").orNull
 
-// The sign-in registration is BUILD-SUPPLIED, never
-// source-resident (0.8.8): the Android OAuth client ID, supplied
-// two ways — the `offleashAndroidClientId` Gradle property first
-// (the release workflow passes it this way), then the
-// `androidClientId` key of the git-ignored
-// `offleash-oauth.properties` at the repo root for local builds.
-// Absent both, the field is empty and the app runs unconfigured —
-// sign-in unavailable with the honest explanation, everything
-// else working. The value lands only in the generated
-// BuildConfig.
+// The sign-in registration (0.8.8): the Android OAuth client
+// ID, resolved by `oauthSupply` below — the
+// `offleashAndroidClientId` Gradle property first (a -P on the
+// command line wins; the committed default in gradle.properties
+// is what stock local and CI builds resolve — the registered
+// client ID, committed deliberately, because it is a PUBLIC
+// identifier with no secret, not a credential — see the note
+// there), then the `androidClientId` key of the git-ignored
+// `offleash-oauth.properties` at the repo root. Absent or
+// cleared everywhere (e.g. -PoffleashAndroidClientId=), the
+// field is empty and the app runs unconfigured — sign-in
+// unavailable with the honest explanation, everything else
+// working. The value lands only in the generated BuildConfig.
 //
 // An Android client ID is PUBLIC by design: it names the
 // registration, ships inside the APK in plain sight, and has NO

@@ -74,12 +74,16 @@ import java.security.MessageDigest
  *  android.yml CI gate weakened (the app unit-test task
  *  dropped from the test step). Traced this round:
  *  gradle.properties feeds NO coordinate or version (its
- *  four properties are the Gradle JVM args, the Kotlin
- *  code-style flag, and two AGP behaviour flags; every
- *  version is a literal in the round-56-pinned build
- *  files, and the one gradleProperty the build reads —
- *  offleashDebugKeystore — arrives via -P on the CI
- *  command line, not this file), but it is build
+ *  first four properties are the Gradle JVM args, the
+ *  Kotlin code-style flag, and two AGP behaviour flags;
+ *  every version is a literal in the round-56-pinned
+ *  build files; of the gradleProperties the build reads,
+ *  offleashDebugKeystore arrives via -P on the CI
+ *  command line, and offleashAndroidClientId — the
+ *  registered Android OAuth client ID, a public
+ *  identifier with no secret, not a credential — is
+ *  carried here as the committed default,
+ *  -P-overridable), but it is build
  *  BEHAVIOUR surface, the wrapper properties + jar are
  *  the supply-chain root (which Gradle, from where,
  *  booted by which jar), and the workflows are the gate
@@ -394,13 +398,18 @@ class R57SweepContractTest {
         assertEquals(
             "gradle.properties is pinned verbatim — it " +
                 "feeds no coordinate or version (traced " +
-                "this round: the four properties are the " +
-                "Gradle JVM args, the Kotlin code-style " +
+                "this round: four of its properties are " +
+                "the Gradle JVM args, the Kotlin code-style " +
                 "flag and two AGP behaviour flags; every " +
                 "version is a literal in the round-56-" +
-                "pinned build files, and the one " +
-                "gradleProperty the build reads arrives " +
-                "via -P in CI), but it is build-behaviour " +
+                "pinned build files. The fifth property " +
+                "is the committed default for the one " +
+                "build-read gradleProperty CI does not " +
+                "supply: offleashAndroidClientId, the " +
+                "registered Android OAuth client ID — a " +
+                "PUBLIC identifier with no secret, not " +
+                "a credential; -P overrides or clears " +
+                "it), but it is build-behaviour " +
                 "surface: flipping " +
                 "android.nonTransitiveRClass here ran " +
                 "green across R47–R56 this round beside " +
@@ -408,7 +417,19 @@ class R57SweepContractTest {
             """org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
 kotlin.code.style=official
 android.useAndroidX=true
-android.nonTransitiveRClass=true""".trim(),
+android.nonTransitiveRClass=true
+
+# The registered Android OAuth client ID for Google sign-in
+# (0.8.8). A PUBLIC identifier, not a credential: it names
+# the registration, ships inside every APK in plain sight,
+# and has NO secret — none exists for Android clients. What
+# protects the registration is the package name + signing
+# certificate fingerprint recorded with Google when the
+# client was created. Committed here so stock local and CI
+# builds sign in with no secret plumbing; override with
+# -PoffleashAndroidClientId=<id>, or clear it with
+# -PoffleashAndroidClientId= to build honestly unconfigured.
+offleashAndroidClientId=868319166388-jnthkatf45dmgltvmg8kgq5n7vklrdre.apps.googleusercontent.com""".trim(),
             repoFile("gradle.properties").readText().trim(),
         )
         assertEquals(
