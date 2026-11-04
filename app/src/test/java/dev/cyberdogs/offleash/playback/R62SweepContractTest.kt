@@ -62,13 +62,14 @@ class R62SweepContractTest {
         // (4), SessionManager (1), SignInDiagnostics (1) and the
         // own-key wizard's store (1) are gone, the container's
         // sessionState flow is gone (2 to 1), Home's feedNote flow
-        // is gone (3 to 2), and Stores gains the on-device
-        // LikedTrackStore flow (2 to 3). Total 42 to 35.
+        // is gone (3 to 2), the like controller's accountBacked
+        // flow is gone (3 to 2), and Stores gains the on-device
+        // LikedTrackStore flow (2 to 3). Total 42 to 34.
         val expected: Map<String, Int> = mapOf(
             "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 4,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
+            "dev/cyberdogs/offleash/data/LikeController.kt" to 2,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
             "dev/cyberdogs/offleash/data/Stores.kt" to 3,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
@@ -104,16 +105,16 @@ class R62SweepContractTest {
             )
         }
         assertEquals(
-            "the module must hold exactly its 35 shipped " +
+            "the module must hold exactly its 34 shipped " +
                 "MutableStateFlow namings (round 61's census, " +
                 "+1 at 0.8.2 for Home's feedNote flow, +1 at 0.8.6 " +
                 "for the own-key wizard's state flow, +1 net at " +
                 "0.8.8: the wizard's flow left with the dead road " +
                 "and the native sign-in added two — the held " +
                 "browser launch and the attempt-durability flag; " +
-                "-7 net at 0.9.0: the sign-in product's flows " +
+                "-8 net at 0.9.0: the sign-in product's flows " +
                 "deleted with it, the LikedTrackStore flow added)",
-            35,
+            34,
             total,
         )
     }
