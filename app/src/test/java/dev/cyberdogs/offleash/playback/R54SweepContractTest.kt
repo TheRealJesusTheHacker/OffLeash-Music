@@ -113,9 +113,11 @@ class R54SweepContractTest {
                 """(?:String|Track)\??\)\s*->\s*Boolean""",
         )
         val emptyBool = Regex("""\(\)\s*->\s*Boolean""")
+        // Re-based 0.9.0 (owner order, 2026-11-04): the
+        // LikeController entry — its session-presence probe
+        // parameter — is deleted with the account wiring.
         val expectedEmptyBool: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadManager.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/LikeController.kt" to 1,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 1,
         )
         for ((label, sources) in listOf(
@@ -187,8 +189,15 @@ class R54SweepContractTest {
         )
         val letBlock = Regex("""\.let\s*\{""")
         val alsoBlock = Regex("""\.also\s*\{""")
+        // Re-based 0.9.0: two named-argument sites join the
+        // family — the playlist-create dialog's text field
+        // (Common) and the player scrubber's slider (the soak's
+        // transparent Material Slider), both `value =` named
+        // arguments of the family's shipped kind.
         val expectedBareValue: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/player/PlayerScrubber.kt" to 1,
             "app:dev/cyberdogs/offleash/data/OkHttpTransport.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 1,
@@ -197,15 +206,18 @@ class R54SweepContractTest {
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/JsonNav.kt" to 1,
         )
+        // Re-based 0.9.0: the deleted worker and sign-in
+        // screen entries leave; the account-free rewrites move
+        // TrackMenu 2 to 3 (the picker wiring), DetailScreens
+        // 2 to 1 (the seeding let-block is gone) and
+        // LibraryScreen 4 to 2 (the account load's lets).
         val expectedLet: Map<String, Int> = mapOf(
-            "app:dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt" to 1,
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 7,
-            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 4,
+            "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
+            "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 1,
             "core:dev/cyberdogs/offleash/core/api/YoutubeiClient.kt" to 10,
             "core:dev/cyberdogs/offleash/core/api/YoutubeiContexts.kt" to 5,
@@ -295,8 +307,10 @@ class R54SweepContractTest {
             """(?<![A-Za-z])(?:kotlinx\.coroutines\.flow\.)?Flow\s*<""",
         )
         val rawCollect = Regex("""\.collect\s*\{""")
+        // Re-based 0.9.0: the container's three raw collects
+        // were its session collects — deleted with the account
+        // state. The shipped count is now zero module-wide.
         val expectedRawCollect: Map<String, Int> = mapOf(
-            "app:dev/cyberdogs/offleash/OffleashApp.kt" to 3,
         )
         for ((label, sources) in listOf(
             "app" to moduleSources(),
@@ -350,9 +364,10 @@ class R54SweepContractTest {
                 )
                 assertEquals(
                     "$key must hold exactly its shipped " +
-                        "raw `.collect {` count — the three " +
-                        "shipped sites are OffleashApp's own " +
-                        "session collects; a screen-side raw " +
+                        "raw `.collect {` count — zero since " +
+                        "0.9.0 (the container's three session " +
+                        "collects left with the account state); " +
+                        "a screen-side raw " +
                         "collect of a non-ViewModel flow " +
                         "through a local alias (round 50's " +
                         "multiset counts only `viewModel." +

@@ -26,88 +26,86 @@ import org.junit.Test
 class BrowseHuntContractTest {
 
     @Test
-    fun homeDegradesToThePublicFeedUnderTheHonestNote() {
+    fun homeIsTheAnonymousFeedWithNoDegradationLayer() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): there is no
+        // personalized feed to degrade FROM — the sign-in product
+        // is removed, and Home is the anonymous feed, loaded once,
+        // with no note and no delegation anywhere in the wiring.
         val home = mainSource("java/dev/cyberdogs/offleash/ui/home/HomeScreen.kt")
-        assertTrue(
-            "the degradation note copy is pinned",
-            home.contains(
-                "\"Your personalized feed was refused — showing the public feed.\"",
-            ),
-        )
-        assertTrue(
-            "the personalized browse carries the delegation",
-            home.contains("client.homeFeedOAuth(bearer, chip, delegationProvider())"),
-        )
         assertEquals(
-            "the anonymous home feed is the fallback AND the signed-out road",
-            2,
-            home.split("client.homeFeed(auth, chip)").size - 1,
+            "the anonymous home feed is the only home feed",
+            1,
+            home.split("client.homeFeed(null, chip)").size - 1,
         )
-        assertTrue(
-            "the note state is rendered and published with its content",
-            home.contains("val feedNote by viewModel.feedNote.collectAsState()") &&
-                home.contains("if (feedNote != null)"),
+        assertFalse(
+            "no personalized browse may be wired",
+            home.contains("homeFeedOAuth"),
         )
-        assertTrue(
-            "the screen wires the container's delegation provider",
-            home.contains("delegationProvider = { container.currentBrowseDelegation() }"),
+        assertFalse(
+            "no degradation note state may exist",
+            home.contains("feedNote"),
+        )
+        assertFalse(
+            "no delegation provider may be wired",
+            home.contains("delegationProvider"),
         )
     }
 
     @Test
-    fun playlistPagesDegradeWithTheLikedShellGuarded() {
+    fun playlistPagesLoadAnonymouslyWithNoLikedShell() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): playlist pages
+        // load on the anonymous road only — no token cascade, no
+        // delegation, and no Liked shell to guard, because the
+        // account's Liked page is not a surface in this product.
         val detail = mainSource("java/dev/cyberdogs/offleash/ui/detail/DetailScreens.kt")
         assertTrue(
-            "the token playlist browse carries the delegation",
-            detail.contains("delegationProvider()"),
+            "the playlist browse is the anonymous call",
+            detail.contains("client.playlist(browseId, params, auth = null)"),
         )
         assertTrue(
-            "an empty anonymous Liked fallback rethrows the refusal",
-            detail.contains(
-                "if (browseId == \"VLLM\" && fallback.tracks.isEmpty()) throw e",
-            ),
+            "continuation paging is anonymous too",
+            detail.contains("client.playlistContinuation(token, auth = null)"),
         )
-        assertTrue(
-            "continuation paging carries the delegation too",
-            detail.contains(
-                "client.playlistContinuationOAuth(bearer, token, delegationProvider())",
-            ),
+        assertFalse(
+            "no delegation may be wired",
+            detail.contains("delegationProvider"),
         )
-        assertTrue(
-            "the screen wires the container's delegation provider",
-            detail.contains("delegationProvider = { container.currentBrowseDelegation() }"),
+        assertFalse(
+            "no VLLM shell guard may exist",
+            detail.contains("VLLM"),
         )
     }
 
     @Test
-    fun libraryBrowseCarriesTheDelegation() {
+    fun libraryHasNoAccountBrowseToCarryAnything() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the Library's
+        // account browse is deleted with the sign-in product; the
+        // Library is on-device content only.
         val library = mainSource("java/dev/cyberdogs/offleash/ui/library/LibraryScreen.kt")
-        assertTrue(
-            library.contains("delegation = container.currentBrowseDelegation()"),
-        )
+        assertFalse(library.contains("currentBrowseDelegation"))
+        assertFalse(library.contains("libraryPlaylists"))
     }
 
     @Test
     fun refusalCopyDistinguishesClasses() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the classes
+        // are still distinguished, but no copy may instruct a
+        // sign-in that does not exist — 401 falls to the update
+        // line and 403 names the refusal plainly.
         val errors = mainSource("java/dev/cyberdogs/offleash/ui/ErrorMessages.kt")
         assertTrue(
-            "401 reads as a refused sign-in with the step the user can take",
-            errors.contains(
-                "\"YouTube refused the app's sign-in for this — " +
-                    "sign out and back in, then try again.\"",
-            ) || errors.contains(
-                "YouTube refused the app's sign-in for this — sign out and back in, then try again.",
-            ),
+            "403 reads as a plain refusal",
+            errors.contains("\"YouTube refused this request.\""),
         )
         assertTrue(
-            "403 reads as a refused account request",
-            errors.contains("\"YouTube refused this request for your account.\""),
-        )
-        assertTrue(
-            "the original line still covers the unclassified refusal",
+            "the update line covers 401 and the unclassified refusal",
             errors.contains(
                 "\"YouTube refused the app's request — the app may need an update.\"",
             ),
+        )
+        assertFalse(
+            "no copy may instruct signing in or out",
+            errors.contains("sign out and back in") || errors.contains("sign-in for this"),
         )
     }
 
@@ -119,9 +117,10 @@ class BrowseHuntContractTest {
                 "browseAttemptLog = { line -> playbackDiagnostics.log(\"browse\", line) }",
             ),
         )
-        assertTrue(
-            "the container exposes the session's browse delegation",
-            app.contains("fun currentBrowseDelegation(): BrowseDelegation?"),
+        assertFalse(
+            "the container exposes no browse delegation in the " +
+                "account-free build",
+            app.contains("currentBrowseDelegation"),
         )
     }
 

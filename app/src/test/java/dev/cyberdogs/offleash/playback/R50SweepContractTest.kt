@@ -91,39 +91,42 @@ class R50SweepContractTest {
     @Test
     fun everyStateFlowWriteAndDeclarationIsCensusedModuleWide() {
         val files = moduleSources()
+        // Re-based 0.9.0 (owner order, 2026-11-04): the deleted
+        // session files' entries leave with them (GoogleSession
+        // Manager, SessionManager, SignInDiagnostics); the
+        // container's _accountUiState writes go with the account
+        // state; LikeController keeps only its local writes
+        // (_states 3 to 1, _error 2 to 1, _accountBacked gone);
+        // Stores gains the LikedTrackStore _tracks (3 writes,
+        // third declaration); Home's _feedNote goes with the
+        // personalized-feed cascade.
         val expectedWrites: Map<String, Map<String, Int>> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_accountUiState" to 2, "_showPlayerRequests" to 1),
+            "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_showPlayerRequests" to 1),
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2, "_streamQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to mapOf("_records" to 1),
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_authorizationLaunch" to 7, "_phase" to 12, "_pendingAttemptDurability" to 4, "_uiState" to 10),
-            "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
+            "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_error" to 1, "_states" to 1),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
-            "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3),
+            "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3, "_tracks" to 3),
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to mapOf("_snapshot" to 1),
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
         val expectedDeclarations: Map<String, Int> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to 2,
+            "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 4,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 4,
-            "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
+            "dev/cyberdogs/offleash/data/LikeController.kt" to 2,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
-            "dev/cyberdogs/offleash/data/Stores.kt" to 2,
+            "dev/cyberdogs/offleash/data/Stores.kt" to 3,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -185,7 +188,7 @@ class R50SweepContractTest {
         val expected: Map<String, List<String>> = mapOf(
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to listOf("state", "state", "state", "hasMore", "loadMoreError"),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to listOf("state"),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to listOf("state", "feedNote", "selectedChip"),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to listOf("state", "selectedChip"),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to listOf("state", "state"),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to listOf("state", "hasMore", "loadMoreError"),
         )

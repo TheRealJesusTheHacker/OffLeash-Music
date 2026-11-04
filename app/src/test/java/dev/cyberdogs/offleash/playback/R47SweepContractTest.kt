@@ -149,27 +149,27 @@ class R47SweepContractTest {
 
     @Test
     fun libraryAndLoadMorePublishesAndCallsAreBound() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the Library's
+        // account-playlist load this test sliced is deleted with
+        // the sign-in product — the Library publishes on-device
+        // store state only, so there is no loaded-list publish to
+        // transform. The loadMore half stands on the anonymous
+        // continuation call that replaced the two account roads.
         val library = mainSource(
             "java/dev/cyberdogs/offleash/ui/library/LibraryScreen.kt",
-        ).substringAfter("LaunchedEffect(sessionState.signedIn")
-            .substringBefore("LazyColumn(Modifier.fillMaxSize())")
-        assertEquals(
-            "LibraryScreen must publish the loaded account playlists " +
-                "untransformed — `UiState.Content(loaded)` inside its " +
-                "shipped if/else exactly once; this state holder is a " +
-                "composable remember state, listed by no R46 case",
-            1,
-            occurrences(
-                library,
-                "            if (loaded == null) {\n" +
-                    "                UiState.Error(\"Sign in again to load your YouTube library.\")\n" +
-                    "            } else {\n" +
-                    "                UiState.Content(loaded)\n" +
-                    "            }",
-            ),
         )
         assertEquals(
-            "LibraryScreen's load effect must hold no reversal of the loaded list",
+            "LibraryScreen must hold no account-load publish",
+            0,
+            occurrences(library, "Sign in again to load your YouTube library."),
+        )
+        assertEquals(
+            "LibraryScreen must hold no remote playlist load at all",
+            0,
+            occurrences(library, "libraryPlaylists"),
+        )
+        assertEquals(
+            "LibraryScreen's rendering must hold no reversal of a loaded list",
             0,
             occurrences(library, ".asReversed()") + occurrences(library, ".reversed()"),
         )
@@ -182,16 +182,17 @@ class R47SweepContractTest {
             .substringBefore("@Composable")
         assertEquals(
             "playlist loadMore must fetch its next chunk with the " +
-                "tracker token on the token road — keying the call " +
-                "on browseId pages a different identity while the " +
+                "tracker token on the anonymous road — keying the " +
+                "call on browseId pages a different list while the " +
                 "R5 tryAdvance pin still passes",
             1,
-            occurrences(playlistMore, "client.playlistContinuationOAuth(bearer, token, delegationProvider())"),
+            occurrences(playlistMore, "client.playlistContinuation(token, auth = null)"),
         )
         assertEquals(
-            "playlist loadMore must fetch its next chunk with the tracker token on the cookie road",
-            1,
-            occurrences(playlistMore, "client.playlistContinuation(token, auth = authProvider())"),
+            "playlist loadMore must hold no account continuation road",
+            0,
+            occurrences(playlistMore, "playlistContinuationOAuth") +
+                occurrences(playlistMore, "authProvider()"),
         )
         assertEquals(
             "playlist loadMore must never key a continuation call on the page id",

@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -47,7 +48,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -133,8 +133,14 @@ fun PlayerScreen(
     var lyricsState by remember { mutableStateOf<LyricsUiState?>(null) }
 
     val currentTrack = queueState.currentTrack
+    // Soak detail 01: the cover's colour, confined to this
+    // screen's backdrop and stage glow (see PlayerArtwork.kt).
+    val coverGlow = rememberCoverGlowColor(
+        heroUrl = currentTrack?.heroThumbnailUrl,
+        rowUrl = currentTrack?.thumbnailUrl,
+    )
 
-    // Lyrics + account like status for the current track. Both are
+    // Lyrics + liked-track learning for the current track. Both are
     // async decorations: neither blocks playback, and a lyrics miss
     // is a named state, never a blank panel.
     LaunchedEffect(currentTrack?.videoId) {
@@ -142,7 +148,7 @@ fun PlayerScreen(
         if (track == null) {
             lyricsState = null
         } else {
-            container.likeController.refreshAccountStatus(track)
+            container.likeController.rememberLikedTrack(track)
             val cached = playerLyricsCache[track.videoId]
             if (cached != null) {
                 lyricsState = cached.toLyricsUiState()
@@ -159,7 +165,7 @@ fun PlayerScreen(
                     } else {
                         container.client.lyrics(
                             track.videoId,
-                            container.sessionManager.currentAuthSession(),
+                            null,
                         )
                     }
                 }
@@ -215,6 +221,14 @@ fun PlayerScreen(
                 // full-bleed immersive AND no control ever sits
                 // under a bar (2026-10-27 bars pass).
                 .windowInsetsPadding(WindowInsets.safeDrawing)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            coverGlow,
+                            MaterialTheme.colorScheme.background,
+                        ),
+                    ),
+                )
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -247,25 +261,26 @@ fun PlayerScreen(
 
             Spacer(Modifier.height(16.dp))
             Box {
-                // Stage glow (GUI elevation pass): a warm radial wash
-                // in the theme's own tan behind the artwork — depth
-                // from the palette itself, no new colour.
+                // Stage glow: the cover's own colour (soak detail
+                // 01), darkened and muted by PlayerArtwork's
+                // discipline — depth from the artwork itself.
                 Box(
                     modifier = Modifier
                         .matchParentSize()
                         .background(
                             Brush.radialGradient(
                                 colors = listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.04f),
+                                    coverGlow.copy(alpha = 0.85f),
+                                    coverGlow.copy(alpha = 0.25f),
                                     Color.Transparent,
                                 ),
                             ),
                         ),
                 )
                 ArtworkImage(
-                    url = track?.thumbnailUrl,
+                    url = track?.heroThumbnailUrl ?: track?.thumbnailUrl,
                     contentDescription = track?.title,
+                    fallbackLabel = track?.title,
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
@@ -278,13 +293,10 @@ fun PlayerScreen(
             }
             Spacer(Modifier.height(24.dp))
 
-            Text(
+            ScrollingOnceText(
                 text = track?.title ?: "Nothing playing",
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = track?.artists?.joinToString(", ") ?: "",
@@ -326,8 +338,9 @@ fun PlayerScreen(
                 durationMs > 0 -> playbackState.positionMs.toFloat() / durationMs.toFloat()
                 else -> 0f
             }
-            Slider(
-                value = sliderValue.coerceIn(0f, 1f),
+            PlayerScrubber(
+                value = sliderValue,
+                dragging = scrubbing,
                 onValueChange = { value ->
                     scrubbing = true
                     scrubValue = value
@@ -356,7 +369,15 @@ fun PlayerScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = formatMillis(durationMs),
+                    // Soak detail 04: time remaining, never the total.
+                    text = remainingTimeLabel(
+                        durationMs = durationMs,
+                        positionMs = if (scrubbing && durationMs > 0) {
+                            (scrubValue * durationMs).toLong()
+                        } else {
+                            playbackState.positionMs
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -449,6 +470,56 @@ fun PlayerScreen(
             Button(onClick = { showQueue = true }) {
                 Icon(imageVector = Icons.Default.QueueMusic, contentDescription = null)
                 Text("  Queue")
+            }
+
+            // -- Soak detail 06: Up next, named before it starts --
+            val upNext = upNextTrack(queueState)
+            if (upNext != null) {
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceContainerHigh,
+                            RoundedCornerShape(16.dp),
+                        )
+                        .clickable { container.queueController.next() }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ArtworkImage(
+                        url = upNext.thumbnailUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(44.dp),
+                        fallbackLabel = upNext.title,
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "UP NEXT",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = upNext.title,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = upNext.artists.joinToString(", "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Play ${upNext.title} now",
+                    )
+                }
             }
 
             // -- Lane G: like / radio / share for the current track --
@@ -808,6 +879,12 @@ fun QueueScreen(
                         onAddToPlaylist = { playlist, picked ->
                             scope.launch {
                                 container.localPlaylistStore.addTrack(playlist.id, picked)
+                            }
+                        },
+                        onCreatePlaylist = { name, picked ->
+                            scope.launch {
+                                val created = container.localPlaylistStore.createPlaylist(name)
+                                container.localPlaylistStore.addTrack(created.id, picked)
                             }
                         },
                         trackActions = trackActions,

@@ -32,6 +32,14 @@ Anonymous, no account:
 
 ## Phase 2 — accounts (BUILT, 2026-10-23; security pass in `docs/AUDITS.md`)
 
+> **Superseded by 0.9.0 (2026-11-04, owner order).** Sign-in is
+> removed "for now": the app ships account-free. YouTube Music is
+> the music source; the playlists, liked songs, library, and
+> experience are OffLeash's own, on-device. Everything below stands
+> as the historical record of the account builds (0.4.0–0.8.8); no
+> account surface ships in 0.9.0. See the 0.9.0 entry in
+> `docs/AUDITS.md`.
+
 > **Sign-in superseded again (0.8.8).** The device-code flow named
 > in the 0.7.0 note below was itself replaced by the native Android
 > flow: "Continue with Google" opens Google's own authorization

@@ -495,14 +495,16 @@ class R21SweepContractTest {
         // exactly one way in this file, on the page
         // itself, exactly once.
         assertEquals(
-            "the file must hold exactly five emptiness " +
-                "guards — the four track guards (the 0.8.2 " +
-                "anonymous-Liked fallback guard among them) " +
-                "and the artist sections guard; a sixth, on " +
-                "any receiver (an alias, a with-receiver), " +
-                "means the asserted solo block is not the " +
-                "only sections check in the file",
-            5,
+            "the file must hold exactly four emptiness " +
+                "guards — the three track guards and the " +
+                "artist sections guard (re-based 0.9.0: the " +
+                "0.8.2 anonymous-Liked fallback guard is " +
+                "deleted with the account browse cascade); " +
+                "a fifth, on any receiver (an alias, a " +
+                "with-receiver), means the asserted solo " +
+                "block is not the only sections check in " +
+                "the file",
+            4,
             occurrences(detail, "isEmpty()"),
         )
         assertEquals(
@@ -845,12 +847,13 @@ class R21SweepContractTest {
         )
         assertEquals(
             "PlaylistScreen's slice must hold exactly " +
-                "four `if`s in its code — the sign-in " +
-                "reload check, its empty-state guard, the " +
-                "load-more error check, and the hasMore " +
-                "else-if; a dead pair parked in this screen " +
-                "is a fifth",
-            4,
+                "three `if`s in its code — its empty-state " +
+                "guard, the load-more error check, and the " +
+                "hasMore else-if (re-based 0.9.0: the sign-in " +
+                "reload check is deleted with the sign-in " +
+                "product); a dead pair parked in this " +
+                "screen is a fourth",
+            3,
             keywordCount(playlistSlice, "if"),
         )
         assertEquals(
@@ -1790,6 +1793,12 @@ class R21SweepContractTest {
         val detail = detailScreens()
         val code = noComments(detail)
         val strict = strictCode(detail)
+        // Re-based 0.9.0 (owner order, 2026-11-04): the row
+        // gained the inline create-and-add lambda — creating a
+        // playlist from the add flow is part of the playlist
+        // system the release ships; the block below is the new
+        // verbatim shape, with the picked-track filing still
+        // exactly once (the create path files under created.id).
         val rowBlock =
             "        TrackRow(\n" +
                 "            track = track,\n" +
@@ -1801,6 +1810,12 @@ class R21SweepContractTest {
                 "                scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }\n" +
                 "            },\n" +
                 "            trackActions = trackActions,\n" +
+                "            onCreatePlaylist = { name, picked ->\n" +
+                "                scope.launch {\n" +
+                "                    val created = container.localPlaylistStore.createPlaylist(name)\n" +
+                "                    container.localPlaylistStore.addTrack(created.id, picked)\n" +
+                "                }\n" +
+                "            },\n" +
                 "        )"
         assertTrue(
             "the TrackRow argument block must stand verbatim in code",

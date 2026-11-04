@@ -98,15 +98,22 @@ class R58SweepContractTest {
 
     @Test
     fun containerAndViewModelWiringArgumentsAreBoundVerbatim() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the container
+        // was rewritten account-free — the sealed session stores,
+        // the session manager, the Google auth/session managers
+        // and every session/bearer provider are DELETED, and the
+        // slices below bind the account-free wiring verbatim at
+        // the same strictness, closing with absence pins for the
+        // removed wiring so it cannot quietly return.
         val app = fileText(
             "dev/cyberdogs/offleash/OffleashApp.kt",
         )
-        // The two diagnostics recorders: one shared instance
-        // each, constructed with no arguments.
+        // The diagnostics recorder: one shared instance,
+        // constructed with no arguments.
         assertSliceLines(
             app,
             "val playbackDiagnostics: PlaybackDiagnostics",
-            "val signInDiagnostics",
+            "private val appScope",
             listOf(
                 "val playbackDiagnostics: PlaybackDiagnostics = PlaybackDiagnostics()",
             ),
@@ -121,59 +128,8 @@ class R58SweepContractTest {
             1,
             occurrences(app, "PlaybackDiagnostics()"),
         )
-        // The three sealed stores: the file helper paired
-        // with its store is the wiring (round-58 swap
-        // doctor (a) exchanged the first two, GREEN).
-        assertSliceLines(
-            app,
-            "val sessionStore: SessionStore = SessionStore(",
-            "val googleTokenStore",
-            listOf(
-                "storage = FileSecretStorage(sessionFileIn(app))",
-                // 0.8.1 hotfix re-base: the box now takes the key
-                // provider AND the scoped key regenerator by name —
-                // the seal-recovery wiring every sealed store shares.
-                "box = AesGcmSecretBox(",
-                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
-                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) }",
-            ),
-            "sessionStore construction",
-        )
-        assertSliceLines(
-            app,
-            "val googleTokenStore: GoogleTokenStore = GoogleTokenStore(",
-            "val googlePendingGrantStore",
-            listOf(
-                "storage = FileSecretStorage(googleSessionFileIn(app))",
-                // 0.8.1 hotfix re-base: same recovery wiring as the
-                // session store above.
-                "box = AesGcmSecretBox(",
-                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
-                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) }",
-            ),
-            "googleTokenStore construction",
-        )
-        assertSliceLines(
-            app,
-            "GooglePendingGrantStore(",
-            "val googleSignInSeenMarker",
-            listOf(
-                "storage = FileSecretStorage(googlePendingGrantFileIn(app))",
-            ),
-            "googlePendingGrantStore construction",
-        )
-        assertSliceLines(
-            app,
-            "val googleSignInSeenMarker: GoogleSignInSeenMarker =",
-            "val streamWindows",
-            listOf(
-                "GoogleSignInSeenMarker(googleSignInSeenFileIn(app))",
-            ),
-            "googleSignInSeenMarker construction",
-        )
-        // The shared client: the SAME diagnostics recorder
-        // and the SAME window store the QueueController
-        // reads (round-58 re-point doctor (c)).
+        // The shared window store: the SAME instance the
+        // QueueController reads (round-58 re-point doctor (c)).
         assertSliceLines(
             app,
             "val streamWindows: StreamWindowStore",
@@ -191,98 +147,66 @@ class R58SweepContractTest {
                     "buildSharedClient(playbackDiagnostics, streamWindows)",
             ),
         )
-        // The core client: the shared OkHttp client plus the
-        // cookie-rotation callback through the late-bound
-        // session-manager reference.
+        // The core client: a PLAIN transport over the shared
+        // client (no bearer retry, no cookie callback — both
+        // deleted with the sign-in product) plus the browse
+        // attempt log hook into the shared recorder.
         assertSliceLines(
             app,
             "val client: YoutubeiClient = YoutubeiClient(",
-            "val sessionManager",
+            "val appPreferences",
             listOf(
-                "OkHttpTransport(",
-                "okHttpClient,",
-                "onResponseCookies = { pairs -> sessionManagerRef?.onResponseCookies(pairs) }",
+                "OkHttpTransport(okHttpClient)",
+                "browseAttemptLog = { line -> playbackDiagnostics.log(\"browse\", line) }",
             ),
             "client construction",
         )
         assertSliceLines(
             app,
-            "val sessionManager: SessionManager = SessionManager(",
-            "val googleAuth",
-            listOf(
-                "store = sessionStore,",
-                "signInDiagnostics = signInDiagnostics,",
-            ),
-            "sessionManager construction",
-        )
-        // The Google OAuth transport deliberately carries NO
-        // cookie callback (token material never enters the
-        // cookie path) — pinned as an absence inside its
-        // own slice.
-        val googleAuthSlice = slice(
-            app,
-            "val googleAuth: GoogleNativeAuth = GoogleNativeAuth(",
-            "val googleSessionManager",
-            "googleAuth construction",
-        )
-        assertTrue(
-            "googleAuth must ride a bare OkHttpTransport " +
-                "over the shared client",
-            googleAuthSlice.contains("OkHttpTransport(okHttpClient),"),
-        )
-        assertFalse(
-            "googleAuth's transport must carry no cookie " +
-                "callback — OAuth responses never enter the " +
-                "cookie-rotation path",
-            googleAuthSlice.contains("onResponseCookies"),
-        )
-        assertSliceLines(
-            app,
-            "val googleSessionManager: GoogleSessionManager = GoogleSessionManager(",
-            "private val _accountUiState",
-            listOf(
-                "store = googleTokenStore,",
-                "auth = googleAuth,",
-                "client = client,",
-                "scope = sessionScope,",
-                "redirectUri = googleRedirectUri,",
-                "pendingAttemptStore = googlePendingNativeAuthStore,",
-                "signInDiagnostics = signInDiagnostics,",
-            ),
-            "googleSessionManager construction",
-        )
-        assertSliceLines(
-            app,
             "val downloadStore: DownloadStore =",
-            "val downloadManager: DownloadManager = DownloadManager(",
+            "val downloadStreamResolver",
             listOf(
                 "DownloadStore(downloadRecordsFileIn(app.filesDir))",
             ),
             "downloadStore construction",
         )
+        // The download manager resolves ANONYMOUSLY: the
+        // resolver call inside its slice carries auth = null
+        // and bearerToken = null as whole lines.
         assertSliceLines(
             app,
             "val downloadManager: DownloadManager = DownloadManager(",
-            "val likeController",
+            "val likedTrackStore",
             listOf(
-                "store = downloadStore,",
-                "downloadsDir = downloadsDirIn(app.filesDir),",
-                "fetcher = OkHttpChunkFetcher(okHttpClient),",
+                "store = downloadStore",
+                "downloadsDir = downloadsDirIn(app.filesDir)",
+                "auth = null",
+                "bearerToken = null",
+                "fetcher = OkHttpChunkFetcher(okHttpClient)",
                 "qualityProvider = { appPreferences.effectiveDownloadQuality() }",
             ),
             "downloadManager construction",
         )
         assertSliceLines(
             app,
-            "dev.cyberdogs.offleash.data.LikeController(",
-            "init {",
+            "val likedTrackStore: LikedTrackStore =",
+            "val likeController",
             listOf(
-                "client = client,",
-                "preferences = appPreferences,",
-                "sessionProvider = { sessionManager.currentAuthSession() },",
-                "bearerProvider = { googleSessionManager.currentBearer() },",
-                "bearerSessionPresent = { googleSessionManager.hasStoredSession() }",
-                "scope = sessionScope,",
+                "LikedTrackStore(File(app.filesDir, \"liked_tracks.json\"))",
+            ),
+            "likedTrackStore construction",
+        )
+        // The like controller is local-only: preferences, the
+        // on-device liked-track store, and the app scope — no
+        // client, no session or bearer provider of any kind.
+        assertSliceLines(
+            app,
+            "dev.cyberdogs.offleash.data.LikeController(",
+            "private val _showPlayerRequests",
+            listOf(
+                "preferences = appPreferences",
+                "likedTrackStore = likedTrackStore",
+                "scope = appScope",
             ),
             "likeController construction",
         )
@@ -299,30 +223,53 @@ class R58SweepContractTest {
         // The QueueController: the shared player, the
         // container's diagnostics recorder (round-58
         // re-point doctor (b)), and the resolve-time
-        // providers paired with their sources.
+        // providers paired with their sources. It takes NO
+        // session/bearer provider in the account-free build —
+        // its dormant provider parameters default to null and
+        // the container passes none.
         assertSliceLines(
             app,
             "val queueController: QueueController = QueueController(",
             "var mediaController: MediaController?",
             listOf(
-                "context = app,",
-                "client = client,",
-                "player = player,",
-                "recentsStore = recentsStore,",
-                "diagnostics = playbackDiagnostics,",
-                "sessionProvider = { sessionManager.currentAuthSession() },",
-                "bearerProvider = { googleSessionManager.currentBearer() },",
-                "probeClient = okHttpClient,",
-                "streamWindows = streamWindows,",
+                "context = app",
+                "client = client",
+                "player = player",
+                "recentsStore = recentsStore",
+                "diagnostics = playbackDiagnostics",
+                "probeClient = okHttpClient",
+                "streamWindows = streamWindows",
+                "qualityProvider = { appPreferences.streamQuality }",
+                "localFileProvider = { track -> downloadManager.downloadedPlayback(track.videoId) }",
+                "audioVersionInRadioProvider = { appPreferences.audioVersionInRadio }",
             ),
             "queueController construction",
         )
+        // The removed account wiring must stay removed.
+        for (token in listOf(
+            "SessionManager(",
+            "GoogleSessionManager",
+            "GoogleNativeAuth",
+            "SessionStore(",
+            "GoogleTokenStore",
+            "currentAuthSession",
+            "currentBearerToken",
+            "BearerRetryTransport",
+            "sessionScope",
+            "_accountUiState",
+        )) {
+            assertEquals(
+                "the container must hold no `$token` — the " +
+                    "account wiring was deleted in 0.9.0 and " +
+                    "must not return through the container",
+                0,
+                occurrences(app, token),
+            )
+        }
         // The ViewModel factories in the screens: each
         // factory's construction line(s) verbatim. Every
-        // factory takes the container's one client; the
-        // two provider-carrying factories pair their
-        // providers with the session manager / the
-        // container bearer by name.
+        // factory takes the container's one client and
+        // nothing account-shaped.
         val detail = fileText(
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt",
         )
@@ -346,13 +293,23 @@ class R58SweepContractTest {
             "val state by viewModel.state.collectAsState()",
             listOf(
                 "PlaylistViewModel(",
-                "container.client,",
-                "browseId,",
-                "params,",
-                "authProvider = { container.sessionManager.currentAuthSession() }",
-                "bearerProvider = { container.currentBearerToken() }",
+                "container.client",
+                "browseId",
+                "params",
             ),
             "PlaylistViewModel factory",
+        )
+        val playlistFactory = slice(
+            detail,
+            "val viewModel: PlaylistViewModel = viewModel(",
+            "val state by viewModel.state.collectAsState()",
+            "PlaylistViewModel factory",
+        )
+        assertFalse(
+            "the Playlist factory must carry no auth or " +
+                "bearer provider — playlist browse is anonymous",
+            playlistFactory.contains("authProvider") ||
+                playlistFactory.contains("bearerProvider"),
         )
         val charts = fileText(
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt",
@@ -372,10 +329,7 @@ class R58SweepContractTest {
             "val viewModel: HomeViewModel = viewModel {",
             "val state by viewModel.state.collectAsState()",
             listOf(
-                "HomeViewModel(",
-                "container.client,",
-                "sessionProvider = { container.sessionManager.currentAuthSession() }",
-                "bearerProvider = { container.currentBearerToken() }",
+                "HomeViewModel(container.client)",
             ),
             "HomeViewModel factory",
         )
@@ -464,8 +418,10 @@ class R58SweepContractTest {
                 "component moved no pin; the component set " +
                 "is the manifest's exposure surface",
             sortedMapOf(
+                // 0.9.0: the OAuth redirect activity is deleted
+                // with the sign-in product; the shipped
+                // component set is MainActivity + PlaybackService.
                 "activity:.MainActivity" to "true",
-                "activity:.ui.account.OAuthRedirectActivity" to "true",
                 "service:.playback.PlaybackService" to "true",
             ),
             exportedByComponent,

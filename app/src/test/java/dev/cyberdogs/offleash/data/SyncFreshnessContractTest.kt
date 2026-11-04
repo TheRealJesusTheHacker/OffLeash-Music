@@ -52,19 +52,26 @@ class SyncFreshnessContractTest {
     private val search = "src/main/java/dev/cyberdogs/offleash/ui/search/SearchScreen.kt"
 
     @Test
-    fun reloadsAreKeyedOnIdentityNotJustSignedIn() {
-        assertTrue(
-            "Home must reload when the identity changes, not only on sign-in flips",
-            source(home).contains("LaunchedEffect(sessionState.signedIn, sessionState.identityEmail)"),
-        )
-        assertTrue(
-            "Library must reload when the identity changes",
-            source(library).contains("sessionState.identityEmail"),
-        )
-        assertTrue(
-            "Playlist pages must reload when the identity changes",
-            source(detail).contains("LaunchedEffect(sessionState.signedIn, sessionState.identityEmail)"),
-        )
+    fun noBrowseLoadIsKeyedOnAccountIdentity() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the identity-
+        // keyed reload this test used to pin belonged to the
+        // sign-in product, which is removed. The account-free
+        // truth it must now hold is the stronger one: no browse
+        // surface consults session or identity state at all, so
+        // nothing can reload — or leak — on an identity change.
+        for ((name, path) in listOf(
+            "Home" to home, "Library" to library, "Detail" to detail,
+        )) {
+            val text = source(path)
+            assertTrue(
+                "$name must not consult session state",
+                !text.contains("sessionState"),
+            )
+            assertTrue(
+                "$name must not consult account identity",
+                !text.contains("identityEmail"),
+            )
+        }
     }
 
     @Test
@@ -103,10 +110,16 @@ class SyncFreshnessContractTest {
     }
 
     @Test
-    fun libraryLoadDoesNotRecordCancellationAsAnError() {
-        assertTrue(
-            source(library).contains("if (e is kotlinx.coroutines.CancellationException) throw e"),
-        )
+    fun libraryHasNoRemoteLoadToMisrecord() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the Library's
+        // account-playlist load this test guarded is removed with
+        // the sign-in product — the Library is on-device content
+        // only, so there is no load whose cancellation could be
+        // misrecorded. The browse loads that remain (Detail) keep
+        // their cancel-and-guard discipline, pinned above.
+        val text = source(library)
+        assertTrue(!text.contains("libraryPlaylists"))
+        assertTrue(!text.contains("ytPlaylists"))
     }
 
     @Test

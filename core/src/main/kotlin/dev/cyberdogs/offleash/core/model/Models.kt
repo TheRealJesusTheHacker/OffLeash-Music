@@ -17,6 +17,15 @@ data class Track(
     val albumBrowseId: String?,
     val durationSeconds: Int?,
     val thumbnailUrl: String?,
+    /**
+     * The largest artwork variant the source offered for this track,
+     * carried beside the row-sized [thumbnailUrl] so the player's
+     * hero surface can render genuinely high-resolution art instead
+     * of upscaling a row thumbnail (0.9.0 artwork discipline). Null
+     * when the source offered no artwork, or for tracks built by
+     * older code paths that only knew the row-sized reference.
+     */
+    val heroThumbnailUrl: String? = null,
 )
 
 data class AlbumSummary(

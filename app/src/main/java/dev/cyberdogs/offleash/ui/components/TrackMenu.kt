@@ -102,6 +102,7 @@ fun TrackOverflowMenu(
     playlists: List<LocalPlaylist>,
     onAddToPlaylist: (playlist: LocalPlaylist, track: Track) -> Unit,
     modifier: Modifier = Modifier,
+    onCreatePlaylist: ((name: String, track: Track) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -220,6 +221,12 @@ fun TrackOverflowMenu(
                 onAddToPlaylist(playlist, track)
             },
             onDismiss = { pickerOpen = false },
+            onCreate = onCreatePlaylist?.let { create ->
+                { name: String ->
+                    pickerOpen = false
+                    create(name, track)
+                }
+            },
         )
     }
 }
@@ -281,11 +288,9 @@ private fun LikeMenuItem(
     onPicked: () -> Unit,
 ) {
     val likeStates by likeController.states.collectAsState()
-    val accountBacked by likeController.accountBacked.collectAsState()
     val likeState = likeStates[track.videoId]
         ?: dev.cyberdogs.offleash.playback.LikeUiState(
             liked = false,
-            accountBacked = accountBacked,
         )
     DropdownMenuItem(
         text = { Text(likeActionLabel(likeState)) },

@@ -13,41 +13,20 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
-import dev.cyberdogs.offleash.core.auth.GoogleNativeAuth
 import dev.cyberdogs.offleash.core.playback.PlaybackResolver
-import dev.cyberdogs.offleash.account.AutoDownloadLiked
-import dev.cyberdogs.offleash.account.GoogleSessionKeepAlive
-import dev.cyberdogs.offleash.data.AesGcmSecretBox
 import dev.cyberdogs.offleash.data.AppPreferences
 import dev.cyberdogs.offleash.data.DownloadManager
 import dev.cyberdogs.offleash.data.DownloadStore
-import dev.cyberdogs.offleash.data.FileSecretStorage
-import dev.cyberdogs.offleash.data.GooglePendingGrantStore
-import dev.cyberdogs.offleash.data.GooglePendingNativeAuthStore
-import dev.cyberdogs.offleash.data.GoogleSessionManager
-import dev.cyberdogs.offleash.data.GoogleSignInSeenMarker
-import dev.cyberdogs.offleash.data.googleSignInSeenFileIn
-import dev.cyberdogs.offleash.data.googlePendingNativeAuthFileIn
-import dev.cyberdogs.offleash.data.legacyFallbackApplies
-import dev.cyberdogs.offleash.data.GoogleTokenStore
-import dev.cyberdogs.offleash.data.KeystoreSecretKey
+import dev.cyberdogs.offleash.data.LikedTrackStore
 import dev.cyberdogs.offleash.data.LocalPlaylistStore
 import dev.cyberdogs.offleash.data.OkHttpTransport
 import dev.cyberdogs.offleash.data.RecentsStore
-import dev.cyberdogs.offleash.data.SessionManager
-import dev.cyberdogs.offleash.data.SessionStore
-import dev.cyberdogs.offleash.data.SessionUiState
-import dev.cyberdogs.offleash.data.googlePendingGrantFileIn
-import dev.cyberdogs.offleash.data.googleSessionFileIn
 import dev.cyberdogs.offleash.data.StreamWindowStore
-import dev.cyberdogs.offleash.data.VisitorDataCache
 import dev.cyberdogs.offleash.data.OkHttpChunkFetcher
 import dev.cyberdogs.offleash.data.buildSharedClient
 import dev.cyberdogs.offleash.data.downloadRecordsFileIn
 import dev.cyberdogs.offleash.data.downloadsDirIn
-import dev.cyberdogs.offleash.data.sessionFileIn
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -58,10 +37,6 @@ import dev.cyberdogs.offleash.playback.SpeedUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.io.File
 
@@ -106,8 +81,8 @@ class OffleashApp : Application(), coil.ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         // First, before anything can fail: the last-crash recorder,
-        // so a dying process leaves its trace where the next launch's
-        // sign-in screen can show it (2026-10-27 crash hunt).
+        // so a dying process leaves its trace where a later launch
+        // can read it (2026-10-27 crash hunt).
         dev.cyberdogs.offleash.data.CrashReporter.install(this)
         container = AppContainer(this)
     }
@@ -124,149 +99,43 @@ class OffleashApp : Application(), coil.ImageLoaderFactory {
  */
 class AppContainer(app: OffleashApp) {
 
-    /** The application, kept for the few container operations that need a Context. */
-    private val application: OffleashApp = app
+    init {
+        // Account-free upgrade cleanup (0.9.0, owner's 2026-11-04
+        // order): a device arriving from a sign-in build may hold
+        // sealed session material for roads this build no longer
+        // presents or wires. It is destroyed here, before any
+        // other container state is built, so the account-free app
+        // can never observe a half-signed-in state. The file names
+        // are literal because the stores that owned them are
+        // deleted with the sign-in product; this is their
+        // migration, following the own-key wizard precedent below
+        // (0.8.8). Best-effort by design: hygiene must never be a
+        // startup failure.
+        for (name in LEGACY_ACCOUNT_FILES) {
+            try {
+                File(app.noBackupFilesDir, name).delete()
+            } catch (t: Throwable) {
+                // Best-effort hygiene; never a startup failure.
+            }
+        }
+        // The legacy sign-in WebView's cookie jar and web storage
+        // are session material too; clear them on the same pass.
+        try {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+            android.webkit.CookieManager.getInstance().flush()
+            android.webkit.WebStorage.getInstance().deleteAllData()
+        } catch (t: Throwable) {
+            // No WebView on this device/profile: nothing to clear.
+        }
+    }
 
     /** Shared playback-diagnostics recorder (last attempt only). */
     val playbackDiagnostics: PlaybackDiagnostics = PlaybackDiagnostics()
 
-    /** Shared sign-in diagnostics recorder (stage lines for the last attempt). */
-    val signInDiagnostics: dev.cyberdogs.offleash.data.SignInDiagnostics =
-        dev.cyberdogs.offleash.data.SignInDiagnostics()
+    /** Scope for app work that outlives any single screen. */
+    private val appScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /**
-     * Late-bound handle to the session manager, for the transport's
-     * cookie-rotation callback. The wiring has a natural cycle —
-     * the transport wants the callback, the client wants the
-     * transport, the manager wants the client — so the transport is
-     * built with a callback that delegates through this reference,
-     * and the reference is assigned the moment the manager exists
-     * (below, before anything can make a request).
-     */
-    @Volatile
-    private var sessionManagerRef: SessionManager? = null
-
-    /**
-     * The same late-bound arrangement for the Google session
-     * manager, for the client transport's Bearer-retry hook (the
-     * reactive 401 → refresh → retry-once path): the hook delegates
-     * through this reference, assigned the moment the manager
-     * exists, before anything can make a request.
-     */
-    @Volatile
-    private var googleSessionManagerRef: GoogleSessionManager? = null
-
-    /**
-     * The same late-bound arrangement for the core client itself,
-     * for the visitor-data provider (0.8.4): the client wants the
-     * provider at construction, but the fetch the provider wraps
-     * is a method ON the client (its anonymous `visitor_id` read,
-     * over the client's own transport). The provider delegates
-     * through this reference, assigned in the init block below,
-     * before anything can make a request.
-     */
-    @Volatile
-    private var clientRef: YoutubeiClient? = null
-
-    /**
-     * The visitor data the OAuth road binds into signed-in browse
-     * (0.8.4): fetched anonymously through the client's own
-     * transport and cached for the process lifetime — see
-     * [VisitorDataCache] for the failure discipline.
-     */
-    private val visitorDataCache: VisitorDataCache = VisitorDataCache(
-        fetcher = { clientRef?.fetchVisitorData() },
-    )
-
-    /**
-     * The encrypted session store: a Keystore-sealed file in the
-     * app's no-backup directory. Built before the transport so the
-     * manager can be assembled as soon as the client exists.
-     */
-    val sessionStore: SessionStore = SessionStore(
-        storage = FileSecretStorage(sessionFileIn(app)),
-        box = AesGcmSecretBox(
-            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-            // 0.8.1 hotfix: a seal that proves the standing key's
-            // parameters unusable (the device-class failure behind
-            // the owner's 0.8.0 sign-in panel) regenerates the
-            // shared key once and retries — see AesGcmSecretBox.
-            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
-        ),
-    )
-
-    /**
-     * The Google sign-in's token store (0.7.0): the same Keystore
-     * seal and no-backup directory as the cookie session's store,
-     * but its own sealed file — the two sign-in generations never
-     * share bytes.
-     */
-    val googleTokenStore: GoogleTokenStore = GoogleTokenStore(
-        storage = FileSecretStorage(googleSessionFileIn(app)),
-        box = AesGcmSecretBox(
-            keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-            keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
-        ),
-    )
-
-    /**
-     * The pending device-grant store (0.7.1): an issued-but-not-
-     * yet-approved sign-in code, sealed with the same box into its
-     * own file. The device-code flow is no longer the presented
-     * sign-in (0.8.8 — the native browser flow replaced it); the
-     * store stays wired as part of the non-presented rollback kit
-     * (the core device engine and its tests are untouched), and
-     * costs the presented app nothing.
-     */
-    val googlePendingGrantStore: GooglePendingGrantStore =
-        GooglePendingGrantStore(
-            storage = FileSecretStorage(googlePendingGrantFileIn(app)),
-            box = AesGcmSecretBox(
-                keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-                keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
-            ),
-        )
-
-    /**
-     * The pending native sign-in attempt store (0.8.8): a started-
-     * but-not-yet-answered browser sign-in attempt (state binding +
-     * PKCE verifier), sealed with the same box into its own file,
-     * so the attempt survives the app being killed while the owner
-     * is in the browser approving it.
-     */
-    val googlePendingNativeAuthStore: GooglePendingNativeAuthStore =
-        GooglePendingNativeAuthStore(
-            storage = FileSecretStorage(googlePendingNativeAuthFileIn(app)),
-            box = AesGcmSecretBox(
-                keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },
-                keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },
-            ),
-        )
-
-    /**
-     * The "a Google sign-in has happened here" marker (bug sweep
-     * round 1): once set, the legacy cookie session never drives
-     * the auto-download worker's decisions — see
-     * [GoogleSignInSeenMarker]. (Its original resurrection watch —
-     * the presented account state — is moot since 0.8.3: the
-     * session manager discards any stored legacy session at
-     * construction, so there is nothing left to resurrect.)
-     */
-    val googleSignInSeenMarker: GoogleSignInSeenMarker =
-        GoogleSignInSeenMarker(googleSignInSeenFileIn(app))
-
-    /**
-     * The ONE OkHttp client for the whole app: youtubei API calls and
-     * stream fetches go through the same stack (same connection pool,
-     * same address-family choices), because googlevideo stream URLs are
-     * bound to the network identity that resolved them. The scoped
-     * RangeInterceptor normalizes googlevideo GETs to bounded ranges
-     * (per-stream windows from [streamWindows]) and records every
-     * stream load's status into diagnostics.
-     * Construction lives in [buildSharedClient] so a contract test
-     * can build the production client and pin what is (and is not)
-     * installed on it.
-     */
     /**
      * The ONE per-stream window record (round 3): the ladder probe's
      * winning Range window per stream URL. This single instance is
@@ -279,222 +148,14 @@ class AppContainer(app: OffleashApp) {
 
     val okHttpClient: OkHttpClient = buildSharedClient(playbackDiagnostics, streamWindows)
 
-    /** Scope for session work that outlives any single screen. */
-    private val sessionScope: CoroutineScope =
-        CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     val client: YoutubeiClient = YoutubeiClient(
-        dev.cyberdogs.offleash.data.BearerRetryTransport(
-            OkHttpTransport(
-                okHttpClient,
-                onResponseCookies = { pairs -> sessionManagerRef?.onResponseCookies(pairs) },
-            ),
-            bearerRefresh = { rejected ->
-                googleSessionManagerRef?.bearerAfterRejection(rejected)
-            },
-        ),
-        // Signed-in browse attempts land in the same owner-visible
-        // diagnostics trail as playback (0.8.2): the core hook's
-        // lines carry surface, client config, and refusal class —
-        // statuses only, never tokens or server text.
-        browseAttemptLog = { line -> playbackDiagnostics.log("browse", line) },
-        // The visitor-data binding for the OAuth road's browse
-        // cascade (0.8.4): anonymous material, fetched and cached
-        // by [visitorDataCache] through the late-bound client ref.
-        visitorDataProvider = { visitorDataCache.get() },
-    )
-
-    /**
-     * The legacy session's remains (0.8.3): constructing it
-     * DISCARDS any WebView-era session an older build left in the
-     * sealed store — the cookie sign-in road is removed, and this
-     * manager now only answers the app's legacy reads (always
-     * signed out) and performs total sign-out's legacy wipe.
-     */
-    val sessionManager: SessionManager = SessionManager(
-        store = sessionStore,
-        signInDiagnostics = signInDiagnostics,
-    )
-
-    /**
-     * The Android OAuth client ID this build was supplied with
-     * (0.8.8): injected at build time (the `offleashAndroidClientId`
-     * Gradle property — see app/build.gradle.kts). An Android
-     * client ID is a PUBLIC identifier — it names the registration
-     * and ships inside the APK; no secret exists for this client
-     * type, and the registration itself (package name + signing
-     * certificate fingerprint, recorded with Google) is what stops
-     * another app from spending it. A non-blank value that is not
-     * shaped like a client ID is a build defect: logged in plain
-     * words and treated as absent — never half-used.
-     */
-    val androidClientId: String? = resolveAndroidClientId()
-
-    private fun resolveAndroidClientId(): String? {
-        val raw = BuildConfig.GOOGLE_ANDROID_CLIENT_ID.trim()
-        if (raw.isEmpty()) return null
-        if (!raw.endsWith(".apps.googleusercontent.com")) {
-            signInDiagnostics.log(
-                "signin",
-                "the build's supplied sign-in registration is " +
-                    "malformed — sign-in runs unconfigured",
-            )
-            return null
-        }
-        return raw
-    }
-
-    /**
-     * Where Google returns the owner after approval: this app's
-     * own scheme + the OAuth redirect host, handled by
-     * OAuthRedirectActivity (see the manifest). Derived from the
-     * package name so each flavour returns to itself.
-     */
-    val googleRedirectUri: String = "${app.packageName}://oauth2redirect"
-
-    /**
-     * The Google OAuth client (native authorization-code + PKCE
-     * flow, 0.8.8), riding its own transport instance over the
-     * shared OkHttp client — no cookie rotation callback: OAuth
-     * responses carry no session cookies to rotate, and token
-     * material never enters the cookie path.
-     */
-    val googleAuth: GoogleNativeAuth = GoogleNativeAuth(
         OkHttpTransport(okHttpClient),
-        androidClientId,
+        // Browse attempts land in the same owner-visible
+        // diagnostics trail as playback: the core hook's lines
+        // carry surface, client config, and refusal class —
+        // statuses only, never server text.
+        browseAttemptLog = { line -> playbackDiagnostics.log("browse", line) },
     )
-
-    /**
-     * Owns the Google sign-in (the app's primary session): the
-     * native browser flow, the sealed token store, refresh, and
-     * revocation. Constructing it loads any stored Google session.
-     */
-    val googleSessionManager: GoogleSessionManager = GoogleSessionManager(
-        store = googleTokenStore,
-        auth = googleAuth,
-        client = client,
-        scope = sessionScope,
-        redirectUri = googleRedirectUri,
-        pendingAttemptStore = googlePendingNativeAuthStore,
-        signInDiagnostics = signInDiagnostics,
-    )
-
-    init {
-        // The dead road's sealed remains (0.8.8): the own-key
-        // wizard is gone as a product direction, so a pair or a
-        // wizard draft a pre-0.8.8 build sealed on this device is
-        // destroyed here, once — credentials for a road nothing
-        // presents anymore serve nothing standing. The files are
-        // named literally because the stores that owned them are
-        // deleted with the wizard; this is their migration.
-        for (name in listOf("own_key.bin", "own_key_wizard.bin")) {
-            try {
-                File(app.noBackupFilesDir, name).delete()
-            } catch (t: Throwable) {
-                // Best-effort hygiene; never a startup failure.
-            }
-        }
-        // The client-change gate runs before any account state is
-        // read: a session sealed under a different registration
-        // than this build's ends here, once, cleanly — so the
-        // account snapshot below (and every first frame) already
-        // shows the honest signed-out state with its reason.
-        googleSessionManager.applyClientGate()
-    }
-
-    /**
-     * The account state the UI presents: the Google session's
-     * state. The legacy fallback shape is kept (the round-1 rule:
-     * the cookie session's state only on a device that has never
-     * had a Google sign-in), but since 0.8.3 the cookie session's
-     * state is permanently signed out — the session manager
-     * discards any stored legacy session at construction — so the
-     * presented state is the Google state in every case, and a
-     * Google store wiped on its own lands on the honest Google
-     * signed-out state. Kept current by the collectors in the
-     * wiring init below.
-     */
-    private val _accountUiState = MutableStateFlow(accountUiStateSnapshot())
-    val accountUiState: StateFlow<SessionUiState> = _accountUiState.asStateFlow()
-
-    private fun accountUiStateSnapshot(): SessionUiState {
-        val google = googleSessionManager.uiState.value
-        return if (legacyFallbackApplies(google.signedIn, googleSignInSeenMarker.seen())) {
-            sessionManager.uiState.value
-        } else {
-            google
-        }
-    }
-
-    /**
-     * Signs out of BOTH sign-in generations: the Google grant is
-     * revoked at Google and its tokens wiped; any stored cookie
-     * session is wiped too, so "signed out" is total.
-     */
-    suspend fun signOutOfAccount() {
-        googleSessionManager.signOut()
-        sessionManager.signOut()
-        // The legacy sign-in WebView's cookie jar and web storage
-        // are wiped too: SessionManager.signOut documents that as
-        // the caller's job, and this is the one sign-out path every
-        // screen uses — until the round 3 sweep no caller did it, so
-        // a ≤0.6.x install's WebView cookies survived every sign-out.
-        dev.cyberdogs.offleash.data.wipeWebViewData(application)
-    }
-
-    /**
-     * A currently-valid Google access token, or null. BLOCKING
-     * (refreshes on the caller's thread when near expiry) — call
-     * from an IO dispatcher, like every core client call.
-     */
-    fun currentBearerToken(): String? = googleSessionManager.currentBearer()
-
-    /**
-     * The stored brand delegation signed-in browse runs as
-     * (0.8.2), or null when signed out / no brand channel. Cheap
-     * read — call beside [currentBearerToken].
-     */
-    fun currentBrowseDelegation(): BrowseDelegation? =
-        googleSessionManager.browseDelegation()
-
-    init {
-        // Close the wiring cycle described on [sessionManagerRef].
-        sessionManagerRef = sessionManager
-        googleSessionManagerRef = googleSessionManager
-        clientRef = client
-        // No legacy keep-alive is enqueued (0.8.3): the WebView-era
-        // session it used to validate no longer exists — a stored
-        // one is discarded by the session manager at construction.
-        // The Google sign-in's periodic care: identity
-        // re-read + proactive token refresh.
-        GoogleSessionKeepAlive.enqueue(app)
-        // Auto-download of Liked (parity step 2): the worker itself
-        // checks the preference and the session before doing anything.
-        AutoDownloadLiked.enqueue(app)
-        // A stored Google session means a Google sign-in has
-        // happened on this device (covers upgrades into this build):
-        // set the marker before anything consults it below.
-        if (googleSessionManager.hasStoredSession()) {
-            googleSignInSeenMarker.mark()
-        }
-        // No app-start validation of a legacy session (0.8.3): the
-        // session manager discarded any stored one at construction,
-        // and there is nothing left to validate.
-        // App-start identity refresh for a stored Google session:
-        // names the account fresh, and discovers a revoked grant at
-        // launch rather than mid-playlist.
-        if (googleSessionManager.hasStoredSession()) {
-            sessionScope.launch {
-                try {
-                    googleSessionManager.refreshIdentity()
-                } catch (e: Exception) {
-                    // refreshIdentity maps its own outcomes; anything
-                    // that still escapes leaves the stored tokens in
-                    // place for the next attempt.
-                }
-            }
-        }
-    }
 
     /**
      * Plain app preferences (stream quality and friends), persisted
@@ -511,8 +172,8 @@ class AppContainer(app: OffleashApp) {
      * directory (downloads are re-fetchable content, not credentials).
      *
      * Resolution is wired to the EXISTING road-switching resolver —
-     * the same [PlaybackResolver] playback uses, with the current
-     * session read at download time — at the effective download
+     * the same [PlaybackResolver] playback uses, resolving
+     * anonymously (no session, no bearer) — at the effective download
      * quality (the download-quality preference, which defaults to
      * following the stream quality). Chunk fetches ride the shared
      * OkHttp client, so a download's network identity matches the
@@ -532,9 +193,9 @@ class AppContainer(app: OffleashApp) {
         resolveStream = { track, quality ->
             downloadStreamResolver.resolve(
                 track.videoId,
-                sessionManager.currentAuthSession(),
+                auth = null,
                 quality,
-                googleSessionManager.currentBearer(),
+                bearerToken = null,
             ).info
         },
         fetcher = OkHttpChunkFetcher(okHttpClient),
@@ -543,47 +204,25 @@ class AppContainer(app: OffleashApp) {
 
 
     /**
-     * Lane G: like state for every track surface. Signed-in toggles
-     * write to the account via the core client; signed-out toggles are
-     * device-only. Built after both the session manager and the plain
-     * preferences it persists local likes into.
+     * The track rows behind the Library's Liked songs list
+     * (0.9.0): `liked_tracks.json` in the app files dir, under the
+     * same store discipline as playlists and recents.
+     */
+    val likedTrackStore: LikedTrackStore =
+        LikedTrackStore(File(app.filesDir, "liked_tracks.json"))
+
+    /**
+     * Lane G: like state for every track surface. In the
+     * account-free product a like is on-device state only (see
+     * [dev.cyberdogs.offleash.data.LikeController]): the ids record
+     * lives in preferences, the rows live in [likedTrackStore].
      */
     val likeController: dev.cyberdogs.offleash.data.LikeController =
         dev.cyberdogs.offleash.data.LikeController(
-            client = client,
             preferences = appPreferences,
-            sessionProvider = { sessionManager.currentAuthSession() },
-            bearerProvider = { googleSessionManager.currentBearer() },
-            bearerSessionPresent = { googleSessionManager.hasStoredSession() },
-            scope = sessionScope,
+            likedTrackStore = likedTrackStore,
+            scope = appScope,
         )
-
-    init {
-        // Keep the presented account state current: the Google
-        // session when one exists, else the cookie session's.
-        sessionScope.launch {
-            googleSessionManager.uiState.collect {
-                // An adoption landing sets the marker first, so the
-                // snapshot below (and every later one) can never fall
-                // back to the cookie session again.
-                if (it.signedIn) googleSignInSeenMarker.mark()
-                _accountUiState.value = accountUiStateSnapshot()
-            }
-        }
-        sessionScope.launch {
-            sessionManager.uiState.collect {
-                _accountUiState.value = accountUiStateSnapshot()
-            }
-        }
-        // Keep the like controller's account-backed flag in step with
-        // sign-in state, so menu labels never claim an account write
-        // while signed out (or hide one while signed in).
-        sessionScope.launch {
-            accountUiState.collect { state ->
-                likeController.setAccountBacked(state.signedIn)
-            }
-        }
-    }
 
     /**
      * Lane G: "show the player" requests from track menus (the sleep
@@ -623,22 +262,6 @@ class AppContainer(app: OffleashApp) {
         player = player,
         recentsStore = recentsStore,
         diagnostics = playbackDiagnostics,
-        // Phase 2 road-switching wiring (Lane C, merged by the
-        // coordinator). `sessionManager` is this container's member;
-        // the lambdas read it at resolve time, never at construction
-        // time.
-        sessionProvider = { sessionManager.currentAuthSession() },
-        // The token road (0.7.0): read fresh at every resolve, like
-        // the cookie session — a sign-in or refresh takes effect on
-        // the next track without rebuilding the controller.
-        bearerProvider = { googleSessionManager.currentBearer() },
-        revalidateSession = {
-            // The resolver's fallback-road revalidation hook: since
-            // 0.8.3 there is no legacy session to revalidate — the
-            // read is the whole answer (always null; the Google
-            // bearer road and the anonymous road carry playback).
-            sessionManager.currentAuthSession()
-        },
         // The shared client runs the anonymous-road probe ladder, so a
         // probe sees the same network identity as the resolve and the
         // player's own fetch.
@@ -767,6 +390,22 @@ class AppContainer(app: OffleashApp) {
 
     private companion object {
         const val REPLAY_CACHE_BYTES: Long = 512L * 1024L * 1024L
-        const val SESSION_KEY_ALIAS: String = "offleash-session-key"
+        /**
+         * Sealed/web session files a pre-0.9.0 build could leave
+         * behind, destroyed by the upgrade cleanup in the init
+         * block above (0.9.0): the cookie session, the Google
+         * token store, both pending sign-in attempts, the
+         * sign-in-seen marker, and the own-key wizard pair the
+         * 0.8.8 cleanup already named.
+         */
+        val LEGACY_ACCOUNT_FILES: List<String> = listOf(
+            "session.bin",
+            "google_session.bin",
+            "google_pending_grant.bin",
+            "google_pending_native_auth.bin",
+            "google_signin_seen.txt",
+            "own_key.bin",
+            "own_key_wizard.bin",
+        )
     }
 }

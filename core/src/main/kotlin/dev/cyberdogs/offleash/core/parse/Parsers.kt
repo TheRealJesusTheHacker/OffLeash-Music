@@ -216,6 +216,7 @@ object YoutubeiParsers {
             albumBrowseId = albumBrowseId,
             durationSeconds = durationSeconds,
             thumbnailUrl = thumbnailUrlOf(item),
+            heroThumbnailUrl = headerThumbnailUrlOf(item),
         )
     }
 
@@ -244,6 +245,7 @@ object YoutubeiParsers {
                         durationSeconds = subtitleSegments
                             .firstNotNullOfOrNull { parseDurationSeconds(it.text) },
                         thumbnailUrl = thumbnail,
+                        heroThumbnailUrl = headerThumbnailUrlOf(item),
                     )
                 )
             }
@@ -442,6 +444,7 @@ object YoutubeiParsers {
             albumBrowseId = null,
             durationSeconds = durationSeconds,
             thumbnailUrl = thumbnailUrlOf(shelf),
+            heroThumbnailUrl = headerThumbnailUrlOf(shelf),
         )
     }
 
@@ -735,7 +738,8 @@ object YoutubeiParsers {
                     album = null,
                     albumBrowseId = null,
                     durationSeconds = parseDurationSeconds(textOf(panel.obj("lengthText"))),
-                    thumbnailUrl = largestThumbnailUrl(panel.obj("thumbnail").arr("thumbnails")),
+                    thumbnailUrl = bestThumbnailUrl(panel.obj("thumbnail").arr("thumbnails")),
+                    heroThumbnailUrl = largestThumbnailUrl(panel.obj("thumbnail").arr("thumbnails")),
                 )
             )
         }

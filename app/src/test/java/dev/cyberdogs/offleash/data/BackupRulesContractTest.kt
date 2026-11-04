@@ -1,6 +1,7 @@
 package dev.cyberdogs.offleash.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Document
@@ -103,27 +104,32 @@ class BackupRulesContractTest {
     }
 
     @Test
-    fun sessionStoreFileLivesInTheNoBackupDirectory() {
+    fun legacySessionFileIsGoneAndNamedOnlyByTheUpgradeCleanup() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the sealed
+        // session store is deleted with the sign-in product. What
+        // must stay pinned is the other half of the old contract —
+        // a pre-0.9.0 build's session.bin lived in the no-backup
+        // directory, and the account-free build still names it,
+        // in exactly one place: the startup cleanup that destroys
+        // it (AppContainer.LEGACY_ACCOUNT_FILES).
         val mainDir = locateMainDir()
-        val source = File(
+        val store = File(
             mainDir,
             "java/dev/cyberdogs/offleash/data/SessionStore.kt",
         )
-        assertTrue("SessionStore.kt not found at ${source.path}", source.isFile)
-        val text = source.readText()
+        assertFalse("SessionStore.kt must not exist in 0.9.0", store.exists())
+        val container = File(
+            mainDir,
+            "java/dev/cyberdogs/offleash/OffleashApp.kt",
+        ).readText()
         assertTrue(
-            "the session file must be created under noBackupFilesDir",
-            text.contains("noBackupFilesDir"),
+            "the upgrade cleanup must name the legacy session file",
+            container.contains("\"session.bin\""),
         )
         assertTrue(
-            "the session file must be named by the pinned constant",
-            text.contains("SESSION_FILE_NAME"),
+            "the cleanup must run over the no-backup directory",
+            container.contains("noBackupFilesDir"),
         )
-        assertTrue(
-            "the session file name must stay session.bin",
-            text.contains("\"session.bin\""),
-        )
-        assertEquals("session.bin", SESSION_FILE_NAME)
     }
 
     private companion object {

@@ -12,15 +12,14 @@ package dev.cyberdogs.offleash.playback
  * A toggle attempted while one is already pending is NOT ignored
  * (bug sweep round 1): it flips the intent again, and the
  * controller's per-track write drain serializes the writes so the
- * LAST intent is the one the account ends with. The old rule —
+ * LAST intent is the one that ends up persisted. The old rule —
  * ignore the second toggle — silently dropped a user's
- * like→unlike, leaving the account liked against their last tap.
+ * like→unlike, leaving the track liked against their last tap.
  * Out-of-order landing is prevented by the drain (one write in
  * flight per track, in intent order), not by dropping taps.
  */
 data class LikeUiState(
     val liked: Boolean = false,
-    val accountBacked: Boolean = false,
     val pending: Boolean = false,
 )
 
@@ -36,32 +35,28 @@ fun optimisticLikeToggle(state: LikeUiState): LikeUiState =
 fun likeToggleSucceeded(state: LikeUiState): LikeUiState = state.copy(pending = false)
 
 /**
- * The write failed: restore the account-confirmed value and clear
+ * The write failed: restore the last confirmed value and clear
  * pending. The confirmed value is an explicit input (chaos sweep
  * round 2): the previous shape flipped [LikeUiState.liked] once,
  * which is only the pre-toggle value when EXACTLY ONE toggle is
  * outstanding. A mashed toggle sequence (like→unlike→like, or any
  * even count back to the confirmed value) rolled back to the WRONG
- * side — the UI claimed the opposite of what the account held.
- * Callers pass the last value the account is known to hold (the
- * LikeController drain tracks exactly that per track); with no
- * write pending there is nothing to roll back.
+ * side — the UI claimed the opposite of what was persisted.
+ * Callers pass the last persisted value; with no write pending
+ * there is nothing to roll back.
  */
-fun likeToggleRolledBack(state: LikeUiState, accountConfirmedLiked: Boolean): LikeUiState =
+fun likeToggleRolledBack(state: LikeUiState, confirmedLiked: Boolean): LikeUiState =
     if (state.pending) {
-        state.copy(liked = accountConfirmedLiked, pending = false)
+        state.copy(liked = confirmedLiked, pending = false)
     } else {
         state
     }
 
 /**
- * The menu/button label for the like action. Signed out, the like is
- * local-only and the label says so plainly — a device-local like must
- * never dress itself up as an account like.
+ * The menu/button label for the like action. In the account-free
+ * product (0.9.0) a like is OffLeash's own on-device state — the
+ * Library's Liked songs section says where likes live — so the
+ * action itself is named plainly, with no account vocabulary.
  */
-fun likeActionLabel(state: LikeUiState): String = when {
-    state.liked && state.accountBacked -> "Remove like"
-    state.liked -> "Remove like (on this device only)"
-    state.accountBacked -> "Like"
-    else -> "Like (on this device only)"
-}
+fun likeActionLabel(state: LikeUiState): String =
+    if (state.liked) "Remove like" else "Like"

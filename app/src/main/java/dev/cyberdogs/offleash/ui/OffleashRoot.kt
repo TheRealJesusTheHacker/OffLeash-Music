@@ -71,7 +71,6 @@ import dev.cyberdogs.offleash.playback.HalloweenSplash
 import dev.cyberdogs.offleash.playback.SplashGate
 import dev.cyberdogs.offleash.ui.about.AboutScreen
 import dev.cyberdogs.offleash.ui.about.PlaybackDiagnosticsScreen
-import dev.cyberdogs.offleash.ui.account.SignInScreen
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.detail.AlbumScreen
 import dev.cyberdogs.offleash.ui.detail.ArtistScreen
@@ -143,17 +142,6 @@ fun OffleashRoot(container: AppContainer) {
         }
     }
 
-    // Lane G: a failed account-like write surfaces the same way a
-    // playback error does — a snackbar from the root, never silent.
-    val likeError by container.likeController.error.collectAsState()
-    LaunchedEffect(likeError) {
-        val message = likeError
-        if (message != null) {
-            snackbarHostState.showSnackbar(message)
-            container.likeController.clearError()
-        }
-    }
-
     // Surface playback errors as a snackbar when the full player is closed;
     // the player itself shows the same message in its error banner.
     // Long duration: the named messages run two to three sentences
@@ -167,8 +155,7 @@ fun OffleashRoot(container: AppContainer) {
             // was the ONLY surface for the error, and until now it
             // carried no action at all — the listener had to open
             // the player to retry a track the app already knew how
-            // to re-resolve. The like-error snackbar above stays
-            // actionless: a failed like has no such retry.
+            // to re-resolve.
             val result = snackbarHostState.showSnackbar(
                 message = message,
                 actionLabel = "Try again",
@@ -208,7 +195,7 @@ fun OffleashRoot(container: AppContainer) {
                 val showTabs = currentRoute in TOP_LEVEL_ROUTES
                 Column(
                     // When the tabs bar is hidden (every non-top-level
-                    // route — sign-in included), the mini-player is
+                    // route), the mini-player is
                     // the bottom-most element on the screen and must
                     // carry the navigation-bar inset itself; the
                     // Material NavigationBar applies its own inset
@@ -370,8 +357,6 @@ fun OffleashRoot(container: AppContainer) {
                         onPlaylistClick = { id ->
                             navController.navigate("localPlaylist/${Uri.encode(id)}")
                         },
-                        onSignInClick = { navController.navigate("signin") },
-                        onRemotePlaylistClick = openPlaylist,
                         onAlbumClick = openAlbum,
                         onArtistClick = openArtist,
                     )
@@ -380,21 +365,12 @@ fun OffleashRoot(container: AppContainer) {
                     AboutScreen(
                         container = container,
                         onOpenDiagnostics = { navController.navigate("diagnostics") },
-                        onSignInClick = { navController.navigate("signin") },
                         onOpenSettings = { navController.navigate("settings") },
                     )
                 }
                 composable("settings") {
                     SettingsScreen(
                         container = container,
-                        onSignInClick = { navController.navigate("signin") },
-                    )
-                }
-                composable("signin") {
-                    SignInScreen(
-                        container = container,
-                        onSignedIn = { navController.popBackStack() },
-                        onBack = { navController.popBackStack() },
                     )
                 }
                 composable("diagnostics") {
@@ -509,6 +485,7 @@ private fun MiniPlayer(
                 url = track.thumbnailUrl,
                 contentDescription = null,
                 modifier = Modifier.size(44.dp),
+                fallbackLabel = track.title,
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

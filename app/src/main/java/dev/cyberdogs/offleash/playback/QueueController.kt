@@ -68,6 +68,12 @@ data class QueueUiState(
     val currentTrack: Track? = null,
     val isShuffled: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.OFF,
+    /**
+     * The track that plays next (the queue's own peek — shuffle
+     * order included), for the player's Up next row (0.9.0).
+     * Null when the queue ends here.
+     */
+    val nextTrack: Track? = null,
 )
 
 /** Snapshot of player transport state for the UI. */
@@ -2489,6 +2495,7 @@ class QueueController(
             currentTrack = queue.current(),
             isShuffled = queue.shuffle,
             repeatMode = queue.repeatMode,
+            nextTrack = queue.peekNext(),
         )
     }
 

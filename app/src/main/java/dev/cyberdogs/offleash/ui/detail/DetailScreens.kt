@@ -20,10 +20,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -32,15 +30,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.cyberdogs.offleash.AppContainer
-import dev.cyberdogs.offleash.core.auth.AuthSession
-import dev.cyberdogs.offleash.core.api.BrowseDelegation
 import dev.cyberdogs.offleash.core.api.YoutubeiClient
 import dev.cyberdogs.offleash.core.model.AlbumPage
 import dev.cyberdogs.offleash.core.model.ArtistPage
 import dev.cyberdogs.offleash.core.model.PlaylistPage
 import dev.cyberdogs.offleash.core.model.Track
 import dev.cyberdogs.offleash.ui.ErrorMessages
-import dev.cyberdogs.offleash.ui.home.LIKED_MUSIC_BROWSE_ID
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.components.ErrorPanel
 import dev.cyberdogs.offleash.ui.components.LoadingPanel
@@ -135,6 +130,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.trackItems(
                 scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
             },
             trackActions = trackActions,
+            onCreatePlaylist = { name, picked ->
+                scope.launch {
+                    val created = container.localPlaylistStore.createPlaylist(name)
+                    container.localPlaylistStore.addTrack(created.id, picked)
+                }
+            },
         )
     }
 }
@@ -358,29 +359,16 @@ fun ArtistScreen(
 // ---------------------------------------------------------------------------
 
 /**
- * Remote playlist page — auth-aware in Phase 2. The load carries the
- * current session when signed in (this is also how the Liked Songs
- * playlist, browseId "VLLM", loads) and no session when signed out, so
- * public playlists keep working anonymously. Album and artist pages
- * stay anonymous by design (out of Phase 2 scope).
+ * Remote playlist page (0.9.0): public playlists load anonymously
+ * — YouTube Music is the music source and no account stands
+ * between the listener and a public playlist. (The account Liked
+ * Songs page this surface used to serve is gone with the sign-in
+ * product; OffLeash's own Liked songs live in the Library.)
  */
 class PlaylistViewModel(
     private val client: YoutubeiClient,
     private val browseId: String,
     private val params: String?,
-    private val authProvider: () -> AuthSession? = { null },
-    /**
-     * The Google OAuth access token (0.7.0), read on the load's IO
-     * thread. When present, the playlist loads under the token
-     * session — this is the road the Library's playlists and Liked
-     * Songs take.
-     */
-    private val bearerProvider: () -> String? = { null },
-    /**
-     * The stored brand delegation (0.8.2), read beside the bearer:
-     * account playlists (Liked included) live on the brand channel.
-     */
-    private val delegationProvider: () -> BrowseDelegation? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<PlaylistPage>>(UiState.Loading)
@@ -418,33 +406,7 @@ class PlaylistViewModel(
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             var fetched: PlaylistPage? = null
             val result = try {
-                val bearer = bearerProvider()
-                val page = if (bearer != null) {
-                    try {
-                        client.playlistOAuth(
-                            bearer, browseId, params, delegationProvider(),
-                        )
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        // Degradation (0.8.2): the token road
-                        // refused — the cookie/anonymous road still
-                        // serves PUBLIC playlists, so a refused
-                        // account must not blank a page the public
-                        // can open. One dishonest shape is guarded:
-                        // the anonymous Liked page (VLLM) is an
-                        // empty shell (200, zero tracks), so an
-                        // empty VLLM fallback rethrows the token
-                        // road's refusal instead of presenting a
-                        // fake-empty Liked list.
-                        val fallback = client.playlist(
-                            browseId, params, auth = authProvider(),
-                        )
-                        if (browseId == "VLLM" && fallback.tracks.isEmpty()) throw e
-                        fallback
-                    }
-                } else {
-                    client.playlist(browseId, params, auth = authProvider())
-                }
+                val page = client.playlist(browseId, params, auth = null)
                 fetched = page
                 UiState.Content(page)
             } catch (e: Exception) {
@@ -452,16 +414,9 @@ class PlaylistViewModel(
                 UiState.Error(ErrorMessages.userMessage(e))
             }
             // Round 5: the tracker start lives INSIDE the publish
-            // guard, exactly as in SearchViewModel. It used to run
-            // in the try above, so a superseded (cancelled) load —
-            // the client call is blocking and runs to completion —
-            // that returned after a refresh had started its own
-            // paging session still called start() with the STALE
-            // page's token, clobbering the new session's tracker
-            // while _state correctly stayed new. The refreshed
-            // page's Load more then fetched the stale session's
-            // pages and its merge guard refused them all: a dead
-            // Load more, hasMore stuck on.
+            // guard, exactly as in SearchViewModel — a superseded
+            // load must not start its paging session over the new
+            // load's tracker.
             if (isActive) {
                 fetched?.let { continuationTracker.start(it.continuation) }
                 _state.value = result
@@ -479,34 +434,16 @@ class PlaylistViewModel(
         _loadMoreError.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val bearer = bearerProvider()
-                val chunk = if (bearer != null) {
-                    client.playlistContinuationOAuth(bearer, token, delegationProvider())
-                } else {
-                    client.playlistContinuation(token, auth = authProvider())
-                }
-                // Round 5: this job is NOT the load job — a
-                // refresh cannot cancel it — and the fetch is
-                // blocking, so its isActive stays true even when
-                // its paging session is long gone. The advance goes
-                // through the tracker's guard: when a refresh
-                // reset/re-started the tracker while this fetch was
-                // out, tryAdvance refuses and leaves the new session
-                // untouched, and this stale chunk drops here
-                // instead of clobbering the new session's current
-                // token (the merge guard below reads state that
-                // the unguarded advance had already corrupted).
+                val chunk = client.playlistContinuation(token, auth = null)
+                // Round 5: the advance goes through the tracker's
+                // guard, so a refresh that reset the tracker while
+                // this fetch was out leaves the new session
+                // untouched and this stale chunk drops here.
                 if (!continuationTracker.tryAdvance(token, chunk.continuation)) {
                     return@launch
                 }
                 val nextToken = continuationTracker.current
                 if (isActive) {
-                    // Merge against the LATEST page, not the one
-                    // captured at tap time: a refresh that landed
-                    // while this chunk was in flight keeps its own
-                    // first page, and this chunk appends nothing to
-                    // a page it no longer belongs to (its tracker was
-                    // reset by the refresh, ending paging above).
                     val latest = (_state.value as? UiState.Content)?.data
                     if (latest != null && latest.continuation == token) {
                         val fresh = dev.cyberdogs.offleash.core.model.newTracksOnly(
@@ -524,8 +461,6 @@ class PlaylistViewModel(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                // The loaded page stays on screen; only the "more"
-                // row reports the failure, with its own retry.
                 if (isActive) {
                     _loadMoreError.value = ErrorMessages.userMessage(e)
                 }
@@ -549,31 +484,11 @@ fun PlaylistScreen(
             container.client,
             browseId,
             params,
-            authProvider = { container.sessionManager.currentAuthSession() },
-            bearerProvider = { container.currentBearerToken() },
-            delegationProvider = { container.currentBrowseDelegation() },
         )
     }
     val state by viewModel.state.collectAsState()
     val hasMore by viewModel.hasMore.collectAsState()
     val loadMoreError by viewModel.loadMoreError.collectAsState()
-    val sessionState by container.accountUiState.collectAsState()
-
-    // Reload when sign-in state flips after the initial load, so an
-    // account playlist (e.g. Liked Songs) opened signed-out picks up the
-    // session once the user signs in — and drops it on sign-out.
-    // The identity is part of the key (bug sweep round 1): an
-    // account switch that never passes through signed-out must also
-    // reload, or the previous account's page survives the switch.
-    var authEffectSeen by remember { mutableStateOf(false) }
-    LaunchedEffect(sessionState.signedIn, sessionState.identityEmail) {
-        if (authEffectSeen) {
-            viewModel.load()
-        } else {
-            authEffectSeen = true
-        }
-    }
-
     when (val current = state) {
         is UiState.Loading -> LoadingPanel()
         is UiState.Error -> ErrorPanel(message = current.message, onRetry = viewModel::load)
@@ -586,21 +501,6 @@ fun PlaylistScreen(
             val playlists by container.localPlaylistStore.playlists.collectAsState()
             val scope = rememberCoroutineScope()
             val trackActions = rememberTrackActions(container, onAlbumClick, onArtistClick)
-            // Round 36: the Liked Songs page IS the account's like
-            // list — every track on it is account-liked by
-            // construction. Seed the like controller with that
-            // fact (it fills only tracks it holds no state for),
-            // so a row's heart and menu offer "Remove like" from
-            // the start instead of defaulting to "Like" until the
-            // track happens to become the player's current track
-            // and a per-track status fetch lands.
-            LaunchedEffect(page.tracks, browseId) {
-                page.tracks
-                    .takeIf {
-                        browseId == LIKED_MUSIC_BROWSE_ID && sessionState.signedIn
-                    }
-                    ?.let { container.likeController.noteAccountLiked(it) }
-            }
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
                     DetailHeader(

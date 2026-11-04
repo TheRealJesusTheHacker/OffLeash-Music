@@ -24,9 +24,8 @@ object ErrorMessages {
 
     fun userMessage(error: Throwable): String = when (error) {
         is AllRoadsRefused ->
-            "YouTube refused this track both ways. " +
-                "Signed in: ${plainReason(error.accountError)} " +
-                "Anonymous: ${plainReason(error.anonymousError)}"
+            "YouTube refused this track. " +
+                plainReason(error.anonymousError)
         is ContextRejected -> contextRejectedMessage(error)
         is PlayerRefused -> playerRefusedMessage(error.reason)
         is NoPlayableStream ->
@@ -48,19 +47,20 @@ object ErrorMessages {
      * fields — every construction predating the structured parse —
      * keeps the original line verbatim.
      *
-     * - 401 / UNAUTHENTICATED: the sign-in itself was refused — the
-     *   fix the user can actually take is signing in again.
-     * - 403 / PERMISSION_DENIED: the account was refused this
-     *   request — signing in again won't change it; say so plainly.
+     * - 401 / UNAUTHENTICATED: the app's request itself was
+     *   refused — there is no sign-in in this product to redo, so
+     *   the honest next step is the app's side of the contract.
+     * - 403 / PERMISSION_DENIED: the request was refused — say so
+     *   plainly, with no account vocabulary.
      * - 400 / FAILED_PRECONDITION and everything else: the request
      *   shape was refused — the app's side of the contract, the
      *   original "may need an update" line.
      */
     private fun contextRejectedMessage(error: ContextRejected): String = when {
         error.httpStatus == 401 || error.serverStatus == "UNAUTHENTICATED" ->
-            "YouTube refused the app's sign-in for this — sign out and back in, then try again."
+            "YouTube refused the app's request — the app may need an update."
         error.httpStatus == 403 || error.serverStatus == "PERMISSION_DENIED" ->
-            "YouTube refused this request for your account."
+            "YouTube refused this request."
         else ->
             "YouTube refused the app's request — the app may need an update."
     }
@@ -90,7 +90,7 @@ object ErrorMessages {
      */
     private fun playerRefusedMessage(reason: String): String =
         if (reason.contains("LOGIN_REQUIRED", ignoreCase = true)) {
-            "YouTube won't play this track without a sign-in."
+            "YouTube won't play this track in the app."
         } else {
             "YouTube won't play this track."
         }

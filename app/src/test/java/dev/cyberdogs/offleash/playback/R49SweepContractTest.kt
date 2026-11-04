@@ -81,13 +81,12 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to (2 to 0),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to (4 to 0),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to (4 to 0),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to (0 to 1),
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to (0 to 10),
-            // 0.8.8 census event: the own-key wizard's backend
-            // (OwnKeySetup.kt, one `_state.value =` publish) left
-            // the module with the dead road; the native attempt
-            // store and the redirect activity write no `_state` /
-            // `_uiState` flows and stand at the (0 to 0) default.
+            // 0.9.0 census event (owner order, 2026-11-04): the
+            // session managers' entries (SessionManager 0 to 1,
+            // GoogleSessionManager 0 to 10) leave with their
+            // deleted files; every surviving file's counts are
+            // unchanged — the account-free screens publish
+            // through the same ViewModel state writes.
         )
         for ((path, text) in files) {
             val expected = expectedStateWrites[path] ?: (0 to 0)
@@ -133,18 +132,18 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt",
         )
         assertEquals(
-            "LibraryScreen must assign ytPlaylists exactly twice in " +
-                "the WHOLE file (Loading, then the try result) — the " +
-                "R48 window ends at the LazyColumn needle, and a " +
-                "republication effect placed after it was invisible " +
-                "to that window while the account library rendered " +
-                "narrowed to one playlist",
-            2,
+            "LibraryScreen must hold no ytPlaylists assignment — " +
+                "the account library list is deleted (0.9.0); the " +
+                "Library is on-device state and browse results " +
+                "rendered directly, with no republishing state " +
+                "holder for a narrowed list to hide in",
+            0,
             occurrences(library, "ytPlaylists ="),
         )
         assertEquals(
-            "LibraryScreen must construct UiState.Content exactly once in the whole file",
-            1,
+            "LibraryScreen must construct no UiState.Content — " +
+                "it holds no browse UiState at all in 0.9.0",
+            0,
             occurrences(library, "UiState.Content("),
         )
     }
@@ -257,21 +256,26 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt",
         )
         assertEquals(
-            "the Home liked-music card must open the Liked Songs " +
-                "playlist through the playlist lambda",
-            1,
+            "Home must hold no liked-music card opening an " +
+                "account playlist — the card and its browse id " +
+                "are deleted (0.9.0); liked songs live in the " +
+                "Library's on-device Liked songs section",
+            0,
             occurrences(home, "onPlaylistClick(LIKED_MUSIC_BROWSE_ID, null)"),
         )
         assertEquals(
-            "a Library account-playlist row must open the remote " +
-                "playlist route with the row's own browse id (not " +
-                "its title, and not the local playlist id space)",
-            1,
+            "Library must hold no remote-playlist row opening " +
+                "an account playlist route — the account " +
+                "playlists and their click lambda are deleted " +
+                "(0.9.0)",
+            0,
             occurrences(library, "onRemotePlaylistClick(playlist.browseId, null)"),
         )
         assertEquals(
-            "the Library liked-songs row must open the Liked Songs playlist",
-            1,
+            "Library must hold no VLLM liked-songs row — the " +
+                "account Liked Music playlist route is deleted " +
+                "(0.9.0)",
+            0,
             occurrences(library, "onRemotePlaylistClick(\"VLLM\", null)"),
         )
         assertEquals(
@@ -331,43 +335,32 @@ class R49SweepContractTest {
 
     private companion object {
         val SHIPPED_FILES: List<String> = listOf(
+            // 0.9.0 census event (owner order, 2026-11-04): the
+            // sixteen sign-in-product files are deleted (the two
+            // account workers, the sealed session stores and
+            // managers, the sign-in screen and redirect
+            // activity); the player soak adds PlayerArtwork,
+            // PlayerScrubber and ScrollingTitle under ui/player.
             "dev/cyberdogs/offleash/MainActivity.kt",
             "dev/cyberdogs/offleash/OffleashApp.kt",
-            "dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
-            "dev/cyberdogs/offleash/account/GoogleSessionKeepAliveWorker.kt",
             "dev/cyberdogs/offleash/data/AppPreferences.kt",
             "dev/cyberdogs/offleash/data/AtomicFileWrite.kt",
-            "dev/cyberdogs/offleash/data/BearerRetryTransport.kt",
             "dev/cyberdogs/offleash/data/CrashReporter.kt",
             "dev/cyberdogs/offleash/data/DownloadManager.kt",
             "dev/cyberdogs/offleash/data/DownloadStore.kt",
             "dev/cyberdogs/offleash/data/Downloads.kt",
-            "dev/cyberdogs/offleash/data/GooglePendingGrantStore.kt",
-            "dev/cyberdogs/offleash/data/GooglePendingNativeAuthStore.kt",
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt",
-            "dev/cyberdogs/offleash/data/GoogleSignInSeenMarker.kt",
-            "dev/cyberdogs/offleash/data/GoogleTokenStore.kt",
             "dev/cyberdogs/offleash/data/LikeController.kt",
             "dev/cyberdogs/offleash/data/OkHttpTransport.kt",
             "dev/cyberdogs/offleash/data/ParityPreferences.kt",
             "dev/cyberdogs/offleash/data/RangeInterceptor.kt",
             "dev/cyberdogs/offleash/data/SecretBox.kt",
-            "dev/cyberdogs/offleash/data/SessionManager.kt",
-            "dev/cyberdogs/offleash/data/SessionStore.kt",
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt",
             "dev/cyberdogs/offleash/data/Stores.kt",
-            "dev/cyberdogs/offleash/data/VisitorDataCache.kt",
             "dev/cyberdogs/offleash/playback/BatteryOptimization.kt",
             "dev/cyberdogs/offleash/playback/HalloweenSplash.kt",
             "dev/cyberdogs/offleash/playback/LikeState.kt",
             "dev/cyberdogs/offleash/playback/LyricsSync.kt",
             "dev/cyberdogs/offleash/playback/NotificationPermission.kt",
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt",
-            // 2026-11-04 playback-finish census event:
-            // PlaybackPrefetch.kt joins the module — the pure
-            // next-track prefetch decisions; it writes no
-            // `_state` / `_uiState` flows and stands at the
-            // (0 to 0) default in the census below.
             "dev/cyberdogs/offleash/playback/PlaybackPrefetch.kt",
             "dev/cyberdogs/offleash/playback/PlaybackRecovery.kt",
             "dev/cyberdogs/offleash/playback/PlaybackService.kt",
@@ -382,8 +375,6 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/SplashScreen.kt",
             "dev/cyberdogs/offleash/ui/about/AboutScreen.kt",
             "dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt",
-            "dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt",
-            "dev/cyberdogs/offleash/ui/account/SignInScreen.kt",
             "dev/cyberdogs/offleash/ui/components/BatteryRestrictionCard.kt",
             "dev/cyberdogs/offleash/ui/components/Common.kt",
             "dev/cyberdogs/offleash/ui/components/TrackMenu.kt",
@@ -393,7 +384,10 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt",
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt",
             "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt",
+            "dev/cyberdogs/offleash/ui/player/PlayerArtwork.kt",
             "dev/cyberdogs/offleash/ui/player/PlayerScreen.kt",
+            "dev/cyberdogs/offleash/ui/player/PlayerScrubber.kt",
+            "dev/cyberdogs/offleash/ui/player/ScrollingTitle.kt",
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt",
             "dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt",
             "dev/cyberdogs/offleash/ui/theme/Theme.kt",

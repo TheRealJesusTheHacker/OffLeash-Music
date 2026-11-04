@@ -211,9 +211,14 @@ class R53SweepContractTest {
                 """(?:String|Track)\??(?:,\s*""" + name +
                 """String\?)?\)\s*->\s*Unit""",
         )
+        // Re-based 0.9.0 (owner order, 2026-11-04): Common
+        // gains the playlist picker's inline-create lambda
+        // type (4 to 5); Library's (String, String?) pair —
+        // the remote-playlist click — is deleted with the
+        // account playlists, leaving its local (String) click.
         val expectedStringSingle: Map<String, Int> = mapOf(
             "dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 2,
-            "dev/cyberdogs/offleash/ui/components/Common.kt" to 4,
+            "dev/cyberdogs/offleash/ui/components/Common.kt" to 5,
             "dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 4,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 6,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
@@ -230,7 +235,6 @@ class R53SweepContractTest {
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 1,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 1,
         )
         val expectedTrackSingle: Map<String, Int> = mapOf(

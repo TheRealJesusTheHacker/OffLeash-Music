@@ -77,24 +77,6 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
     // log and double-handed the probe track to the player.
     var testRunning by remember { mutableStateOf(false) }
 
-    // Account & session block: identity display name + health label
-    // only — never cookie values or anything derived from them.
-    val sessionState by container.accountUiState.collectAsState()
-    val accountIdentityLine = if (sessionState.signedIn) {
-        sessionState.identityName ?: sessionState.identityEmail ?: "Signed in"
-    } else {
-        "Signed out"
-    }
-    val accountHealthLine = when (sessionState.health.name) {
-        "HEALTHY" -> "Healthy"
-        "NEEDS_SIGN_IN" -> "Sign in again"
-        // UNKNOWN also means "the last check couldn't reach Google"
-        // and persists until the next one — a present-tense checking
-        // label claimed an activity that had already ended
-        // (chaos sweep round 2).
-        else -> "Not confirmed"
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -120,29 +102,10 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
                 "attempt, stage by stage. If a track " +
                 "fails, open this screen and send a screenshot of it — " +
                 "that is what turns a failure into a fixable bug. " +
-                "One thing here is personal: the account block below " +
-                "shows the name or email of the signed-in account, " +
-                "and Share diagnostics sends that line too. Nothing else " +
-                "is — no sign-in token or password is ever shown, and " +
-                "the log names the stream server's host, never an " +
-                "address of yours.",
+                "Nothing here is personal: the log names the stream " +
+                "server's host, never an address of yours.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(20.dp))
-        Text(
-            text = "Account & session",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Account: $accountIdentityLine\n" +
-                "Session: $accountHealthLine",
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(20.dp))
         Text(
@@ -187,8 +150,6 @@ fun PlaybackDiagnosticsScreen(container: AppContainer) {
                 // diagnostics text is shared: the same lines this
                 // screen shows, nothing else.
                 val shareText = buildString {
-                    appendLine("Account: $accountIdentityLine")
-                    appendLine("Session: $accountHealthLine")
                     appendLine("PlaybackService: $sessionServiceLine")
                     appendLine("Foreground: $sessionForegroundLine")
                     appendLine("Battery: $sessionBatteryLine")

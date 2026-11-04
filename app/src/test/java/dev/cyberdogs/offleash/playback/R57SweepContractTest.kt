@@ -136,9 +136,12 @@ class R57SweepContractTest {
             "flattenMerge", "flattenConcat", "emptyFlow",
         )
         val dotMapNotNull = Regex("""\.mapNotNull\s*[({]""")
+        // Re-based 0.9.0: Stores.kt gains the on-device
+        // LikedTrackStore (mapNotNull 3 to 4, filterNot 3 to 5 —
+        // the new store's salvage and dedupe legs).
         val expectedMapNotNull: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 2,
-            "app:dev/cyberdogs/offleash/data/Stores.kt" to 3,
+            "app:dev/cyberdogs/offleash/data/Stores.kt" to 4,
             "core:dev/cyberdogs/offleash/core/auth/AuthSession.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/JsonNav.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/Parsers.kt" to 3,
@@ -148,7 +151,7 @@ class R57SweepContractTest {
         val dotWithIndex = Regex("""\.withIndex\s*\(""")
         val expectedFilterNot: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/Stores.kt" to 3,
+            "app:dev/cyberdogs/offleash/data/Stores.kt" to 5,
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
         )
         val expectedDropWhile: Map<String, Int> = mapOf(
@@ -257,47 +260,42 @@ class R57SweepContractTest {
             Regex("""([A-Za-z_][\w.]*(?:\(\))?)\.collectAsState\(""")
         val lifecycleRegex =
             Regex("""([A-Za-z_][\w.]*)\s*\.collectAsStateWithLifecycle\(""")
+        // Re-based 0.9.0 (owner order, 2026-11-04): every
+        // accountUiState collect is deleted with the account
+        // state (About's whole entry and the SignInScreen file
+        // go with it), Home's feedNote collect is gone with the
+        // personalized-feed cascade, TrackMenu's accountBacked
+        // collect is gone with the like state's account
+        // dimension, the root's like-error collect is gone with
+        // the snackbar it fed, and Library gains the
+        // likedTrackStore.tracks collect behind its Liked songs
+        // section.
         val expected: Map<String, Map<String, Int>> = mapOf(
             "dev/cyberdogs/offleash/ui/OffleashRoot.kt" to mapOf(
                 "container.queueController.queueState" to 2,
                 "container.queueController.playbackState" to 2,
                 "container.queueController.namedError" to 1,
                 "container.showPlayerRequests" to 1,
-                "container.likeController.error" to 1,
-            ),
-            "dev/cyberdogs/offleash/ui/about/AboutScreen.kt" to mapOf(
-                "container.accountUiState" to 1,
             ),
             "dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to mapOf(
                 "diagnostics.snapshot" to 1,
-                "container.accountUiState" to 1,
-            ),
-            "dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to mapOf(
-                "manager.phase" to 1,
-                "manager.uiState" to 1,
-                "manager.authorizationLaunch" to 1,
-                "manager.pendingAttemptDurability" to 1,
             ),
             "dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to mapOf(
                 "downloadManager.records" to 1,
                 "likeController.states" to 1,
-                "likeController.accountBacked" to 1,
             ),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf(
                 "viewModel.state" to 3,
                 "viewModel.hasMore" to 1,
                 "viewModel.loadMoreError" to 1,
                 "container.localPlaylistStore.playlists" to 2,
-                "container.accountUiState" to 1,
             ),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf(
                 "viewModel.state" to 1,
             ),
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf(
                 "viewModel.state" to 1,
-                "viewModel.feedNote" to 1,
                 "viewModel.selectedChip" to 1,
-                "container.accountUiState" to 1,
             ),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf(
                 "viewModel.state" to 2,
@@ -307,7 +305,7 @@ class R57SweepContractTest {
                 "container.recentsStore.recents()" to 1,
                 "container.downloadManager.records" to 1,
                 "container.appPreferences.autoDownloadLikedFlow" to 1,
-                "container.accountUiState" to 1,
+                "container.likedTrackStore.tracks" to 1,
             ),
             "dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to mapOf(
                 "container.queueController.queueState" to 2,
@@ -329,7 +327,6 @@ class R57SweepContractTest {
                 "container.parityPreferences.downloadQualityFlow" to 1,
                 "container.parityPreferences.autoDownloadLikedFlow" to 1,
                 "container.parityPreferences.audioVersionInRadioFlow" to 1,
-                "container.accountUiState" to 1,
             ),
         )
         val expectedLifecycle: Map<String, Map<String, Int>> = mapOf(
@@ -402,14 +399,12 @@ class R57SweepContractTest {
                 "the Gradle JVM args, the Kotlin code-style " +
                 "flag and two AGP behaviour flags; every " +
                 "version is a literal in the round-56-" +
-                "pinned build files. The fifth property " +
-                "is the committed default for the one " +
-                "build-read gradleProperty CI does not " +
-                "supply: offleashAndroidClientId, the " +
-                "registered Android OAuth client ID — a " +
-                "PUBLIC identifier with no secret, not " +
-                "a credential; -P overrides or clears " +
-                "it), but it is build-behaviour " +
+                "pinned build files. (Re-based 0.9.0: the " +
+                "fifth property this pin used to carry — the " +
+                "OAuth client ID default — is deleted with " +
+                "the sign-in product; the file is back to " +
+                "the four standard properties.) It is " +
+                "build-behaviour " +
                 "surface: flipping " +
                 "android.nonTransitiveRClass here ran " +
                 "green across R47–R56 this round beside " +
@@ -417,19 +412,7 @@ class R57SweepContractTest {
             """org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
 kotlin.code.style=official
 android.useAndroidX=true
-android.nonTransitiveRClass=true
-
-# The registered Android OAuth client ID for Google sign-in
-# (0.8.8). A PUBLIC identifier, not a credential: it names
-# the registration, ships inside every APK in plain sight,
-# and has NO secret — none exists for Android clients. What
-# protects the registration is the package name + signing
-# certificate fingerprint recorded with Google when the
-# client was created. Committed here so stock local and CI
-# builds sign in with no secret plumbing; override with
-# -PoffleashAndroidClientId=<id>, or clear it with
-# -PoffleashAndroidClientId= to build honestly unconfigured.
-offleashAndroidClientId=868319166388-jnthkatf45dmgltvmg8kgq5n7vklrdre.apps.googleusercontent.com""".trim(),
+android.nonTransitiveRClass=true""".trim(),
             repoFile("gradle.properties").readText().trim(),
         )
         assertEquals(

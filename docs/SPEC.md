@@ -2,7 +2,12 @@
 
 **Status:** Phase 1 build spec, 2026-10-23; Phase 2 (account access) landed
 the same night under its own security pass — see §10, which supersedes the
-§7 boundary. This document is the contract the
+§7 boundary. **0.9.0 (2026-11-04, owner order): the product is
+account-free "for now" — the sign-in surface §10 contracts is
+removed from the shipped app, and §10 stands as the historical
+record of that build, not as a description of 0.9.0. YouTube
+Music is the music source; everything else — playlists, library,
+likes — is OffLeash's own, on-device.** This document is the contract the
 code is built against. If the code and this spec disagree, one of them is
 wrong and the fix lands in the open (see `docs/AUDITS.md`).
 

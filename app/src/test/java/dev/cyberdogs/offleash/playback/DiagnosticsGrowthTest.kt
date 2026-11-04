@@ -80,25 +80,6 @@ class DiagnosticsGrowthTest {
         assertEquals(lines, diagnostics.snapshot.value)
     }
 
-    @Test
-    fun signInDiagnosticsRingIsBoundedUnderConcurrentAppends() {
-        // The sign-in recorder has the same ring and the same
-        // multi-thread callers (poll loop, refresh, sign-out).
-        val diagnostics = dev.cyberdogs.offleash.data.SignInDiagnostics()
-        val threads = (1..4).map { t ->
-            Thread {
-                repeat(250) { i -> diagnostics.log("poll", "thread $t poll $i") }
-            }
-        }
-        threads.forEach { it.start() }
-        threads.forEach { it.join() }
-        val lines = diagnostics.lines()
-        assertEquals(
-            dev.cyberdogs.offleash.data.SignInDiagnostics.MAX_LOG_LINES,
-            lines.size,
-        )
-        assertEquals(lines, diagnostics.snapshot.value)
-    }
 
     @Test
     fun startAttemptStillResetsTheBoundedLog() {

@@ -859,17 +859,31 @@ class YoutubeiClientFixtureTest {
             "UC5xaQ6_dP7EGDmGLzVGZ1Ow", null, null, 205, null,
         )
         val related = clientFor("next.json").related("dQw4w9WgXcQ")
+        // 0.9.0 artwork discipline: the related panel is a row
+        // surface, so its row reference now takes the codebase's
+        // right-sized pick (the smallest variant at least 512 px
+        // wide — here the 800-wide hq720) instead of the largest;
+        // the largest variant (853-wide) is pinned separately
+        // below as the hero reference the player decodes.
         assertTrack(
             related[0],
             "yBwD4iYcWC4", "She Wants to Dance", listOf("Rick Astley"),
             "UCwZEU0wAwIyZb4x5G_KJp2w", null, null, 260,
-            "https://i.ytimg.com/vi/yBwD4iYcWC4/hq720.jpg?sqp=-oaymwEKCNUGEN8DIABIWg&rs=AMzJL3khxPtGmJB5eQy3zMPSrjNbEpKjtA",
+            "https://i.ytimg.com/vi/yBwD4iYcWC4/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3nE83aE6dT4Zv4M8aN3SlLT0oOvtA",
         )
         assertTrack(
             related[1],
             "aGCdLKXNF3w", "Everybody Wants To Rule The World (Official Music Video)",
             listOf("Tears For Fears"), "UCcozhiTOkGB1HCOgdBlEFPA", null, null, 291,
+            "https://i.ytimg.com/vi/aGCdLKXNF3w/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3l9UgwTQlDvuZ-OVW31BK1Lo88lgA",
+        )
+        assertEquals(
+            "https://i.ytimg.com/vi/yBwD4iYcWC4/hq720.jpg?sqp=-oaymwEKCNUGEN8DIABIWg&rs=AMzJL3khxPtGmJB5eQy3zMPSrjNbEpKjtA",
+            related[0].heroThumbnailUrl,
+        )
+        assertEquals(
             "https://i.ytimg.com/vi/aGCdLKXNF3w/hq720.jpg?sqp=-oaymwEKCNUGEN8DIABIWg&rs=AMzJL3n4cTXCTp6IJ4Dm-PCT64GQgRdKrg",
+            related[1].heroThumbnailUrl,
         )
     }
 

@@ -9,26 +9,29 @@ plainly what the app does with your information.
 ## The short version
 
 OffLeash has no servers of its own, runs no analytics, and collects no
-personal data. Your sign-in stays on your device.
+personal data. There is no account and nothing to sign in with: your
+playlists, liked songs, and library live only on your device.
 
 ## What the app stores, and where
 
-- **Google sign-in tokens.** If you sign in, the app stores your Google OAuth
-  tokens in encrypted storage on your device only. They are excluded from
-  Android cloud backup and are never sent to us or to anyone other than
-  Google. Signing out removes them and revokes them with Google.
-- **Your library data on this device.** Playlists, downloads, liked songs,
-  and listening history the app keeps for its own features are stored on
-  your device. Downloaded files are yours and stay where you put them.
+- **Your library data on this device.** Playlists you create (including
+  each song's artwork reference), downloads, liked songs, and listening
+  history the app keeps for its own features are stored on your device.
+  Downloaded files are yours and stay where you put them.
 - **Crash reports.** If the app crashes, a diagnostic report is kept on your
   device and shown to you. It is not transmitted anywhere. Token-shaped
   values are redacted from it.
+- **Upgrading from 0.8.8.** Earlier versions offered Google sign-in and
+  stored sign-in tokens in encrypted storage on the device. Version 0.9.0
+  removes sign-in, and on its first launch it deletes that stored sign-in
+  material (and the legacy in-app browser's cookies and site data). No
+  copy of it is kept or sent anywhere.
 
 ## What the app talks to
 
-The app communicates with Google and YouTube services to sign you in, load
-your library, and play music, using the account you chose. OffLeash uses
-YouTube API Services. Your use of those services is subject to the
+The app communicates with YouTube Music's services anonymously — no
+account — to load the catalogue and play music. OffLeash uses YouTube API
+Services. Your use of those services is subject to the
 [YouTube Terms of Service](https://www.youtube.com/t/terms) and the
 [Google Privacy Policy](https://policies.google.com/privacy).
 
@@ -37,11 +40,11 @@ advertising and no tracking.
 
 ## Your choices
 
-- Sign out at any time in Settings; your tokens are removed from the device
-  and revoked with Google.
-- You can review or revoke the app's access to your Google account at any
-  time at https://myaccount.google.com/permissions
 - Uninstalling the app removes everything it stored on your device.
+- If you signed in with an earlier version, you can also revoke the app's
+  access to your Google account at any time at
+  https://myaccount.google.com/permissions — 0.9.0 itself holds no access
+  and stores no tokens.
 
 ## Contact
 

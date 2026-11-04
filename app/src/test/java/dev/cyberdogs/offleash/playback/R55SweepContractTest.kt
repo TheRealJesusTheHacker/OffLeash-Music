@@ -129,9 +129,12 @@ class R55SweepContractTest {
             "core:dev/cyberdogs/offleash/core/auth/SessionCookies.kt" to 2,
             "core:dev/cyberdogs/offleash/core/playback/StreamResolver.kt" to 4,
         )
+        // Re-based 0.9.0 (owner order, 2026-11-04): the
+        // GoogleSessionManager entry leaves with its file;
+        // Common gains one (the playlist picker's row lookup).
         val expectedFirstOrNull: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 5,
-            "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 2,
+            "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
             "app:dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 1,

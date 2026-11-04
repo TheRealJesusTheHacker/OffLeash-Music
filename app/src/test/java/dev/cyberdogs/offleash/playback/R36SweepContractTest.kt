@@ -36,74 +36,28 @@ import java.io.File
 class R36SweepContractTest {
 
     @Test
-    fun likedSongsPageSeedsTheLikeController() {
-        // Round 70: every assertion below runs on a CODE-ONLY
-        // view (comments stripped, string contents blanked).
-        // This pin used to read the RAW file — the shipped seed
-        // call commented out inside its own `?.let { }` block
-        // kept the exact call text for the contains check and
-        // the bare token for the count, and ran GREEN across
-        // the full suite with the seed deleted in effect.
+    fun noPageSeedsTheLikeControllerFromAnAccount() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the seeding
+        // this test pinned — PlaylistScreen learning account likes
+        // from the account's Liked Songs page — is deleted with
+        // the sign-in product; there is no account page to seed
+        // from. Likes are learned only from the user's own
+        // toggles and the on-device record (LikeControllerTest).
+        // What must never come back is a page-driven seed: no
+        // noteAccountLiked entry point, no Liked Music gate.
         val detail = stripCommentsAndStrings(
             mainSource(
                 "java/dev/cyberdogs/offleash/ui/detail/DetailScreens.kt",
             ),
         )
-        val playlistScreen = detail.substringAfter("fun PlaylistScreen(")
-        assertTrue(
-            "PlaylistScreen must seed the like controller from " +
-                "the Liked Songs page it just fetched — without " +
-                "the call, a page row's like state defaults to " +
-                "unliked and its unlike tap re-likes first",
-            playlistScreen.contains(
-                "container.likeController.noteAccountLiked(it)",
-            ),
-        )
-        assertTrue(
-            "the seed must be gated on the page being the " +
-                "account's Liked Music page — seeding from an " +
-                "ordinary playlist would mark every track on it " +
-                "liked",
-            playlistScreen.contains(
-                "browseId == LIKED_MUSIC_BROWSE_ID && sessionState.signedIn",
-            ),
-        )
         assertEquals(
-            "exactly one seeding call site may exist in " +
-                "DetailScreens — a second, ungated one is the " +
-                "ordinary-playlist bug above. Round 69: the " +
-                "count is on the bare method-name token, not " +
-                "the `noteAccountLiked(` spelling — a second " +
-                "seed spelled as a method reference " +
-                "(`tracks.let(controller::noteAccountLiked)`) " +
-                "kept the parenthesised count at one and ran " +
-                "green across the full suite",
-            1,
+            "no seeding call site may exist in DetailScreens",
+            0,
             occurrences(detail, "noteAccountLiked"),
         )
-        // Round 71: the code-only view PRESERVES `${}` template
-        // expressions as code — and the seed deleted while its
-        // exact call text survived inside a NEVER-INVOKED lambda
-        // carried by a string template in the same `?.let { }`
-        // block (`val seed = "${{ ....(it) }}"`) satisfied the
-        // contains check and the count above and ran GREEN
-        // across the full suite: the string stringifies the
-        // lambda and discards it, so nothing is ever seeded.
-        // The count is therefore re-asserted on a TEMPLATE-
-        // BLANKED view: the one seeding call must exist as
-        // plain code, not as a template's payload.
-        val plainDetail = stripCommentsStringsAndTemplates(
-            mainSource(
-                "java/dev/cyberdogs/offleash/ui/detail/DetailScreens.kt",
-            ),
-        )
-        assertEquals(
-            "exactly one seeding call site may exist in " +
-                "DetailScreens outside any string template — " +
-                "a seed that exists only as a never-evaluated " +
-                "template payload is a deleted seed",
-            1,
-            occurrences(plainDetail, "noteAccountLiked"),
+        assertTrue(
+            "no Liked Music account gate may exist in DetailScreens",
+            !detail.contains("LIKED_MUSIC_BROWSE_ID"),
         )
         val likeController = stripCommentsAndStrings(
             mainSource(
@@ -111,19 +65,8 @@ class R36SweepContractTest {
             ),
         )
         assertTrue(
-            "the controller must expose the seeding entry point",
-            likeController.contains(
-                "fun noteAccountLiked(tracks: List<Track>)",
-            ),
-        )
-        assertTrue(
-            "the seed must fill only tracks with NO existing " +
-                "entry — an unconditional write would let a " +
-                "stale page snapshot resurrect a track the user " +
-                "unliked this session",
-            likeController.contains(
-                "if (_states.value[track.videoId] == null) {",
-            ),
+            "the controller must expose no account seeding entry point",
+            !likeController.contains("noteAccountLiked"),
         )
     }
 

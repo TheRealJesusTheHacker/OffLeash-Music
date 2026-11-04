@@ -13,6 +13,11 @@ import java.io.File
  * VERBATIM, because round 65's occurrence-count form of
  * the worker pin proved hollow.
  *
+ *  0.9.0 NOTE: both subjects below were deleted with the
+ *  sign-in product (owner order, 2026-11-04) — the worker
+ *  itself and the container's dormancy gate — and both pins
+ *  now assert their ABSENCE, in the 0.8.3 inverted form.
+ *
  *  (F4) Round 9's worker pin counts
  *  `hasStoredSession()` / `seen()` occurrences over the
  *  whole `doWork` body (≥ 2 each). Neutering ONE site's
@@ -45,262 +50,51 @@ import java.io.File
 class R66SweepContractTest {
 
     @Test
-    fun workerDormancyGatesArePinnedVerbatimAtBothSites() {
-        val worker = mainSource(
-            "java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
-        )
-        // Round 67: the pins below run on the COMMENT-STRIPPED
-        // body and count occurrences — a verbatim pin is
-        // satisfied just as well by the leg's exact text parked
-        // in a comment or a dead `if (false)` branch while the
-        // live gate is neutered, and both respells ran GREEN
-        // across the full 690-test suite against the round-66
-        // form of this pin. Stripped of comments, a parked copy
-        // vanishes; counted, a dead-branch copy is a second
-        // occurrence. The live gate must be THE one occurrence.
-        val body = stripComments(worker)
-            .substringAfter("override suspend fun doWork()")
-            .substringBefore("\nobject AutoDownloadLiked")
-        val captureGate =
-            "if (container.googleSessionManager.hasStoredSession() ||\n" +
-                "                            container.googleSignInSeenMarker.seen()\n" +
-                "                        ) {"
+    fun workerDormancyGatesAreRemovedWithTheWorker() {
+        // Retired 0.9.0 (owner order, 2026-11-04): the subject
+        // of the original pin — AutoDownloadLikedWorker and its
+        // two dormancy gates — is DELETED with the sign-in
+        // product. Auto-download of liked songs now runs off
+        // the on-device liked list from the Library screen; no
+        // WorkManager worker remains in the app at all. As with
+        // the app-start gate pin below (0.8.3 form), every form
+        // of the pin inverts to ZERO: the worker file must not
+        // exist and no shipped source may reference the worker
+        // or its dormancy gates.
+        var dir: File? = File(".").absoluteFile
+        var workerFile: File? = null
+        var hops = 0
+        while (dir != null && hops < 8 && workerFile == null) {
+            val candidate = File(
+                dir,
+                "app/src/main/java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
+            )
+            val candidate2 = File(
+                dir,
+                "src/main/java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
+            )
+            if (candidate.exists()) workerFile = candidate
+            if (candidate2.exists()) workerFile = candidate2
+            dir = dir.parentFile
+            hops++
+        }
         assertTrue(
-            "the worker's cookie-road capture must be dormancy-" +
-                "gated by the stored-Google-session leg and the " +
-                "seen-marker leg, verbatim — round 9's pin counts " +
-                "occurrences over the whole body, so a leg " +
-                "neutered in place (`false && …`, `… && false`) " +
-                "kept its count and ran green",
-            body.contains(captureGate),
+            "the auto-download worker file must NOT exist — it " +
+                "was deleted with the sign-in product (0.9.0)",
+            workerFile == null,
         )
-        assertTrue(
-            "the capture gate must stand BEFORE the consistent " +
-                "session/generation pair is read (the gate guards " +
-                "the fetch itself, not only the enqueue)",
-            body.indexOf(captureGate) <
-                body.indexOf("container.sessionManager.currentSessionWithGeneration()"),
-        )
-        val recheckLegs =
-            "container.sessionManager.sessionGeneration() == fetchSessionGeneration &&\n" +
-                "                        !container.googleSessionManager.hasStoredSession() &&\n" +
-                "                        !container.googleSignInSeenMarker.seen()"
-        assertTrue(
-            "the worker's enqueue re-check must re-run BOTH " +
-                "dormancy legs beside the generation equality, " +
-                "verbatim — a Google session adopted (or a " +
-                "sign-in landed and wiped) mid-fetch retires the " +
-                "legacy road the list was fetched under",
-            body.contains(recheckLegs),
+        val app = mainSource(
+            "java/dev/cyberdogs/offleash/OffleashApp.kt",
         )
         assertEquals(
-            "the capture gate's verbatim text must occur exactly " +
-                "once in the comment-stripped body — a second " +
-                "occurrence is a parked copy (comment or dead " +
-                "branch) covering a neutered live gate",
-            1,
-            occurrences(body, captureGate),
+            "the container must hold no reference to the deleted worker",
+            0,
+            occurrences(app, "AutoDownloadLikedWorker"),
         )
         assertEquals(
-            "the re-check legs' verbatim text must occur exactly " +
-                "once in the comment-stripped body, for the same " +
-                "parked-copy reason",
-            1,
-            occurrences(body, recheckLegs),
-        )
-        // A count of one is still not liveness: a dead copy is
-        // one occurrence too, with the live gate neutered away.
-        // So the gate must also stand in its live SPAN — the
-        // regexes below run over the stripped body (stripped
-        // comments are whitespace to \s) and anchor each gate
-        // to the body it actually guards, which a parked copy
-        // does not reproduce; and the stripped body must hold
-        // no `if (false)` for a fuller copy to hide inside.
-        val captureSpan = Regex(
-            Regex.escape(captureGate) +
-                "\\s+null\\s+\\}\\s+else\\s+\\{" +
-                "\\s+val \\(session, generation\\) =\\s+" +
-                Regex.escape(
-                    "container.sessionManager.currentSessionWithGeneration()",
-                ),
-        )
-        assertTrue(
-            "the capture gate must stand in its live span: " +
-                "gate, null branch, else, and the consistent " +
-                "session/generation pair read it guards",
-            captureSpan.containsMatchIn(body),
-        )
-        val recheckSpan = Regex(
-            Regex.escape(
-                "container.sessionManager.currentAuthSession() != null &&",
-            ) +
-                "\\s+" + Regex.escape(recheckLegs) +
-                "\\s+else -> false",
-        )
-        assertTrue(
-            "the re-check legs must stand in their live span: " +
-                "the stillCurrent when-branch they form, closed " +
-                "by the else -> false leg",
-            recheckSpan.containsMatchIn(body),
-        )
-        assertTrue(
-            "the worker body must hold no `if (false)` dead " +
-                "branch for a parked gate copy to hide inside",
-            !body.contains("if (false)"),
-        )
-        // Round 68: a span anchor proves the gate STANDS in its
-        // live span, but not that its result is USED — assigning
-        // the gated if/else to a discarded local and fetching
-        // again unconditionally below it kept every round-67
-        // assert green across the full suite. The gated fetch
-        // must be the body's ONLY cookie-road fetch and ONLY
-        // session/generation pair read, and the gated branch
-        // must close straight into the page it produced.
-        assertEquals(
-            "the cookie-road fetch must occur exactly once in " +
-                "the worker body — a second, ungated fetch below " +
-                "a discarded gate result defeats the dormancy " +
-                "gate while its text stands verbatim in its span",
-            1,
-            occurrences(body, "container.client.likedSongs("),
-        )
-        assertEquals(
-            "the consistent session/generation pair must be " +
-                "read exactly once in the worker body — the " +
-                "gated read the capture span anchors; a second " +
-                "read serves a second, ungated fetch",
-            1,
-            occurrences(
-                body,
-                "container.sessionManager.currentSessionWithGeneration()",
-            ),
-        )
-        // Round 69: the two counts above are RECEIVER-bound —
-        // they count one exact spelling, `container.client.…`
-        // / `container.sessionManager.…`. An ungated second
-        // fetch spelled through a local alias
-        // (`val c = container.client; c.likedSongs(…)`), a
-        // parenthesised receiver (`(container.client)
-        // .likedSongs(…)`), or a method reference
-        // (`container.client::likedSongs`) — and a second pair
-        // read through a parenthesised receiver — kept both
-        // counts at one and ran GREEN across the full suite.
-        // The bare method-name tokens are receiver-blind: any
-        // extra fetch or pair read, however spelled, adds one.
-        // (`likedSongs` counts 2 on the shipped body: the
-        // token road's `likedSongsOAuth(` and the cookie
-        // road's one fetch.)
-        assertEquals(
-            "the worker body must hold exactly two likedSongs " +
-                "method-name tokens (the OAuth road and the one " +
-                "gated cookie-road fetch) — a second cookie " +
-                "fetch spelled through an alias, a parenthesised " +
-                "receiver, or a method reference defeats the " +
-                "receiver-bound count above while the gate " +
-                "stands verbatim",
-            2,
-            occurrences(body, "likedSongs"),
-        )
-        assertEquals(
-            "the worker body must hold exactly one " +
-                "currentSessionWithGeneration method-name token " +
-                "— a second pair read through an alias or a " +
-                "parenthesised receiver defeats the " +
-                "receiver-bound count above",
-            1,
-            occurrences(body, "currentSessionWithGeneration"),
-        )
-        // Round 70: the counts above run on a COMMENT-stripped
-        // body, but the stripper KEEPS string literals — so a
-        // removed call whose text survives inside a string in
-        // live code kept every count: the OAuth fetch deleted
-        // and replaced by `val road = "likedSongsOAuth(bearer)"`
-        // (branch value null) ran GREEN across the full suite.
-        // The bare-token counts are therefore re-asserted on a
-        // CODE-ONLY view (comments stripped AND string/char
-        // contents blanked; template `${}` expressions are code
-        // and stay): a token that exists only as string content
-        // is not a call.
-        val codeBody = stripCommentsAndStrings(worker)
-            .substringAfter("override suspend fun doWork()")
-            .substringBefore("\nobject AutoDownloadLiked")
-        assertEquals(
-            "the worker body must hold exactly two likedSongs " +
-                "tokens in CODE (the OAuth road and the one gated " +
-                "cookie-road fetch) — a fetch deleted while its " +
-                "name survives inside a string literal is still " +
-                "a deleted fetch",
-            2,
-            occurrences(codeBody, "likedSongs"),
-        )
-        assertEquals(
-            "the worker body must hold exactly one " +
-                "currentSessionWithGeneration token in CODE, " +
-                "for the same string-mask reason",
-            1,
-            occurrences(codeBody, "currentSessionWithGeneration"),
-        )
-        assertEquals(
-            "the gated cookie-road fetch must occur exactly " +
-                "once in CODE, for the same string-mask reason",
-            1,
-            occurrences(codeBody, "container.client.likedSongs("),
-        )
-        // Round 71: the code-only view PRESERVES `${}` template
-        // expressions as code — and a deleted call whose text
-        // survives inside a NEVER-EVALUATED template expression
-        // kept every round-70 count and ran GREEN across the
-        // full suite, three times over: the OAuth fetch carried
-        // by `"${if (marker.isNotEmpty()) ....}"` on an empty
-        // marker, the same shape nested one template deep, and
-        // the container's revalidate call carried the same way
-        // (see the app-start pin below). A template payload the
-        // string never evaluates is not a call the body makes,
-        // so the counts are re-asserted on a TEMPLATE-BLANKED
-        // view (comments stripped, literal contents blanked,
-        // template expressions blanked too). The shipped body
-        // holds no counted token inside a template, so the
-        // numbers are the same — on the doctored bodies they
-        // are not.
-        val plainBody = stripCommentsStringsAndTemplates(worker)
-            .substringAfter("override suspend fun doWork()")
-            .substringBefore("\nobject AutoDownloadLiked")
-        assertEquals(
-            "the worker body must hold exactly two likedSongs " +
-                "tokens outside any string template — a fetch " +
-                "deleted while its text survives inside a " +
-                "never-evaluated template expression is still " +
-                "a deleted fetch",
-            2,
-            occurrences(plainBody, "likedSongs"),
-        )
-        assertEquals(
-            "the worker body must hold exactly one " +
-                "currentSessionWithGeneration token outside " +
-                "any string template, for the same reason",
-            1,
-            occurrences(plainBody, "currentSessionWithGeneration"),
-        )
-        assertEquals(
-            "the gated cookie-road fetch must occur exactly " +
-                "once outside any string template, for the " +
-                "same reason",
-            1,
-            occurrences(plainBody, "container.client.likedSongs("),
-        )
-        val captureTail = Regex(
-            Regex.escape(
-                "session?.let { container.client.likedSongs(it) }",
-            ) +
-                "\\s+\\}\\s+\\}\\s+\\}\\s+\\}\\s+" +
-                Regex.escape("page ?: return Result.success()"),
-        )
-        assertTrue(
-            "the gated fetch must close its branch straight " +
-                "into the page check — the gated if/else is the " +
-                "branch's value, not a discarded local followed " +
-                "by an unconditional fetch",
-            captureTail.containsMatchIn(body),
+            "the container must hold no dormancy-gate leg in any spelling",
+            0,
+            occurrences(app, "hasStoredSession"),
         )
     }
 
