@@ -48,60 +48,15 @@ import java.io.File
  *    it is still current BEFORE the enqueue; the runtime half of
  *    the census (DownloadManager's own stale applies) is pinned
  *    by DownloadManagerTest's round-7 tests.
- */
+  *
+ * 0.9.0 (owner order, 2026-11-04): sections 1 and 3 of this round
+ * pinned GoogleSessionManager's refresh publishes and the
+ * auto-download worker's credential capture — both deleted with
+ * the sign-in product. Those tests are retired with their
+ * subjects; the playlist guarded-move pin below is the round's
+ * surviving claim and stands unchanged.
+*/
 class R7SweepContractTest {
-
-    @Test
-    fun rejectedRefreshPublishesInsideTheEpochCheckedLock() {
-        val refresh = manager()
-            .substringAfter("suspend fun refreshIdentity()")
-            .substringBefore("suspend fun signOut()")
-        val rejected = refresh
-            .substringAfter("is IdentityLookup.Rejected")
-            .substringBefore("is IdentityLookup.Failed")
-        val block = synchronizedBlock(rejected)
-        assertTrue(
-            "the Rejected branch's epoch check must live inside the " +
-                "locked step — a guard deleted from inside an otherwise " +
-                "well-shaped block must fail this pin (round 8)",
-            block.contains("if (epochAtStart != flowEpoch) return"),
-        )
-        assertTrue(
-            "the Rejected outcome must publish its signed-out state inside " +
-                "the epoch-checked synchronized block, not after it",
-            block.contains("_uiState.value = SessionUiState("),
-        )
-        assertTrue(
-            "no uiState publication may remain outside the locked block " +
-                "in the Rejected branch",
-            !rejected.substringAfter(block).contains("_uiState.value"),
-        )
-    }
-
-    @Test
-    fun failedRefreshPublishesInsideTheEpochCheckedLock() {
-        val refresh = manager()
-            .substringAfter("suspend fun refreshIdentity()")
-            .substringBefore("suspend fun signOut()")
-        val failed = refresh.substringAfter("is IdentityLookup.Failed")
-        val block = synchronizedBlock(failed)
-        assertTrue(
-            "the Failed branch's epoch check must live inside the " +
-                "locked step — a guard deleted from inside an otherwise " +
-                "well-shaped block must fail this pin (round 8)",
-            block.contains("if (epochAtStart != flowEpoch) return"),
-        )
-        assertTrue(
-            "the Failed outcome must read-and-republish uiState inside the " +
-                "epoch-checked synchronized block, not outside it",
-            block.contains("_uiState.value = state.copy("),
-        )
-        assertTrue(
-            "no uiState publication may remain outside the locked block " +
-                "in the Failed branch",
-            !failed.substringAfter(block).contains("_uiState.value ="),
-        )
-    }
 
     @Test
     fun playlistMoveButtonsPassTheRowsIdentityToTheGuardedMove() {
@@ -121,83 +76,6 @@ class R7SweepContractTest {
             2,
             guardedMoves,
         )
-    }
-
-    @Test
-    fun autoDownloadCapturesTheFetchCredentialBeforeFetching() {
-        val body = doWorkBody()
-        val captureAt = body.indexOf("fetchBearer" + " = " + "bearer")
-        // 0.8.2: the fetch gained the browse-delegation argument;
-        // the locator keys on the call's opening, the ordering
-        // subject below is unchanged.
-        val fetchAt = body.indexOf("likedSongsOAuth(bearer")
-        assertTrue("the fetch credential must be captured", captureAt >= 0)
-        assertTrue("the liked fetch must exist", fetchAt >= 0)
-        assertTrue(
-            "the credential must be captured BEFORE the fetch it rides on",
-            captureAt < fetchAt,
-        )
-        assertTrue(
-            "the cookie road's session must be captured too (round 8: " +
-                "as its generation — the instance is replaced by " +
-                "rotation for the same account; see R8SessionGenerationTest)",
-            body.contains("fetchSessionGeneration = if (session != null)"),
-        )
-    }
-
-    @Test
-    fun autoDownloadRechecksTheCredentialBeforeEnqueueing() {
-        val body = doWorkBody()
-        val guardAt = body.indexOf("if (!stillCurrent) return Result.success()")
-        val enqueueAt = body.indexOf("enqueueMissing(liked.tracks)")
-        assertTrue("the stale-apply guard must exist", guardAt >= 0)
-        assertTrue("the enqueue must exist", enqueueAt >= 0)
-        assertTrue(
-            "a run whose fetching credential is no longer current must " +
-                "not enqueue the previous account's liked tracks",
-            guardAt < enqueueAt,
-        )
-        assertTrue(
-            "the recheck must compare against the captured credential " +
-                "(round 8 literal: the cookie road compares the session " +
-                "GENERATION — rotation replaces the instance for the " +
-                "same account, so the round-7 `===` form read a healthy " +
-                "session as stale; the pin's ordering claim is unchanged)",
-            body.contains("container.currentBearerToken() == fetchBearer") &&
-                body.contains(
-                    "container.sessionManager.sessionGeneration() == fetchSessionGeneration",
-                ),
-        )
-    }
-
-    /** The brace-matched body of the first `synchronized(lock) { ... }` in [text]. */
-    private fun synchronizedBlock(text: String): String {
-        val start = text.indexOf("synchronized(lock)")
-        assertTrue("a synchronized(lock) step must be present", start >= 0)
-        val open = text.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < text.length) {
-            when (text[i]) {
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) return text.substring(open, i + 1)
-                }
-            }
-            i++
-        }
-        throw AssertionError("unbalanced synchronized block")
-    }
-
-    private fun manager(): String =
-        mainSource("java/dev/cyberdogs/offleash/data/GoogleSessionManager.kt")
-
-    private fun doWorkBody(): String {
-        val worker = mainSource("java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt")
-        return worker
-            .substringAfter("override suspend fun doWork()")
-            .substringBefore("/** Enqueues the auto-download check")
     }
 
     /** Reads a file under app/src/main, located like the other contract tests. */

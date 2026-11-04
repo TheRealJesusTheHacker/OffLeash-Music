@@ -113,7 +113,11 @@ class PlayerMessageTest {
         )
         assertTrue(!bothRoads.contains("LOGIN_REQUIRED"))
         assertTrue(!bothRoads.contains("socket-raw-detail"))
-        assertTrue(bothRoads.contains("without a sign-in"))
+        // 0.9.0 (account-free, owner order 2026-11-04): there is
+        // no sign-in road to name — the message names the refusal
+        // and the anonymous road's reason only.
+        assertTrue(bothRoads.contains("YouTube refused this track."))
         assertTrue(bothRoads.contains("the connection failed"))
+        assertTrue(!bothRoads.contains("sign-in"))
     }
 }

@@ -27,15 +27,24 @@ import java.io.File
 class R3HonestyContractTest {
 
     @Test
-    fun aboutNamesTheStoredCredentialAsTheGoogleToken() {
+    fun aboutNamesNoCredentialAtAll() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): there is no
+        // stored credential to name — the sign-in product is
+        // removed. The honesty claim this pin now holds is that
+        // About describes NO credential and frames the product as
+        // it is: YouTube Music is the source; the rest is ours.
         val about = mainSource("java/dev/cyberdogs/offleash/ui/about/AboutScreen.kt")
         assertFalse(
-            "About must not describe the stored credential as a session cookie",
+            "About must not describe a stored session cookie",
             about.contains("What the app keeps is a session cookie"),
         )
-        assertTrue(
-            "About must name the sign-in token Google hands the app",
+        assertFalse(
+            "About must not describe a stored sign-in token",
             about.contains("token Google hands it"),
+        )
+        assertTrue(
+            "About must frame the product account-free",
+            about.contains("Everything else is OffLeash's own"),
         )
     }
 
@@ -54,22 +63,28 @@ class R3HonestyContractTest {
 
     @Test
     fun signInWaitingScreenMakesNoExpiryPromise() {
-        // The device-era pin guarded the code's minutes-left
-        // copy: computed from the grant, ticking so it never
-        // froze into a lie. The native waiting screen (0.8.8)
-        // renders NO countdown at all — the attempt's life is
-        // the manager's bookkeeping, not a promise on screen —
-        // so the hazard the pin guarded cannot occur. What must
-        // never come back is a displayed expiry in ANY form:
-        // frozen, ticking, or hardcoded.
-        val screen = mainSource("java/dev/cyberdogs/offleash/ui/account/SignInScreen.kt")
-        assertFalse(
-            "the waiting screen must not display an expiry countdown",
-            screen.contains("expires in"),
-        )
-        assertFalse(
-            "the waiting screen must not render the attempt's expiry",
-            screen.contains("expiresAtEpochMs"),
+        // Re-based 0.9.0 (owner order, 2026-11-04): the waiting
+        // screen is deleted with the sign-in product, so the
+        // strongest form of this pin holds — there is no screen
+        // to make the promise in the first place.
+        val candidates = mutableListOf<File>()
+        var dir: File? = File(".").absoluteFile
+        var hops = 0
+        while (dir != null && hops < 8) {
+            candidates += File(
+                dir,
+                "src/main/java/dev/cyberdogs/offleash/ui/account/SignInScreen.kt",
+            )
+            candidates += File(
+                dir,
+                "app/src/main/java/dev/cyberdogs/offleash/ui/account/SignInScreen.kt",
+            )
+            dir = dir.parentFile
+            hops++
+        }
+        assertTrue(
+            "the sign-in screen must not exist in the account-free build",
+            candidates.none { it.isFile },
         )
     }
 
@@ -88,13 +103,25 @@ class R3HonestyContractTest {
     }
 
     @Test
-    fun signOutPathPerformsTheWebViewWipeItDocuments() {
+    fun startupCleanupPerformsTheWebViewWipe() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): there is no
+        // sign-out path to perform the wipe — the sign-in product
+        // is removed. The wipe's duty moved to the one place an
+        // upgrading device still needs it: the container's
+        // startup cleanup, which clears the legacy WebView cookie
+        // jar and web storage beside the sealed-file destruction.
         val app = mainSource("java/dev/cyberdogs/offleash/OffleashApp.kt")
-        val signOut = app.substringAfter("suspend fun signOutOfAccount()")
-            .substringBefore("fun currentBearerToken()")
+        assertFalse(
+            "there must be no sign-out path in the account-free build",
+            app.contains("signOutOfAccount"),
+        )
         assertTrue(
-            "signOutOfAccount must wipe the legacy WebView data",
-            signOut.contains("wipeWebViewData"),
+            "the startup cleanup must clear the WebView cookies",
+            app.contains("removeAllCookies"),
+        )
+        assertTrue(
+            "the startup cleanup must clear the WebView storage",
+            app.contains("deleteAllData"),
         )
     }
 

@@ -35,46 +35,51 @@ import java.io.File
 class R4FreshEyesContractTest {
 
     @Test
-    fun settingsSessionLabelNeverClaimsAnActiveCheckThatIsNotRunning() {
+    fun settingsHasNoSessionLabelToMisclaimWith() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the session
+        // label this pin policed is deleted with the Settings
+        // Account block — there is no session state to label
+        // honestly or otherwise.
         val settings = mainSource("java/dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt")
         assertFalse(
-            "UNKNOWN health persists after a failed check — Settings must not " +
-                "claim a check is running (About and Diagnostics were fixed in round 2)",
-            settings.contains("Session: checking"),
+            "Settings must not render any session label",
+            settings.contains("Session:"),
         )
-        assertTrue(
-            "Settings must use the same honest resting label as About",
-            settings.contains("Session: not confirmed yet"),
+        assertFalse(
+            "Settings must not consult account state",
+            settings.contains("accountUiState"),
         )
     }
 
     @Test
-    fun settingsSignOutDialogTextScrollsSoItsButtonsSurviveLargeFonts() {
+    fun settingsHasNoSignOutDialogToOverflow() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the sign-out
+        // dialog is deleted with the Settings Account block.
         val settings = mainSource("java/dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt")
-        val dialog = settings.substringAfter("Text(\"Sign out?\")")
-        assertTrue(
-            "the sign-out dialog's text must be height-bounded and scrollable — " +
-                "at 2.0x font its buttons were pushed past the dialog's edge",
-            dialog.contains("heightIn(max = 320.dp)") && dialog.contains("verticalScroll"),
+        assertFalse(
+            "Settings must not offer sign-out",
+            settings.contains("Sign out"),
         )
     }
 
     @Test
-    fun diagnosticsIntroDisclosesTheAccountIdentityTheScreenShowsAndShares() {
+    fun diagnosticsIntroMatchesTheAccountFreeScreen() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the screen
+        // shows and shares no account identity — its account
+        // block is deleted — so the intro's claim is the plain
+        // one, and the old disclosure wording must not survive.
         val screen = mainSource("java/dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt")
         assertFalse(
-            "the screen renders (and shares) the account's name/email — " +
-                "the intro must not claim no personal data is shown",
-            screen.contains("No addresses or personal data are shown here"),
+            "the old account-disclosure wording must not survive",
+            screen.contains("Share diagnostics sends that line too"),
+        )
+        assertFalse(
+            "the screen must not render an account block",
+            screen.contains("Account & session"),
         )
         assertTrue(
-            "the intro must disclose that the account block is personal and shared",
-            // Round 6 (F6) corrected the wording pinned here: the
-            // block renders ONE identity line (name ?: email), so
-            // the intro now says "name or email" and "sends that
-            // line too" — this assertion's purpose (the intro
-            // discloses the share) is unchanged; its literal aged.
-            screen.contains("Share diagnostics sends that line too"),
+            "the intro must say nothing on the screen is personal",
+            screen.contains("Nothing here is personal"),
         )
     }
 
@@ -110,12 +115,13 @@ class R4FreshEyesContractTest {
     fun shippedVersionIsTheReleaseThisSweepShips() {
         val gradle = repoFile("app/build.gradle.kts")
         assertTrue(
-            "About renders the package versionName — the ship must not " +
-                "label itself with the pre-release sign-in-fix name " +
-                "(coordinator naming: base \"0.8.8-sweep\" + the hunt flavor's " +
-                "\"-hunt1\" suffix = the shipped 0.8.8-sweep-hunt1; the pin " +
-                "was re-based from 0.8.7 at the 0.8.8 native-sign-in ship)",
-            gradle.contains("versionName = \"0.8.8-sweep\""),
+            "About renders the package versionName — the ship must " +
+                "label itself with its own release name " +
+                "(base \"0.9.0\" + the hunt flavor's \"-hunt1\" suffix = " +
+                "the shipped 0.9.0-hunt1; the pin was re-based from " +
+                "0.8.8-sweep at the 0.9.0 account-free ship, owner " +
+                "order 2026-11-04)",
+            gradle.contains("versionName = \"0.9.0\""),
         )
         assertFalse(
             "the pre-release version name must not survive into the ship build",

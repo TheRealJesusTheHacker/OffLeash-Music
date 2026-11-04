@@ -45,138 +45,15 @@ import java.io.File
  * version is kept (it also asserts no phase publication remains
  * outside the locked block in the branch, which subsumes the
  * r8a slice assertions for the same branch).
- */
+  *
+ * 0.9.0 (owner order, 2026-11-04): this round's adopt/sign-out/
+ * auto-download pins belonged to GoogleSessionManager and the
+ * account worker — both deleted with the sign-in product. Those
+ * tests are retired with their subjects; the playlist
+ * guarded-mutation pin below is the round's surviving claim and
+ * stands unchanged.
+*/
 class R8SweepContractTest {
-
-    @Test
-    fun adoptRejectedPublishesInsideTheEpochCheckedLock() {
-        val rejected = adopt()
-            .substringAfter("if (lookup is IdentityLookup.Rejected)")
-            .substringBefore("val selected")
-        val block = synchronizedBlock(rejected)
-        assertTrue(
-            "the Rejected branch's epoch check must live inside the " +
-                "locked step, not before it",
-            block.contains("if (epoch == flowEpoch)"),
-        )
-        assertTrue(
-            "adopt's Rejected outcome must publish its phase inside " +
-                "the epoch-checked synchronized block, not after it",
-            block.contains(
-                "_phase.value = GoogleSignInPhase.Failed(IDENTITY_REJECTED_REASON)",
-            ),
-        )
-        assertTrue(
-            "no phase publication may remain outside the locked block " +
-                "in adopt's Rejected branch",
-            !rejected.substringAfter(block).contains("_phase.value"),
-        )
-    }
-
-
-    @Test
-    fun adoptStoreFailurePublishesInsideTheEpochCheckedLock() {
-        val tail = adopt()
-            .substringAfter("if (!saved) {")
-            .substringBefore("sign-in complete")
-        val block = synchronizedBlock(tail)
-        assertTrue(
-            "the save-failure tail's epoch check must live inside the " +
-                "locked step, not before it",
-            block.contains("if (epoch == flowEpoch)"),
-        )
-        assertTrue(
-            "adopt's store-failure outcome must publish its phase inside " +
-                "the epoch-checked synchronized block, not after it",
-            block.contains(
-                "_phase.value = GoogleSignInPhase.Failed(STORE_REASON)",
-            ),
-        )
-        assertTrue(
-            "no phase publication may remain outside the locked block " +
-                "in adopt's save-failure tail",
-            !tail.substringAfter(block).contains("_phase.value"),
-        )
-    }
-
-
-    @Test
-    fun autoDownloadCookieRoadRechecksTheSessionGenerationNotTheInstance() {
-        val body = doWorkBody()
-        assertTrue(
-            "the cookie road must capture the session generation before the fetch",
-            body.contains("fetchSessionGeneration"),
-        )
-        assertTrue(
-            "the cookie road must re-check the generation, not the instance",
-            body.contains("sessionGeneration() == fetchSessionGeneration"),
-        )
-        assertTrue(
-            "the round-7 reference comparison must be gone — rotation " +
-                "replaces the instance for the same account",
-            !body.contains("=== fetchSession"),
-        )
-        assertTrue(
-            "the bearer road's token comparison stands (its refresh cost " +
-                "is documented and its re-trigger is app start / Library)",
-            body.contains("container.currentBearerToken() == fetchBearer"),
-        )
-    }
-
-
-    @Test
-    fun completionGrantedBranchClearsOnlyItsOwnAttempt() {
-        // Native heir (0.8.8) of the poll Granted branch's
-        // deviceCode-guarded clear: the completion's Granted
-        // branch clears the attempt under the state identity of
-        // the attempt whose code was exchanged.
-        val completion = manager()
-            .substringAfter("fun completeSignIn(")
-            .substringBefore("fun cancelSignIn()")
-        val granted = completion
-            .substringAfter("is CodeExchangeResult.Granted")
-            .substringBefore("is CodeExchangeResult.Failed")
-        assertTrue(
-            "the Granted branch must guard its clear with the state " +
-                "identity of the attempt it collected (the terminal " +
-                "step's discipline)",
-            granted.contains("pendingAttempt?.state == attempt.state"),
-        )
-        assertTrue(
-            "the clear must sit behind the state guard, never ahead of it",
-            granted.indexOf("clearPendingAttempt()") >
-                granted.indexOf("pendingAttempt?.state"),
-        )
-    }
-
-
-    @Test
-    fun signOutBumpsTheEpochAgainAtTheWipeAndRejectedRefreshRequiresASession() {
-        val signOut = manager()
-            .substringAfter("suspend fun signOut()")
-            .substringBefore("private companion object")
-        val grab = signOut
-            .substringAfter("val session = synchronized(lock)")
-            .substringBefore("if (session != null)")
-        assertTrue(
-            "signOut's locked wipe must bump the epoch again, so a refresh " +
-                "that started after the first bump (while the grant wipe " +
-                "was in flight) is stale by the time it applies",
-            grab.contains("flowEpoch++"),
-        )
-        val refresh = manager()
-            .substringAfter("suspend fun refreshIdentity()")
-            .substringBefore("suspend fun signOut()")
-        val rejected = refresh
-            .substringAfter("is IdentityLookup.Rejected")
-            .substringBefore("is IdentityLookup.Failed")
-        assertTrue(
-            "the Rejected outcome must refuse when the session it was " +
-                "fetched for no longer stands",
-            rejected.contains("stored ?: return") || rejected.contains("if (stored == null) return"),
-        )
-    }
-
 
     @Test
     fun playlistRowActionsPassTheFullTrackToTheGuardedMutations() {
@@ -194,44 +71,6 @@ class R8SweepContractTest {
             Regex("removeTrackAt\\(\\s*playlist\\.id,\\s*index,\\s*track,")
                 .containsMatchIn(library),
         )
-    }
-
-
-    /** The brace-matched body of the first `synchronized(lock) { ... }` in [text]. */
-    private fun synchronizedBlock(text: String): String {
-        val start = text.indexOf("synchronized(lock)")
-        assertTrue("a synchronized(lock) step must be present", start >= 0)
-        val open = text.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < text.length) {
-            when (text[i]) {
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) return text.substring(open, i + 1)
-                }
-            }
-            i++
-        }
-        throw AssertionError("unbalanced synchronized block")
-    }
-
-
-    private fun adopt(): String =
-        mainSource("java/dev/cyberdogs/offleash/data/GoogleSessionManager.kt")
-            .substringAfter("private suspend fun adopt(")
-
-
-    private fun manager(): String =
-        mainSource("java/dev/cyberdogs/offleash/data/GoogleSessionManager.kt")
-
-
-    private fun doWorkBody(): String {
-        val worker = mainSource("java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt")
-        return worker
-            .substringAfter("override suspend fun doWork()")
-            .substringBefore("/** Enqueues the auto-download check")
     }
 
 

@@ -165,21 +165,23 @@ class R48SweepContractTest {
             1,
             occurrences(searchMore, "SearchUiState.Content("),
         )
+        // Re-based 0.9.0 (owner order, 2026-11-04): the Library's
+        // account load effect — and its ytPlaylists state — are
+        // deleted with the sign-in product. The Library publishes
+        // on-device store flows; there is no load-effect publish
+        // left to census in this file.
         val library = mainSource(
             "java/dev/cyberdogs/offleash/ui/library/LibraryScreen.kt",
-        ).substringAfter("LaunchedEffect(sessionState.signedIn")
-            .substringBefore("LazyColumn(Modifier.fillMaxSize())")
-        assertEquals(
-            "LibraryScreen's load effects must assign ytPlaylists exactly " +
-                "twice (Loading, then the try result) — a transformed " +
-                "republication after the bound if/else is a third assignment",
-            2,
-            occurrences(library, "ytPlaylists ="),
         )
         assertEquals(
-            "LibraryScreen's load effects must construct UiState.Content exactly once",
-            1,
-            occurrences(library, "UiState.Content("),
+            "LibraryScreen must hold no account playlist state",
+            0,
+            occurrences(library, "ytPlaylists"),
+        )
+        assertEquals(
+            "LibraryScreen must hold no session-keyed load effect",
+            0,
+            occurrences(library, "sessionState"),
         )
     }
 
@@ -307,8 +309,6 @@ class R48SweepContractTest {
                         "                        onPlaylistClick = { id ->\n" +
                         "                            navController.navigate(\"localPlaylist/\${Uri.encode(id)}\")\n" +
                         "                        },\n" +
-                        "                        onSignInClick = { navController.navigate(\"signin\") },\n" +
-                        "                        onRemotePlaylistClick = openPlaylist,\n" +
                         "                        onAlbumClick = openAlbum,\n" +
                         "                        onArtistClick = openArtist,\n" +
                         "                    )\n" +
@@ -321,7 +321,6 @@ class R48SweepContractTest {
                         "                    AboutScreen(\n" +
                         "                        container = container,\n" +
                         "                        onOpenDiagnostics = { navController.navigate(\"diagnostics\") },\n" +
-                        "                        onSignInClick = { navController.navigate(\"signin\") },\n" +
                         "                        onOpenSettings = { navController.navigate(\"settings\") },\n" +
                         "                    )\n" +
                         "                }\n"),
@@ -332,20 +331,14 @@ class R48SweepContractTest {
             occurrences(root, "                composable(\"settings\") {\n" +
                         "                    SettingsScreen(\n" +
                         "                        container = container,\n" +
-                        "                        onSignInClick = { navController.navigate(\"signin\") },\n" +
                         "                    )\n" +
                         "                }\n"),
         )
         assertEquals(
-            "the route registration must stand verbatim (destination + argument handoffs)",
-            1,
-            occurrences(root, "                composable(\"signin\") {\n" +
-                        "                    SignInScreen(\n" +
-                        "                        container = container,\n" +
-                        "                        onSignedIn = { navController.popBackStack() },\n" +
-                        "                        onBack = { navController.popBackStack() },\n" +
-                        "                    )\n" +
-                        "                }\n"),
+            "no signin route may be registered (0.9.0, owner " +
+                "order 2026-11-04 — the sign-in product is removed)",
+            0,
+            occurrences(root, "composable(\"signin\")"),
         )
         assertEquals(
             "the route registration must stand verbatim (destination + argument handoffs)",

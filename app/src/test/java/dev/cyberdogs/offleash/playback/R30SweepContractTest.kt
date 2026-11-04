@@ -158,21 +158,22 @@ class R30SweepContractTest {
         val home = homeScreen()
         assertEquals(
             "a full load must be the one call site that opts " +
-                "OUT of the chip carry — it is the entry the " +
-                "identity-keyed reload uses, and the previous " +
-                "response's chips belong to that response's " +
-                "session, not to the account now signed in",
+                "OUT of the chip carry — the previous response's " +
+                "chips belong to that response, not to the fresh " +
+                "one (re-based 0.9.0: the identity-keyed reload " +
+                "this named is deleted with the sign-in product; " +
+                "the carry scoping it rode on stands)",
             1,
             occurrences(home, "carryChips = false"),
         )
         assertTrue(
             "load() itself must pass the opt-out (re-based at " +
-                "0.8.2: load() also clears the degradation note " +
-                "before the full load — the opt-out call itself " +
-                "is unchanged)",
+                "0.9.0: load() no longer clears a degradation " +
+                "note first — the note is deleted with the " +
+                "sign-in product; the opt-out call itself is " +
+                "unchanged)",
             home.contains(
-                "_feedNote.value = null\n" +
-                    "        loadFeed(chip = null, carryChips = false)",
+                "loadFeed(chip = null, carryChips = false)",
             ),
         )
         assertTrue(
@@ -563,29 +564,13 @@ class R30SweepContractTest {
                 "a transformation applied at the acquisition " +
                 "(a helper call on the response before the " +
                 "branch ever sees it) rewrites this block " +
-                "(re-based at 0.8.2: the token leg runs the " +
-                "browse cascade with the brand delegation and " +
-                "degrades to the anonymous leg on refusal — " +
-                "the client response is still the direct " +
-                "value on both legs)",
+                "(re-based at 0.9.0: the token cascade and its " +
+                "degradation leg are deleted with the sign-in " +
+                "product — the anonymous call is the only " +
+                "acquisition there is)",
             home.contains(
-                "val feed = if (bearer != null) {\n" +
-                    "                    try {\n" +
-                    "                        client.homeFeedOAuth(bearer, chip, delegationProvider())\n" +
-                    "                    } catch (e: Exception) {\n" +
-                    "                        if (e is kotlinx.coroutines.CancellationException) throw e\n" +
-                    "                        // Degradation (0.8.2): the personalized\n" +
-                    "                        // cascade refused — fall back to the\n" +
-                    "                        // anonymous feed (cookie session when one\n" +
-                    "                        // stands, plain anonymous otherwise) under\n" +
-                    "                        // the honest note. Only when THAT also\n" +
-                    "                        // fails does the load become an error.\n" +
-                    "                        note = PERSONALIZED_FEED_REFUSED_NOTE\n" +
-                    "                        client.homeFeed(auth, chip)\n" +
-                    "                    }\n" +
-                    "                } else {\n" +
-                    "                    client.homeFeed(auth, chip)\n" +
-                    "                }",
+                "val result = try {\n" +
+                    "                val feed = client.homeFeed(null, chip)",
             ),
         )
         assertTrue(
@@ -593,17 +578,12 @@ class R30SweepContractTest {
                 "state exactly as shipped — a transformed " +
                 "value published instead (the sequential " +
                 "override's last step) rewrites this block " +
-                "(re-based at 0.8.2: the degradation note " +
-                "publishes beside the result, inside the same " +
-                "guard — the result itself is still handed " +
-                "to the state untransformed)",
+                "(re-based at 0.9.0: nothing publishes beside " +
+                "the result any more — the degradation note " +
+                "is deleted; the result is handed to the " +
+                "state untransformed, inside the same guard)",
             home.contains(
                 "if (isActive) {\n" +
-                    "                // The note publishes with the content it describes,\n" +
-                    "                // inside the same stale-load guard: a superseded\n" +
-                    "                // degraded load must not leave its note standing\n" +
-                    "                // over a newer personalized feed.\n" +
-                    "                if (result is UiState.Content) _feedNote.value = note\n" +
                     "                _state.value = result\n" +
                     "            }",
             ),
@@ -681,20 +661,18 @@ class R30SweepContractTest {
                 "stand — an inserted statement there (a " +
                 "second launch, a mutating call) rides " +
                 "the same unbound water (re-based at " +
-                "0.8.2: the degradation note's load-local " +
-                "is part of the shipped prologue, named " +
-                "here like every other statement)",
+                "0.9.0: the prologue is the cancel, the " +
+                "launch, and the try — the session reads " +
+                "and the note's load-local are deleted " +
+                "with the sign-in product)",
             listOf(
                 "loadJob?.cancel()",
                 "loadJob = viewModelScope.launch(Dispatchers.IO) {",
-                "val auth = sessionProvider()",
-                "var note: String? = null",
                 "val result = try {",
-                "val bearer = bearerProvider()",
             ),
             codeLines(
                 strict.substringAfter("_state.value = UiState.Loading")
-                    .substringBefore("val feed = if (bearer != null) {"),
+                    .substringBefore("val feed = client.homeFeed(null, chip)"),
             ),
         )
         assertEquals(
@@ -706,17 +684,11 @@ class R30SweepContractTest {
                 "slot the round-38 blocks left open)",
             emptyList<String>(),
             codeLines(
-                // 0.8.2: the anchor keys on the acquisition
-                // block's comment-free tail — the strict view
-                // renders the degradation comment inside the
-                // block as blank lines, so a contiguous anchor
-                // cannot span it; the block's interior is
-                // bound by the raw contains + region pins
-                // above, and this tail is unique in the file.
+                // 0.9.0: the anchor keys on the acquisition
+                // line itself — the anonymous call is the
+                // whole acquisition, unique in the file.
                 strict.substringAfter(
-                    "                } else {\n" +
-                        "                    client.homeFeed(auth, chip)\n" +
-                        "                }",
+                    "val feed = client.homeFeed(null, chip)",
                 ).substringBefore("UiState.Content("),
             ),
         )
@@ -752,13 +724,10 @@ class R30SweepContractTest {
                 "at the function's tail",
             listOf("}", "}", "}"),
             codeLines(
-                // Anchored on the publish block's comment-free
-                // tail, like the acquisition anchor above: the
-                // strict view blanks the note comment inside
-                // the guard, so the anchor cannot span it.
+                // Anchored on the publish block's tail: the
+                // guard's body is the single publish line.
                 strict.substringAfter(
-                    "                if (result is UiState.Content) _feedNote.value = note\n" +
-                        "                _state.value = result\n" +
+                    "                _state.value = result\n" +
                         "            }",
                 ).substringBefore("@Composable"),
             ),
@@ -851,16 +820,19 @@ class R30SweepContractTest {
             "kept chips may only fill an empty chip cloud",
             home.contains("if (feed.chips.isEmpty() && !keptChips.isNullOrEmpty())"),
         )
-        // And the identity keying this fix rides on must stand:
-        // the reload effect keys on the signed-in flag AND the
-        // account's email, exactly once.
+        // And the load keying must be the account-free one
+        // (re-based 0.9.0): the first-composition load keys on
+        // Unit — there is no identity to key on, and no session
+        // state may be consulted anywhere in the file.
         assertEquals(
-            "the home reload must stay identity-keyed",
+            "the home load must be keyed on first composition only",
             1,
-            occurrences(
-                home,
-                "LaunchedEffect(sessionState.signedIn, sessionState.identityEmail)",
-            ),
+            occurrences(home, "LaunchedEffect(Unit)"),
+        )
+        assertEquals(
+            "no session state may be consulted in Home",
+            0,
+            occurrences(home, "sessionState"),
         )
     }
 

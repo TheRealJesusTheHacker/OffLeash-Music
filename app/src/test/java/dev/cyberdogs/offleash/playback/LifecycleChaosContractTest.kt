@@ -204,35 +204,17 @@ class LifecycleChaosContractTest {
     }
 
     @Test
-    fun signInWaitingStateIsManagerHeldNotScreenHeld() {
-        // Rotation (or process death) during the wait must re-render
-        // the SAME attempt: the phase and the browser launch live in
-        // the manager, and the screen holds no copy of the attempt
-        // in composition state. (Native heir, 0.8.8: the device-era
-        // pin rendered the manager-held user code; the native
-        // screen renders the manager-held launch instead — and the
-        // attempt's verifier never reaches the screen at all.)
-        val screen = source("dev/cyberdogs/offleash/ui/account/SignInScreen.kt")
-        assertTrue(screen.contains("val manager = container.googleSessionManager"))
-        assertTrue(screen.contains("manager.phase.collectAsState()"))
-        assertTrue(
-            "the rendered launch must come from the manager's held launch",
-            screen.contains("manager.authorizationLaunch.collectAsState()"),
-        )
-        assertFalse(
-            "the screen must never hold the attempt's verifier",
-            screen.contains("codeVerifier"),
-        )
-        assertFalse(
-            "the screen must not remember its own copy of the attempt",
-            screen.contains("attempt by remember") || screen.contains("remember { mutableStateOf(current"),
-        )
-        assertTrue(
-            "a transport-failed exchange must land on the Failed phase (the wait " +
-                "unmounts) rather than leaving a dead 'still waiting' screen",
-            source("dev/cyberdogs/offleash/data/GoogleSessionManager.kt")
-                .contains("GoogleSignInPhase.Failed("),
-        )
+    fun noSignInWaitingStateExistsToBeHeld() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the waiting
+        // state this pin located — manager-held, never screen-
+        // held — is deleted with the sign-in product. No screen
+        // or activity may reference a sign-in manager or screen.
+        val root = source("dev/cyberdogs/offleash/ui/OffleashRoot.kt")
+        assertTrue(!root.contains("SignInScreen"))
+        assertTrue(!root.contains("googleSessionManager"))
+        val activity = mainActivity()
+        assertTrue(!activity.contains("googleSessionManager"))
+        assertTrue(!activity.contains("SignInScreen"))
     }
 
     // -- 3. Process death at unexamined moments ----------------------
@@ -329,14 +311,13 @@ class LifecycleChaosContractTest {
     }
 
     @Test
-    fun signOutDialogTextScrollsSoItsButtonsSurviveLargeFonts() {
+    fun noSignOutDialogExistsToOverflow() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): About's
+        // sign-out dialog is deleted with its Account block.
         val about = source("dev/cyberdogs/offleash/ui/about/AboutScreen.kt")
-        val dialog = about.substringAfter("Text(\"Sign out?\")")
-        assertTrue(
-            "the sign-out dialog's text must be height-bounded and scrollable — " +
-                "at 2.0x font its buttons were pushed past the dialog's edge",
-            dialog.contains("heightIn(max = 320.dp)") && dialog.contains("verticalScroll"),
-        )
+        assertTrue(!about.contains("Sign out"))
+        val settings = source("dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt")
+        assertTrue(!settings.contains("Sign out"))
     }
 
     // -- 5. Copy & embarrassment pass --------------------------------

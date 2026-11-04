@@ -108,17 +108,27 @@ class R6SweepContractTest {
     }
 
     @Test
-    fun diagnosticsIntroMatchesWhatTheAccountBlockAndShareActuallySend() {
+    fun diagnosticsIntroMatchesWhatTheAccountFreeScreenActuallySends() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the Account &
+        // session block is deleted with the sign-in product, and
+        // Share diagnostics sends no account line. The intro must
+        // match THAT screen: nothing personal is shown or sent.
         val screen = mainSource("java/dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt")
         assertTrue(
-            "the intro must say the account block shows the name OR email " +
-                "(one identity line) — that is what the block renders and " +
-                "what the share body sends",
-            screen.contains("shows the name or email of the signed-in account"),
+            "the intro must say nothing on the screen is personal",
+            screen.contains("Nothing here is personal"),
         )
         assertFalse(
-            "the intro must not claim both the name and the email are shown/sent",
-            screen.contains("shows the name and email"),
+            "the account block must not exist",
+            screen.contains("Account & session"),
+        )
+        assertFalse(
+            "the share body must not send an account line",
+            screen.contains("appendLine(\"Account:"),
+        )
+        assertFalse(
+            "the screen must not consult account state",
+            screen.contains("accountUiState"),
         )
     }
 

@@ -75,34 +75,21 @@ class R60SweepContractTest {
         val app = fileText(
             "dev/cyberdogs/offleash/OffleashApp.kt",
         )
-        // F1: the pending-grant store's seal, in its own
-        // slice (round 58 bound the other two stores' box
-        // lines but only this store's storage line).
-        assertSliceLines(
-            app,
-            "GooglePendingGrantStore(",
-            "val googleSignInSeenMarker",
-            listOf(
-                // 0.8.1 hotfix re-base: named provider + regenerator
-                // (the seal-recovery wiring), replacing the
-                // trailing-lambda box.
-                "box = AesGcmSecretBox(",
-                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) }",
-                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) }",
-            ),
-            "googlePendingGrantStore box",
+        // F1 re-based 0.9.0 (owner order, 2026-11-04): the
+        // pending-grant store is deleted with the sign-in
+        // product, and with it every sealed store the container
+        // built — the session key alias has NO remaining opener
+        // in the container, and no store slice exists to bind.
+        assertTrue(
+            "no sealed session store may be constructed in the container",
+            !app.contains("GooglePendingGrantStore(") &&
+                !app.contains("GoogleTokenStore(") &&
+                !app.contains("SessionStore("),
         )
         assertEquals(
-            "exactly the four sealed stores may open the " +
-                "session key alias — a sixth getOrCreate or " +
-                "a re-pointed literal alias (round-60 F1 " +
-                "doctor, GREEN across the full suite) moves " +
-                "no slice (0.8.8 census event: the own-key " +
-                "and wizard-progress stores left with the dead " +
-                "road and the pending native-attempt store " +
-                "joined, for a standing four on the same " +
-                "alias, by the house's one-key custody design)",
-            4,
+            "no container code may open the session key alias " +
+                "in the account-free build",
+            0,
             occurrences(
                 app,
                 "KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS)",
@@ -147,47 +134,25 @@ class R60SweepContractTest {
 
     @Test
     fun accountUiStateSnapshotBranchesAreBoundVerbatim() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the presented
+        // account state is deleted with the sign-in product —
+        // there is no snapshot, no branch, and no dormancy
+        // fallback to bind. The verbatim truth now is absence:
+        // none of the F5 machinery may exist in the container.
         val app = fileText(
             "dev/cyberdogs/offleash/OffleashApp.kt",
         )
         assertTrue(
-            "the presented account state must be born from " +
-                "the snapshot function",
-            app.contains(
-                "private val _accountUiState = " +
-                    "MutableStateFlow(accountUiStateSnapshot())",
-            ),
+            "no accountUiState flow may exist in the container",
+            !app.contains("accountUiState"),
         )
         assertTrue(
-            "accountUiState must expose the snapshot flow " +
-                "read-only",
-            app.contains(
-                "val accountUiState: " +
-                    "StateFlow<SessionUiState> = " +
-                    "_accountUiState.asStateFlow()",
-            ),
+            "no dormancy fallback may exist in the container",
+            !app.contains("legacyFallbackApplies"),
         )
-        // F5: the branches as ONE verbatim block — the
-        // legacy state is the THEN branch of the dormancy
-        // condition, the Google state the ELSE; swapping
-        // them (round-60 doctor, GREEN across the full
-        // suite) resurrects the dormant legacy session as
-        // the presented account.
         assertTrue(
-            "accountUiStateSnapshot must return the legacy " +
-                "state only when the dormancy fallback " +
-                "applies, and the Google state otherwise — " +
-                "bound as a verbatim block because a branch " +
-                "swap keeps every line present in any slice",
-            app.contains(
-                "return if (legacyFallbackApplies(" +
-                    "google.signedIn, " +
-                    "googleSignInSeenMarker.seen())) {\n" +
-                    "            sessionManager.uiState.value\n" +
-                    "        } else {\n" +
-                    "            google\n" +
-                    "        }",
-            ),
+            "no SessionUiState may be referenced by the container",
+            !app.contains("SessionUiState"),
         )
     }
 

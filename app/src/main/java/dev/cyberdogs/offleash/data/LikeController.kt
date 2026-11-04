@@ -55,7 +55,15 @@ class LikeController(
 
     fun stateFor(videoId: String): LikeUiState =
         _states.value[videoId]
-            ?: LikeUiState(liked = false, accountBacked = false)
+            // A like persisted before this controller existed (an
+            // older build's record, read at first ask) is a like:
+            // the persisted record is the fallback for any id the
+            // toggle map has not seen yet.
+            ?: if (videoId in preferences.localLikedVideoIds()) {
+                LikeUiState(liked = true, accountBacked = false)
+            } else {
+                LikeUiState(liked = false, accountBacked = false)
+            }
 
     fun isLiked(videoId: String): Boolean = stateFor(videoId).liked
 
