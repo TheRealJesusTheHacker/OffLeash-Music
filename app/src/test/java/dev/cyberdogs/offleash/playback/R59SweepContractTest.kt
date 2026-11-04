@@ -561,6 +561,7 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/playback/LyricsSync.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/NotificationPermission.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt",
+                "app/src/main/java/dev/cyberdogs/offleash/playback/PlaybackPrefetch.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/PlaybackRecovery.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/PlaybackService.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/PlaybackSpeed.kt",

@@ -363,6 +363,12 @@ class R49SweepContractTest {
             "dev/cyberdogs/offleash/playback/LyricsSync.kt",
             "dev/cyberdogs/offleash/playback/NotificationPermission.kt",
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt",
+            // 2026-11-04 playback-finish census event:
+            // PlaybackPrefetch.kt joins the module — the pure
+            // next-track prefetch decisions; it writes no
+            // `_state` / `_uiState` flows and stands at the
+            // (0 to 0) default in the census below.
+            "dev/cyberdogs/offleash/playback/PlaybackPrefetch.kt",
             "dev/cyberdogs/offleash/playback/PlaybackRecovery.kt",
             "dev/cyberdogs/offleash/playback/PlaybackService.kt",
             "dev/cyberdogs/offleash/playback/PlaybackSpeed.kt",

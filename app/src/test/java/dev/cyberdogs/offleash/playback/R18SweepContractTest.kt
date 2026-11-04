@@ -545,6 +545,12 @@ class R18SweepContractTest {
                 keywordCount(codeOnly(branchRegion), "for") +
                 keywordCount(codeOnly(branchRegion), "fun"),
         )
+        // 2026-11-04 playback-finish re-base: the region now
+        // also reads the recent-history ids for the
+        // continuation's exclusion set (recentsStore.recents
+        // + mapTo + the HashSet constructor) — the three
+        // additions below, in both views; no clear, no
+        // conditional, and no other call entered the region.
         assertEquals(
             "the branch region must make exactly the calls " +
                 "it legitimately makes today — an added " +
@@ -552,11 +558,14 @@ class R18SweepContractTest {
                 "context, or dead block changes this " +
                 "inventory or the counts above",
             listOf(
+                "HashSet",
                 "SystemClock.elapsedRealtime",
                 "cancelSleepTimer",
                 "diagnostics.log",
                 "expireSleepTimer",
+                "mapTo",
                 "player.pause",
+                "recentsStore.recents",
                 "resolveJob?.cancel",
                 "setResolving",
                 "setResolving",
@@ -571,11 +580,14 @@ class R18SweepContractTest {
                 "strict lexical strip must match the legacy " +
                 "inventory exactly",
             listOf(
+                "HashSet",
                 "SystemClock.elapsedRealtime",
                 "cancelSleepTimer",
                 "diagnostics.log",
                 "expireSleepTimer",
+                "mapTo",
                 "player.pause",
+                "recentsStore.recents",
                 "resolveJob?.cancel",
                 "setResolving",
                 "setResolving",
@@ -1231,12 +1243,20 @@ class R18SweepContractTest {
         // live in code only.
         val fullText = controller()
         val fullStrict = strictCode(fullText)
+        // 2026-11-04 playback-finish re-base: the prefetch
+        // hand-off is a fourth handToPlayer( call site (the
+        // stash consume inside resolveAndPlay), and
+        // maybePrefetchNext carries one CancellationException
+        // catch and two Exception catches of its own (the
+        // download lookup and the resolve) — the three count
+        // raises below, each a real code site, so the
+        // strict/full equality above still holds.
         for ((anchor, expected) in listOf(
             "private fun resolveAndPlay" to 1,
             "val stream = try {" to 1,
-            "handToPlayer(" to 3,
-            "catch (e: CancellationException)" to 7,
-            "catch (e: Exception)" to 9,
+            "handToPlayer(" to 4,
+            "catch (e: CancellationException)" to 8,
+            "catch (e: Exception)" to 11,
         )) {
             assertEquals(
                 "the slice anchor `$anchor` must occur only in " +

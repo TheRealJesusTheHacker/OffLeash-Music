@@ -102,8 +102,11 @@ class PrefetchWiringContractTest {
             source.contains("allowRevalidate = false"),
         )
         assertEquals(
-            "the resolveWithRoads gate defaults stay honest",
-            1,
+            "the diagnostics gate defaults stay honest in both " +
+                "gated functions (resolveWithRoads and its probe " +
+                "ladder) — a default of false would silence the " +
+                "live resolve's own record",
+            2,
             source.countOccurrences("recordDiagnostics: Boolean = true"),
         )
     }
