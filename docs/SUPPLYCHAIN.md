@@ -12,8 +12,8 @@ by Gradle itself (`--write-verification-metadata sha256`) from the actual
 resolution of the versions pinned in the build files — no version was
 changed to create it. Scope of the committed file:
 
-- **415 components** across **116 groups**
-- **742 artifacts**, each with a SHA-256 checksum
+- **424 components** across **117 groups**
+- **754 artifacts**, each with a SHA-256 checksum
   (`<verify-metadata>true</verify-metadata>`: Gradle module metadata
   (`.module`) and POM files are checksum-verified too, not just jars/AARs)
 - Covers the build/plugin classpath (AGP 8.7.2, Kotlin 2.0.20 and its
@@ -22,8 +22,16 @@ changed to create it. Scope of the committed file:
   `:app` unit tests for **both flavors (standard, hunt) in debug and
   release**, and `assemble` (debug + release, both flavors). That set
   includes the Compose BOM platform (2024.12.01), Media3 1.5.1,
-  OkHttp 4.12.1, kotlinx-serialization-json 1.7.3, Coil 2.7.0,
-  WorkManager 2.9.1 and JUnit 4.13.2 at exactly their pinned versions.
+  OkHttp 4.12.1, kotlinx-serialization-json 1.7.3, Coil 2.7.0
+  and JUnit 4.13.2 at exactly their pinned versions.
+- **0.9.0 delta (2026-11-04):** WorkManager 2.9.1 and AndroidX
+  Browser 1.8.0 left the graph with the sign-in product. Without
+  WorkManager's constraints the graph resolves
+  `androidx.arch.core:core-common` 2.1.0 and
+  `androidx.startup:startup-runtime` 1.0.0; those components'
+  artifacts were added to the lock with SHA-256s taken from
+  Google's Maven repository, so the fail-closed rule is
+  unchanged — anything unlisted still fails the build.
 
 Enforcement is automatic: any Gradle build that resolves dependencies
 with this file present verifies every downloaded artifact against it and
@@ -103,6 +111,13 @@ metadata was green.
    used a device-code flow with client pairs; that road and its
    in-app key wizard were removed in 0.8.8 — see the note at the
    supply site in `app/build.gradle.kts`.)
+   **0.9.0 update (2026-11-04): the sign-in product is removed
+   (owner order — the app is account-free for now), and with it
+   the build supply this item described: no client ID is read,
+   no `BuildConfig` field is generated, and no OAuth property
+   remains in `gradle.properties`. The Google Cloud registration
+   itself still exists; nothing in the shipped build references
+   it.**
 
 ## Other install surfaces in this repo
 

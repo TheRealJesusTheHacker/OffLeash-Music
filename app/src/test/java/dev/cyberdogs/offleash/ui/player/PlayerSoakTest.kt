@@ -2,7 +2,7 @@ package dev.cyberdogs.offleash.ui.player
 
 import dev.cyberdogs.offleash.core.model.Track
 import dev.cyberdogs.offleash.playback.QueueUiState
-import dev.cyberdogs.offleash.playback.RepeatMode
+import dev.cyberdogs.offleash.core.playback.RepeatMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue

@@ -412,15 +412,4 @@ class LongHaulSweepTest {
         assertFalse(prefs.audioVersionInRadio)
     }
 
-    @Test
-    fun signInDiagnosticsLogIsBoundedAcrossAttemptsAndStrayLogs() {
-        val diagnostics = SignInDiagnostics()
-        // A long poll's worth of lines plus process-lifetime stray
-        // logs (refresh, sign-out) with no new attempt to clear.
-        repeat(1000) { diagnostics.log("google-sign-in", "poll: still pending $it") }
-        val lines = diagnostics.lines()
-        assertEquals(SignInDiagnostics.MAX_LOG_LINES, lines.size)
-        assertTrue(lines.last().contains("still pending 999"))
-        assertEquals(lines.size, diagnostics.snapshot.value.size)
-    }
 }
