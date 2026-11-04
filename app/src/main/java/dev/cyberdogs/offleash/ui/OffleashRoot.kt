@@ -228,7 +228,10 @@ fun OffleashRoot(container: AppContainer) {
                         )
                     }
                     if (showTabs) {
-                        NavigationBar {
+                        NavigationBar(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 0.dp,
+                        ) {
                             NavigationBarItem(
                                 selected = currentRoute == "home",
                                 onClick = {
@@ -491,7 +494,7 @@ private fun MiniPlayer(
     val track = queueState.currentTrack ?: return
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier
             .fillMaxWidth()
             // TalkBack gets the tap's purpose, not just the track

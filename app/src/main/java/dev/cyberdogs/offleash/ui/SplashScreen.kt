@@ -1,5 +1,6 @@
 package dev.cyberdogs.offleash.ui
 
+import androidx.compose.ui.graphics.Brush
 import android.provider.Settings
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -104,6 +105,23 @@ fun SplashScreen(onSkip: () -> Unit) {
             ) { onSkip() },
         contentAlignment = Alignment.Center,
     ) {
+        // Stage glow (GUI elevation pass): the theme's own tan as a
+        // soft radial wash behind the mark. Pure surface — the
+        // glitch loop, the bolt, the timing and the gate are the
+        // shipped treatment, unchanged.
+        Box(
+            modifier = Modifier
+                .size(380.dp)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            tan.copy(alpha = 0.15f),
+                            tan.copy(alpha = 0.04f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(contentAlignment = Alignment.Center) {
                 if (jitter != Offset.Zero) {

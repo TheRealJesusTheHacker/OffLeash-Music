@@ -139,7 +139,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
         Text(
             text = "Stream quality",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(4.dp))
@@ -159,7 +159,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
         Text(
             text = "Downloads",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(4.dp))
@@ -192,7 +192,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
         Text(
             text = "Playback",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(8.dp))
@@ -210,7 +210,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
         Text(
             text = "Account",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(4.dp))

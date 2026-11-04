@@ -1,5 +1,6 @@
 package dev.cyberdogs.offleash.ui.home
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -327,7 +328,12 @@ fun HomeScreen(
                             Card(
                                 onClick = { onPlaylistClick(LIKED_MUSIC_BROWSE_ID, null) },
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                ),
+                                shape = MaterialTheme.shapes.large,
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -342,7 +348,7 @@ fun HomeScreen(
                                     Text(
                                         text = "Your liked songs, from your account",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                                     )
                                 }
                             }

@@ -1,5 +1,10 @@
 package dev.cyberdogs.offleash.ui.player
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -240,13 +245,36 @@ fun PlayerScreen(
             }
 
             Spacer(Modifier.height(16.dp))
-            ArtworkImage(
-                url = track?.thumbnailUrl,
-                contentDescription = track?.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
-            )
+            Box {
+                // Stage glow (GUI elevation pass): a warm radial wash
+                // in the theme's own tan behind the artwork — depth
+                // from the palette itself, no new colour.
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.04f),
+                                    Color.Transparent,
+                                ),
+                            ),
+                        ),
+                )
+                ArtworkImage(
+                    url = track?.thumbnailUrl,
+                    contentDescription = track?.title,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant,
+                            RoundedCornerShape(12.dp),
+                        ),
+                )
+            }
             Spacer(Modifier.height(24.dp))
 
             Text(
@@ -359,7 +387,12 @@ fun PlayerScreen(
                 }
                 IconButton(
                     onClick = { container.queueController.togglePlayPause() },
-                    modifier = Modifier.size(64.dp),
+                    modifier = Modifier
+                        .size(72.dp)
+                        .background(
+                            MaterialTheme.colorScheme.primary,
+                            CircleShape,
+                        ),
                 ) {
                     Icon(
                         imageVector = if (playbackState.isPlaying) {
@@ -368,7 +401,8 @@ fun PlayerScreen(
                             Icons.Default.PlayArrow
                         },
                         contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(40.dp),
                     )
                 }
                 IconButton(onClick = { container.queueController.next() }) {
