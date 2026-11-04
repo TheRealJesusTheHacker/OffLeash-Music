@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
+import kotlinx.coroutines.CancellationException
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -177,6 +178,10 @@ fun rememberCoverGlowColor(heroUrl: String?, rowUrl: String?): Color {
                 bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
                 glowArgb = coverGlowArgb(pixels)
             }
+        } catch (e: CancellationException) {
+            // Cancellation is the effect's lifecycle, not a load
+            // failure: it propagates, never lands in the fallback.
+            throw e
         } catch (e: Exception) {
             // The tan fallback already stands.
         }
