@@ -1,5 +1,6 @@
 package dev.cyberdogs.offleash.ui.player
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.RoundedCornerShape
