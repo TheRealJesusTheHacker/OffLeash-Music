@@ -73,13 +73,13 @@ class LikeControllerTest {
         val f = Fixture()
         try {
             val track = track("v1")
-            val before = f.controller.stateFor(track)
+            val before = f.controller.stateFor(track.videoId)
             assertFalse(before.liked)
             assertFalse(before.accountBacked)
 
             f.controller.toggle(track)
 
-            val after = f.controller.stateFor(track)
+            val after = f.controller.stateFor(track.videoId)
             assertTrue(after.liked)
             assertFalse(after.accountBacked)
             assertTrue(f.prefs.localLikedVideoIds().contains("v1"))
@@ -105,7 +105,7 @@ class LikeControllerTest {
 
             f.controller.toggle(track)
 
-            assertFalse(f.controller.stateFor(track).liked)
+            assertFalse(f.controller.stateFor(track.videoId).liked)
             assertFalse(f.prefs.localLikedVideoIds().contains("v1"))
             await("liked row removed") { f.store.tracks.value.isEmpty() }
         } finally {
@@ -119,7 +119,7 @@ class LikeControllerTest {
         try {
             // The 0.8.x seed shape: an id marked account-seeded.
             f.prefs.setLikedState(setOf("seeded"), setOf("seeded"))
-            val state = f.controller.stateFor(track("seeded"))
+            val state = f.controller.stateFor("seeded")
             assertTrue(state.liked)
             assertFalse(state.accountBacked)
 

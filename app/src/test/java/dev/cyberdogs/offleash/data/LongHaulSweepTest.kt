@@ -23,8 +23,8 @@ import java.io.File
  * every persisted artifact read in its OLD shape (constructed from
  * the DTO's oldest fields — this tree carries no git history to
  * recover the true old bytes from), in a FUTURE shape (unknown
- * fields, unknown enum values, missing newer fields), and under a
- * DIFFERENT sealed-key generation; growth at 100–1000× realistic
+ * fields, unknown enum values, missing newer fields); growth at
+ * 100–1000× realistic
  * scale; writes against a failing disk; and preferences with every
  * key malformed at once, including a store that throws.
  */
@@ -56,159 +56,15 @@ class LongHaulSweepTest {
     }
 
     /** Seals [json] under [box] into a fresh in-memory storage. */
-    private fun sealedStorage(box: AesGcmSecretBox, json: String): InMemorySecretStorage =
-        InMemorySecretStorage().apply { write(box.encrypt(json.toByteArray(Charsets.UTF_8))) }
-
-    // -- 1. Sealed stores: old shape, future shape, wrong key ---------
-
-    @Test
-    fun sessionStoreLoadsTheOldestCookieOnlyShape() {
-        // ≤0.6.x shape, constructed from StoredSession's oldest
-        // fields: cookies + authUser only; every later field
-        // (identity, visitor data, timestamps) arrived with defaults.
-        val box = testSecretBox()
-        val storage = sealedStorage(box, """{"cookies":{"SID":"s","SAPISID":"p"},"authUser":2}""")
-        val loaded = SessionStore(storage, box).load()
-        assertNotNull(loaded)
-        assertEquals("s", loaded!!.cookies["SID"])
-        assertEquals(2, loaded.authUser)
-        assertNull(loaded.identityName)
-        assertEquals(0L, loaded.capturedAtEpochMs)
-    }
-
-    @Test
-    fun sessionStoreLoadsAFutureShapeWithUnknownFields() {
-        val box = testSecretBox()
-        val storage = sealedStorage(
-            box,
-            """{"cookies":{"SID":"s"},"authUser":0,"pageId":null,"visitorData":null,""" +
-                """"identityName":"Future Listener","identityEmail":null,"avatarUrl":null,""" +
-                """"capturedAtEpochMs":5,"lastValidatedEpochMs":6,""" +
-                """"futureField":{"nested":[1,2,3]},"anotherFutureField":"x"}""",
-        )
-        val loaded = SessionStore(storage, box).load()
-        assertEquals("Future Listener", loaded?.identityName)
-        assertEquals(6L, loaded?.lastValidatedEpochMs)
-    }
-
-    @Test
-    fun googleTokenStoreLoadsTheOldestAndFutureShapes() {
-        val box = testSecretBox()
-        // 0.7.x shape constructed from the DTO's first fields.
-        val old = sealedStorage(
-            box,
-            """{"accessToken":"ya29.old","refreshToken":"rt-old",""" +
-                """"accessTokenExpiresAtEpochMs":1893456000000}""",
-        )
-        val loadedOld = GoogleTokenStore(old, box).load()
-        assertEquals("ya29.old", loadedOld?.accessToken)
-        assertEquals("rt-old", loadedOld?.refreshToken)
-        assertNull(loadedOld?.grantedScopes)
-        assertEquals(0L, loadedOld?.grantedAtEpochMs)
-
-        val future = sealedStorage(
-            box,
-            """{"accessToken":"ya29.new","refreshToken":null,""" +
-                """"accessTokenExpiresAtEpochMs":1,"grantedScopes":"scope",""" +
-                """"identityName":"N","identityEmail":null,"avatarUrl":null,""" +
-                """"grantedAtEpochMs":2,"lastValidatedEpochMs":3,"idToken":"future-only"}""",
-        )
-        assertEquals("ya29.new", GoogleTokenStore(future, box).load()?.accessToken)
-    }
-
-    @Test
-    fun pendingGrantStoreLoadsFutureShapeAndResetsOnMissingRequiredField() {
-        val box = testSecretBox()
-        val future = sealedStorage(
-            box,
-            """{"deviceCode":"dc","userCode":"ABCD-EFGH",""" +
-                """"verificationUrl":"https://www.google.com/device",""" +
-                """"issuedAtEpochMs":10,"expiresAtEpochMs":1800010,"intervalSeconds":5,""" +
-                """"futureField":true}""",
-        )
-        val grant = GooglePendingGrantStore(future, box).load()
-        assertEquals("dc", grant?.deviceCode)
-        assertEquals(5L, grant?.intervalSeconds)
-
-        // A shape missing a required field (an older/newer build
-        // whose DTO disagrees) resets honestly to "no grant" —
-        // never a half-loaded grant, never a crash.
-        val missing = sealedStorage(
-            box,
-            """{"deviceCode":"dc","userCode":"ABCD-EFGH",""" +
-                """"verificationUrl":"https://www.google.com/device",""" +
-                """"issuedAtEpochMs":10,"expiresAtEpochMs":1800010}""",
-        )
-        assertNull(GooglePendingGrantStore(missing, box).load())
-    }
-
-    @Test
-    fun sealedStoresUnderADifferentKeyGenerationReadAsSignedOut() {
-        // The sealed box with a DIFFERENT key alias generation
-        // (keystore key rotated / regenerated): every store's blob
-        // is undecryptable and must read as "nothing stored".
-        val boxA = testSecretBox()
-        val boxB = testSecretBox()
-        val sessionJson = """{"cookies":{"SID":"s"},"authUser":1}"""
-        val googleJson = """{"accessToken":"ya29.x","refreshToken":"rt"}"""
-        val grantJson = """{"deviceCode":"dc","userCode":"U","verificationUrl":"v",""" +
-            """"issuedAtEpochMs":1,"expiresAtEpochMs":2,"intervalSeconds":5}"""
-        assertNull(SessionStore(sealedStorage(boxA, sessionJson), boxB).load())
-        assertNull(GoogleTokenStore(sealedStorage(boxA, googleJson), boxB).load())
-        assertNull(GooglePendingGrantStore(sealedStorage(boxA, grantJson), boxB).load())
-        // And the same blobs still load under their own key.
-        assertNotNull(SessionStore(sealedStorage(boxA, sessionJson), boxA).load())
-    }
-
-    @Test
-    fun sessionStoreSaveThrowsHonestlyWhileLoadStaysTotal() {
-        // The save-throw contract: load/wipe never throw (pinned in
-        // StoreTotalityTest); save MUST throw so a caller can never
-        // claim a sign-in nothing persisted.
-        val throwing = object : SecretStorage {
-            override fun read(): ByteArray? = throw RuntimeException("read fail")
-            override fun write(bytes: ByteArray) = throw RuntimeException("disk full")
-            override fun clear() = throw RuntimeException("clear fail")
-        }
-        val store = SessionStore(throwing, testSecretBox())
-        assertNull(store.load())
-        assertThrows(RuntimeException::class.java) {
-            store.save(StoredSession(cookies = mapOf("SID" to "s")))
-        }
-    }
-
-    @Test
-    fun twoHundredRestartsOverTheSameSealedFilesDoNotDiverge() {
-        val dir = temp.newFolder("sealed")
-        val box = testSecretBox()
-        val sessionStorage = FileSecretStorage(File(dir, "session.bin"))
-        val tokenStorage = FileSecretStorage(File(dir, "google_session.bin"))
-        val session = StoredSession(
-            cookies = mapOf("SID" to "s", "SAPISID" to "p"),
-            authUser = 3,
-            identityName = "Listener",
-        )
-        val google = StoredGoogleSession(
-            accessToken = "ya29.keep",
-            refreshToken = "rt-keep",
-            accessTokenExpiresAtEpochMs = 1893456000000L,
-        )
-        SessionStore(sessionStorage, box).save(session)
-        GoogleTokenStore(tokenStorage, box).save(google)
-        // 200 process restarts: a fresh store instance over the same
-        // files every time must read the same values every time.
-        repeat(200) {
-            assertEquals(session, SessionStore(sessionStorage, box).load())
-            assertEquals(google, GoogleTokenStore(tokenStorage, box).load())
-        }
-        // And a wipe by one instance is the ground truth for all.
-        assertTrue(SessionStore(sessionStorage, box).wipe())
-        assertTrue(GoogleTokenStore(tokenStorage, box).wipe())
-        repeat(5) {
-            assertNull(SessionStore(sessionStorage, box).load())
-            assertTrue(SessionStore(sessionStorage, box).isWipedClean())
-        }
-    }
+    // -- 1. Sealed session stores: REMOVED in 0.9.0 -----------------
+    //
+    // This section pinned the sealed stores under old/future shapes
+    // and a different key generation. The stores are deleted with
+    // the sign-in product (owner order, 2026-11-04); what an
+    // upgrading device still needs — the sealed files destroyed at
+    // startup — is pinned in AccountFreeContractTest. The sections
+    // below (downloads, playlists, recents, atomic writes) are the
+    // surviving stores and keep their long-haul pins unchanged.
 
     // -- 2. DownloadStore: per-entry salvage + scale -------------------
 
