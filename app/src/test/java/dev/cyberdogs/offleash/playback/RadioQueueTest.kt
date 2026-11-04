@@ -149,6 +149,69 @@ class RadioQueueTest {
         assertEquals(listOf("c"), gen3.map { it.videoId })
     }
 
+    // -- autoplayContinuation recent-history exclusion (2026-11-04) --
+
+    @Test
+    fun continuationExcludesRecentPlaysFromAnEarlierQueue() {
+        // The standing queue knows nothing of these ids — they were
+        // played under a queue that has since been replaced. The
+        // continuation must still not circle back to them.
+        val seed = track("seed")
+        val related = listOf(track("heard-1"), track("fresh"), track("heard-2"))
+        val continuation = autoplayContinuation(
+            seed,
+            related,
+            queuedIds = setOf("seed"),
+            recentIds = setOf("heard-1", "heard-2"),
+        )
+        assertEquals(listOf("fresh"), continuation.map { it.videoId })
+    }
+
+    @Test
+    fun continuationIsEmptyWhenEverythingOfferedWasJustPlayed() {
+        // Honest emptiness: the controller stops and says so rather
+        // than refilling with repeats.
+        val continuation = autoplayContinuation(
+            track("seed"),
+            listOf(track("a"), track("b")),
+            queuedIds = setOf("seed"),
+            recentIds = setOf("a", "b"),
+        )
+        assertEquals(emptyList<String>(), continuation.map { it.videoId })
+    }
+
+    @Test
+    fun continuationWithoutRecentsMatchesThePreExistingBehaviour() {
+        // The default (no recents supplied) must be exactly the old
+        // queue-only exclusion — callers that cannot see history
+        // change nothing.
+        val seed = track("seed")
+        val related = listOf(track("a"), track("seed"), track("b"), track("a"))
+        assertEquals(
+            autoplayContinuation(seed, related, queuedIds = setOf("seed")),
+            autoplayContinuation(
+                seed,
+                related,
+                queuedIds = setOf("seed"),
+                recentIds = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun continuationDedupesAcrossQueueRecentsAndRelatedTogether() {
+        // One id appearing in the queue, the recents, AND twice in
+        // the related list is excluded once and for all; the one
+        // genuinely new track survives in API order.
+        val continuation = autoplayContinuation(
+            track("seed"),
+            listOf(track("q"), track("r"), track("r"), track("new"), track("q")),
+            queuedIds = setOf("seed", "q"),
+            recentIds = setOf("r"),
+        )
+        assertEquals(listOf("new"), continuation.map { it.videoId })
+    }
+
     @Test
     fun shareUrlIsTheCanonicalMusicUrl() {
         assertEquals(

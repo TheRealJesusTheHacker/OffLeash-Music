@@ -329,6 +329,30 @@ class QueueController(
 
     private var resolveJob: Job? = null
 
+    // -- Next-track prefetch (2026-11-04 playback-finish run) --------
+    //
+    // The next queue entry is resolved AHEAD of its transition (see
+    // PlaybackPrefetch.kt for the pure decisions and the freshness
+    // law), so a track end hands the player an already-resolved
+    // stream instead of paying the road cascade in silence. The
+    // stash holds ONE entry: the entry peekNext named when the
+    // prefetch ran, by reference identity, plus the moment it
+    // landed. A prefetch never touches the resolving flag, never
+    // publishes an error, and never revalidates the session — its
+    // failure simply means the transition resolves live, exactly
+    // as every transition did before prefetch existed.
+
+    /** A resolved next entry waiting for its transition. */
+    private data class PrefetchedNext(
+        val entry: Track,
+        val playback: ResolvedPlayback,
+        val takenAtMs: Long,
+    )
+
+    private var prefetchJob: Job? = null
+    private var prefetchTarget: Track? = null
+    private var prefetchedNext: PrefetchedNext? = null
+
     // -- Autoplay continuation (2026-10-27 queue-advancement hunt) ------
     //
     // The owner's report: "I click on the song, it plays, then it
@@ -780,6 +804,17 @@ class QueueController(
                 if (player.currentMediaItem != null) {
                     syncPlaybackState()
                 }
+                // Near the end of a long track, (re)arm the next
+                // entry's prefetch: the hand-off prefetch at track
+                // start has aged past its freshness window by now
+                // (see PlaybackPrefetch.kt). The call is a no-op
+                // while a fresh stash or an in-flight prefetch
+                // already covers the peeked entry.
+                if (player.currentMediaItem != null &&
+                    prefetchDueByPosition(player.duration, player.currentPosition)
+                ) {
+                    maybePrefetchNext()
+                }
                 // The sleep-timer countdown rides the same poll so the
                 // player UI's remaining time stays honest.
                 val timer = _sleepTimerState.value
@@ -920,6 +955,13 @@ class QueueController(
         autoplayJob = null
         queueEpoch += 1
         resolveJob?.cancel()
+        // A stop retires the prefetch too: its stash names a
+        // transition the listener has explicitly ended, and a
+        // landing prefetch must not resurrect it.
+        prefetchJob?.cancel()
+        prefetchJob = null
+        prefetchTarget = null
+        prefetchedNext = null
         // The resolving flag must be cleared here, by the stop
         // itself (bug sweep round 12): a cancelled resolve clears
         // it in its cancellation catch and a superseded radio
@@ -1479,6 +1521,15 @@ class QueueController(
                 setResolving(false)
                 return@launch
             }
+            // Recent history joins the queue as an exclusion
+            // (2026-11-04 playback-finish run): the standing queue
+            // forgets what an earlier queue played, the listener
+            // does not — a continuation that circles straight back
+            // to songs heard minutes ago reads as drift, not
+            // relevance. The recents store is capped at 50 and
+            // most-recent-first; its ids are the exclusion set.
+            val recentIds = recentsStore.recents().value
+                .mapTo(HashSet()) { it.videoId }
             val continuation = if (related == null) {
                 emptyList()
             } else {
@@ -1486,23 +1537,44 @@ class QueueController(
                     seed = seed,
                     related = related,
                     queuedIds = queueAtRequest.mapTo(HashSet()) { it.videoId },
+                    recentIds = recentIds,
                 )
             }
             if (continuation.isEmpty()) {
+                // Which emptiness is this? When the related list
+                // DID offer tracks but every one was a recent play,
+                // the honest sentence names that — it differs from
+                // YouTube offering nothing, and the listener's
+                // remedy differs too (there is none to offer).
+                val filteredByRecents = related != null &&
+                    autoplayContinuation(
+                        seed = seed,
+                        related = related,
+                        queuedIds = queueAtRequest
+                            .mapTo(HashSet()) { it.videoId },
+                    ).isNotEmpty()
                 setResolving(false)
                 player.pause()
                 syncPlaybackState()
-                _namedError.value = if (related == null) {
-                    "Playback stopped — couldn't reach YouTube to line up a next song."
-                } else {
-                    "Playback stopped — YouTube didn't offer a next song to autoplay."
+                _namedError.value = when {
+                    related == null ->
+                        "Playback stopped — couldn't reach YouTube to line up a next song."
+                    filteredByRecents ->
+                        "Playback stopped — the only next songs YouTube " +
+                            "offered are ones you've just played."
+                    else ->
+                        "Playback stopped — YouTube didn't offer a next song to autoplay."
                 }
                 diagnostics.log(
                     "autoplay",
-                    if (related == null) {
-                        "related fetch failed at end of queue"
-                    } else {
-                        "no continuation offered at end of queue"
+                    when {
+                        related == null ->
+                            "related fetch failed at end of queue"
+                        filteredByRecents ->
+                            "continuation offered only recent plays — " +
+                                "filtered, stopping honestly"
+                        else ->
+                            "no continuation offered at end of queue"
                     },
                 )
                 return@launch
@@ -1586,6 +1658,21 @@ class QueueController(
         forceStream: Boolean = false,
         resumePlayback: Boolean = true,
     ) {
+        // Prefetch hand-off (2026-11-04): the stash is claimed
+        // HERE, once, by whichever resolve starts first — a later
+        // call must never find a stash this call left behind — and
+        // any in-flight prefetch is superseded (its resolver work
+        // still lands in the shared resolver cache, so cancelling
+        // it costs the live resolve nothing). Whether the claimed
+        // stash may actually serve is the pure verdict's call
+        // inside the launch (PlaybackPrefetch.kt): retries and
+        // recovery seeks are refused there, never here, so this
+        // claim cannot accidentally serve one.
+        val stashAtStart = prefetchedNext
+        prefetchedNext = null
+        prefetchJob?.cancel()
+        prefetchJob = null
+        prefetchTarget = null
         if (!isRetry) {
             retriedCurrentTrack = false
             revalidatedCurrentTrack = false
@@ -1637,6 +1724,40 @@ class QueueController(
                     track,
                     Uri.fromFile(local.file),
                     local.mimeType,
+                    seekToMs = recoverySeekMs,
+                    resumePlayback = resumePlayback,
+                )
+                return@launch
+            }
+
+            // Prefetch hand-off: a fresh, identity-matching stash
+            // serves this transition with no resolve paid at the
+            // track boundary. The verdict (PlaybackPrefetch.kt)
+            // refuses retries and recovery seeks outright — a
+            // recovery always resolves force-fresh — and a local
+            // file above already outranked the stash.
+            if (stashAtStart != null &&
+                prefetchConsumeVerdict(
+                    stashEntry = stashAtStart.entry,
+                    requested = track,
+                    isRetry = isRetry,
+                    recoverySeekMs = recoverySeekMs,
+                    ageMs = SystemClock.elapsedRealtime() - stashAtStart.takenAtMs,
+                ) == PrefetchConsume.TAKE
+            ) {
+                val prefetched = stashAtStart.playback
+                diagnostics.log(
+                    "prefetch",
+                    "transition to ${track.videoId} served by the " +
+                        "prefetched resolution — no resolve paid " +
+                        "at the track boundary",
+                )
+                handToPlayer(
+                    track,
+                    Uri.parse(prefetched.info.url),
+                    prefetched.info.mimeType,
+                    streamUrl = prefetched.info.url,
+                    windowBytes = prefetched.windowBytes,
                     seekToMs = recoverySeekMs,
                     resumePlayback = resumePlayback,
                 )
@@ -1773,6 +1894,87 @@ class QueueController(
         syncPlaybackState()
         // Record the play once the track actually starts.
         scope.launch(Dispatchers.IO) { recentsStore.recordPlayed(track) }
+        // And line the next entry's resolution up behind this
+        // hand-off, so its transition does not pay the resolve in
+        // silence (2026-11-04 playback-finish run).
+        maybePrefetchNext()
+    }
+
+    /**
+     * Resolve the queue's next entry ahead of its transition and
+     * stash the result for [resolveAndPlay] to claim. Runs the
+     * full road path (resolver cache, roads, anonymous-road probe
+     * ladder) with three deliberate differences from a live
+     * resolve: it records NO structured diagnostics (its attempts
+     * belong to no playing track's record — only "prefetch"-stage
+     * log lines name it), it never revalidates the session (that
+     * one-shot budget belongs to the playing track), and its
+     * failure is silent by design (the transition resolves live
+     * and surfaces honestly there). A downloaded next entry is
+     * never prefetched: its hand-off is already instant.
+     */
+    private fun maybePrefetchNext() {
+        val candidate = prefetchCandidate(queue.current(), queue.peekNext())
+        if (candidate == null) {
+            // The queue no longer names a next entry distinct from
+            // the current one; any stash names a transition that
+            // will not happen.
+            prefetchedNext = null
+            return
+        }
+        val stash = prefetchedNext
+        if (stash != null && stash.entry === candidate &&
+            SystemClock.elapsedRealtime() - stash.takenAtMs <= PREFETCH_MAX_AGE_MS
+        ) {
+            return // a fresh resolution for exactly this entry waits
+        }
+        if (prefetchJob?.isActive == true && prefetchTarget === candidate) {
+            return // this entry's prefetch is already in flight
+        }
+        prefetchJob?.cancel()
+        prefetchTarget = candidate
+        prefetchJob = scope.launch {
+            val local = try {
+                localFileProvider(candidate)
+            } catch (e: Exception) {
+                null
+            }
+            if (local != null) {
+                if (prefetchTarget === candidate) prefetchedNext = null
+                return@launch
+            }
+            val resolved = try {
+                resolveWithRoads(
+                    candidate,
+                    forceFresh = false,
+                    recordDiagnostics = false,
+                    allowRevalidate = false,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                diagnostics.log(
+                    "prefetch",
+                    "prefetch of ${candidate.videoId} failed " +
+                        "(${e.javaClass.simpleName}) — the transition " +
+                        "will resolve it live",
+                )
+                if (prefetchTarget === candidate) prefetchedNext = null
+                return@launch
+            }
+            if (prefetchTarget === candidate) {
+                prefetchedNext = PrefetchedNext(
+                    entry = candidate,
+                    playback = resolved,
+                    takenAtMs = SystemClock.elapsedRealtime(),
+                )
+                diagnostics.log(
+                    "prefetch",
+                    "next track ${candidate.videoId} resolved ahead " +
+                        "of its transition",
+                )
+            }
+        }
     }
 
     /**
@@ -1793,6 +1995,8 @@ class QueueController(
     private suspend fun resolveWithRoads(
         track: Track,
         forceFresh: Boolean = false,
+        recordDiagnostics: Boolean = true,
+        allowRevalidate: Boolean = true,
     ): ResolvedPlayback {
         val resolver = playbackResolver
         var auth = sessionProvider()
@@ -1808,23 +2012,27 @@ class QueueController(
                     )
                 }
             } catch (e: AllRoadsRefused) {
-                diagnostics.recordRoadAttempt(
-                    road = "account",
-                    outcome = "refused (${e.accountError.javaClass.simpleName})",
-                )
-                diagnostics.recordRoadAttempt(
-                    road = "anonymous",
-                    outcome = "refused (${e.anonymousError.javaClass.simpleName})",
-                )
-                diagnostics.recordResolverOutcome(
-                    contextClientName = YoutubeiContexts.WEB_REMIX.clientName,
-                    contextClientVersion = YoutubeiContexts.WEB_REMIX.clientVersion,
-                    exceptionClass = e.accountError.javaClass.simpleName,
-                )
+                if (recordDiagnostics) {
+                    diagnostics.recordRoadAttempt(
+                        road = "account",
+                        outcome = "refused (${e.accountError.javaClass.simpleName})",
+                    )
+                    diagnostics.recordRoadAttempt(
+                        road = "anonymous",
+                        outcome = "refused (${e.anonymousError.javaClass.simpleName})",
+                    )
+                    diagnostics.recordResolverOutcome(
+                        contextClientName = YoutubeiContexts.WEB_REMIX.clientName,
+                        contextClientVersion = YoutubeiContexts.WEB_REMIX.clientVersion,
+                        exceptionClass = e.accountError.javaClass.simpleName,
+                    )
+                }
                 // Keep-alive wiring: a dead-looking session gets ONE
                 // revalidation + retry per track before we surface the
-                // double refusal.
-                val fresh = maybeRevalidate(e)
+                // double refusal. A prefetch never spends it
+                // (allowRevalidate false): the budget belongs to the
+                // track actually playing.
+                val fresh = if (allowRevalidate) maybeRevalidate(e) else null
                 if (fresh == null) throw e
                 auth = fresh
                 continue
@@ -1838,21 +2046,23 @@ class QueueController(
                 } else {
                     YoutubeiContexts.IOS
                 }
-                if (auth == null) {
-                    diagnostics.recordRoadAttempt(
-                        road = "anonymous",
-                        outcome = "refused (${e.javaClass.simpleName})",
+                if (recordDiagnostics) {
+                    if (auth == null) {
+                        diagnostics.recordRoadAttempt(
+                            road = "anonymous",
+                            outcome = "refused (${e.javaClass.simpleName})",
+                        )
+                    }
+                    diagnostics.recordResolverOutcome(
+                        contextClientName = servingContext.clientName,
+                        contextClientVersion = servingContext.clientVersion,
+                        exceptionClass = e.javaClass.simpleName,
                     )
                 }
-                diagnostics.recordResolverOutcome(
-                    contextClientName = servingContext.clientName,
-                    contextClientVersion = servingContext.clientVersion,
-                    exceptionClass = e.javaClass.simpleName,
-                )
                 throw e
             }
-            recordAttempts(resolved)
-            return runLadderIfNeeded(track, resolved)
+            if (recordDiagnostics) recordAttempts(resolved)
+            return runLadderIfNeeded(track, resolved, recordDiagnostics)
         }
     }
 
@@ -1982,6 +2192,7 @@ class QueueController(
     private suspend fun runLadderIfNeeded(
         track: Track,
         first: ResolvedStream,
+        recordDiagnostics: Boolean = true,
     ): ResolvedPlayback {
         val defaultWindow = RangeInterceptor.STREAM_RANGE_WINDOW_BYTES
         if (first.servedByRoad != "anonymous") {
@@ -1989,18 +2200,22 @@ class QueueController(
         }
         val probe = probeClient
         if (probe == null) {
-            diagnostics.log(
-                "ladder",
-                "no probe client wired — handing the resolved URL to the player unprobed",
-            )
+            if (recordDiagnostics) {
+                diagnostics.log(
+                    "ladder",
+                    "no probe client wired — handing the resolved URL to the player unprobed",
+                )
+            }
             return ResolvedPlayback(first.info, defaultWindow)
         }
         val road = YoutubeiContexts.ANONYMOUS_ROAD
         if (road.isEmpty()) {
-            diagnostics.log(
-                "ladder",
-                "anonymous road has no contexts — handing the resolved URL to the player",
-            )
+            if (recordDiagnostics) {
+                diagnostics.log(
+                    "ladder",
+                    "anonymous road has no contexts — handing the resolved URL to the player",
+                )
+            }
             return ResolvedPlayback(first.info, defaultWindow)
         }
         val windows = if (streamWindows != null) {
@@ -2024,12 +2239,14 @@ class QueueController(
                     val fresh = withContext(Dispatchers.IO) {
                         client.streamInfo(track.videoId, pairContext, qualityProvider())
                     }
-                    diagnostics.recordResolverOutcome(
-                        contextClientName = pairContext.clientName,
-                        contextClientVersion = pairContext.clientVersion,
-                        exceptionClass = null,
-                    )
-                    diagnostics.recordChosenFormat(fresh.mimeType, fresh.bitrate, fresh.url)
+                    if (recordDiagnostics) {
+                        diagnostics.recordResolverOutcome(
+                            contextClientName = pairContext.clientName,
+                            contextClientVersion = pairContext.clientVersion,
+                            exceptionClass = null,
+                        )
+                        diagnostics.recordChosenFormat(fresh.mimeType, fresh.bitrate, fresh.url)
+                    }
                     lastInfo = fresh
                     fresh
                 } catch (e: CancellationException) {
@@ -2038,18 +2255,22 @@ class QueueController(
                     // A refused resolve is a failed pair, not the end:
                     // rotate on while pairs remain; on the last pair,
                     // hand the player the last URL we did resolve.
-                    diagnostics.recordRoadAttempt(
-                        road = "anonymous",
-                        outcome = "resolve pair $pair/$LADDER_MAX_PAIRS " +
-                            "context ${pairContext.clientName} " +
-                            "refused (${e.javaClass.simpleName})",
-                    )
-                    if (pair >= LADDER_MAX_PAIRS) {
-                        diagnostics.log(
-                            "ladder",
-                            "final pair's resolve refused — handing the last resolved " +
-                                "URL to the player anyway",
+                    if (recordDiagnostics) {
+                        diagnostics.recordRoadAttempt(
+                            road = "anonymous",
+                            outcome = "resolve pair $pair/$LADDER_MAX_PAIRS " +
+                                "context ${pairContext.clientName} " +
+                                "refused (${e.javaClass.simpleName})",
                         )
+                    }
+                    if (pair >= LADDER_MAX_PAIRS) {
+                        if (recordDiagnostics) {
+                            diagnostics.log(
+                                "ladder",
+                                "final pair's resolve refused — handing the last resolved " +
+                                    "URL to the player anyway",
+                            )
+                        }
                         return ResolvedPlayback(lastInfo, windows.last())
                     }
                     pair++
@@ -2067,14 +2288,16 @@ class QueueController(
                 streamWindows?.recordWinner(info.url, window)
                 val result = probeUrl(probe, info.url)
                 pairResult = result
-                diagnostics.recordProbeWindow(
-                    pair = pair,
-                    pairs = LADDER_MAX_PAIRS,
-                    contextName = pairContext.clientName,
-                    windowBytes = window,
-                    status = result.status,
-                    exceptionClass = result.exceptionClass,
-                )
+                if (recordDiagnostics) {
+                    diagnostics.recordProbeWindow(
+                        pair = pair,
+                        pairs = LADDER_MAX_PAIRS,
+                        contextName = pairContext.clientName,
+                        windowBytes = window,
+                        status = result.status,
+                        exceptionClass = result.exceptionClass,
+                    )
+                }
                 when (windowProbeVerdict(windowIndex, windows.size, result.status)) {
                     WindowAction.WINNER -> {
                         winningWindow = window
@@ -2093,10 +2316,12 @@ class QueueController(
             }
             val pairLabel = "probe $pair/$LADDER_MAX_PAIRS context ${pairContext.clientName}"
             if (winner != null) {
-                diagnostics.recordRoadAttempt(
-                    road = "anonymous",
-                    outcome = "$pairLabel $statusText window=$winner — serving this URL",
-                )
+                if (recordDiagnostics) {
+                    diagnostics.recordRoadAttempt(
+                        road = "anonymous",
+                        outcome = "$pairLabel $statusText window=$winner — serving this URL",
+                    )
+                }
                 return ResolvedPlayback(info, winner)
             }
             when (ladderProbeVerdict(pair, result.status)) {
@@ -2104,30 +2329,36 @@ class QueueController(
                     // Unreachable: a 2xx probe sets a winning window
                     // above. Kept so the pair verdict's full matrix
                     // stays handled in one place.
-                    diagnostics.recordRoadAttempt(
-                        road = "anonymous",
-                        outcome = "$pairLabel $statusText — serving this URL",
-                    )
+                    if (recordDiagnostics) {
+                        diagnostics.recordRoadAttempt(
+                            road = "anonymous",
+                            outcome = "$pairLabel $statusText — serving this URL",
+                        )
+                    }
                     return ResolvedPlayback(info, windows.first())
                 }
                 LadderAction.HAND_TO_PLAYER_ANYWAY -> {
-                    diagnostics.recordRoadAttempt(
-                        road = "anonymous",
-                        outcome = "$pairLabel $statusText",
-                    )
-                    diagnostics.log(
-                        "ladder",
-                        "all $LADDER_MAX_PAIRS probes refused — handing the last resolved " +
-                            "URL to the player anyway, at the smallest window " +
-                            "(${windows.last()} bytes)",
-                    )
+                    if (recordDiagnostics) {
+                        diagnostics.recordRoadAttempt(
+                            road = "anonymous",
+                            outcome = "$pairLabel $statusText",
+                        )
+                        diagnostics.log(
+                            "ladder",
+                            "all $LADDER_MAX_PAIRS probes refused — handing the last resolved " +
+                                "URL to the player anyway, at the smallest window " +
+                                "(${windows.last()} bytes)",
+                        )
+                    }
                     return ResolvedPlayback(info, windows.last())
                 }
                 LadderAction.RE_RESOLVE -> {
-                    diagnostics.recordRoadAttempt(
-                        road = "anonymous",
-                        outcome = "$pairLabel $statusText — rotating context, resolving fresh",
-                    )
+                    if (recordDiagnostics) {
+                        diagnostics.recordRoadAttempt(
+                            road = "anonymous",
+                            outcome = "$pairLabel $statusText — rotating context, resolving fresh",
+                        )
+                    }
                     pair++
                 }
             }

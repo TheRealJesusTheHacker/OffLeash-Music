@@ -58,6 +58,17 @@ fun buildRadioQueue(
  * moves forward and can never loop back over what it already lined
  * up or played. Deduped by videoId, first occurrence wins.
  *
+ * [recentIds] (2026-11-04 playback-finish run) extends the same
+ * rule past the standing queue: tracks the listener played
+ * recently — in an earlier queue this session, or before a queue
+ * replacement — are excluded too, so a fresh queue's autoplay
+ * cannot circle straight back to songs heard minutes ago. The
+ * queue exclusion alone could not see them: replacing the queue
+ * forgets its played entries, but the listener has not forgotten
+ * hearing them. When the exclusions together leave nothing, the
+ * continuation is empty and the controller stops honestly rather
+ * than filling the silence with repeats or unrelated picks.
+ *
  * Deliberately NOT [buildRadioQueue]: radio REPLACES the queue with
  * the seed at its head; autoplay APPENDS to the queue the listener
  * already has, behind its current position. Both draw from the same
@@ -68,8 +79,10 @@ fun autoplayContinuation(
     seed: Track,
     related: List<Track>,
     queuedIds: Set<String>,
+    recentIds: Set<String> = emptySet(),
 ): List<Track> {
     val seen = queuedIds.toMutableSet()
+    seen.addAll(recentIds)
     seen.add(seed.videoId)
     val continuation = mutableListOf<Track>()
     for (track in related) {
