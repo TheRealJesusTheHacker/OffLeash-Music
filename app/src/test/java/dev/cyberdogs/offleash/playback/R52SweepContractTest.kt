@@ -103,39 +103,38 @@ class R52SweepContractTest {
             Regex("""\.value\s*(?:=(?!=)|\+=|-=)""")
         val anyReceiverPlain = Regex("""\.value\s*=(?!=)""")
         val anyReceiverCompound = Regex("""\.value\s*[+\-]=""" )
+        // Re-based 0.9.0 (owner order, 2026-11-04): same deltas
+        // as round 50's census — deleted session files out,
+        // _accountUiState and _accountBacked gone, LikeController
+        // local-only, Stores +_tracks, Home -_feedNote. The
+        // module's combined write total is 121 to 81.
         val expectedCombined: Map<String, Map<String, Int>> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_accountUiState" to 2, "_showPlayerRequests" to 1),
+            "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_showPlayerRequests" to 1),
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2, "_streamQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to mapOf("_records" to 1),
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_authorizationLaunch" to 7, "_phase" to 12, "_pendingAttemptDurability" to 4, "_uiState" to 10),
-            "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
+            "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_error" to 1, "_states" to 1),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
-            "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3),
+            "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3, "_tracks" to 3),
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to mapOf("_snapshot" to 1),
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
         val expectedTotals: Map<String, Int> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to 3,
+            "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 8,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 33,
-            "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
+            "dev/cyberdogs/offleash/data/LikeController.kt" to 2,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
-            "dev/cyberdogs/offleash/data/Stores.kt" to 6,
+            "dev/cyberdogs/offleash/data/Stores.kt" to 9,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )
@@ -200,12 +199,13 @@ class R52SweepContractTest {
         }
         assertEquals(
             "the module's true shipped StateFlow write total, " +
-                "plain and compound together, is 121 (112 " +
+                "plain and compound together, is 81 (112 " +
                 "through 0.8.2; 0.8.3's legacy-road removal " +
-                "is -5, 0.8.6's own-client build is +4, and " +
-                "0.8.8's native sign-in is +10 net — see the " +
+                "is -5, 0.8.6's own-client build is +4, " +
+                "0.8.8's native sign-in is +10 net, and 0.9.0's " +
+                "account-free removal is -40 net — see the " +
                 "per-file note above)",
-            121,
+            81,
             grandCombined,
         )
     }
@@ -271,13 +271,13 @@ class R52SweepContractTest {
         )
         val expectedNavLambdaType: Map<String, Int> = mapOf(
             "dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 3,
-            "dev/cyberdogs/offleash/ui/components/Common.kt" to 3,
+            "dev/cyberdogs/offleash/ui/components/Common.kt" to 4,
             "dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 7,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 3,
-            "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 7,
+            "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -317,7 +317,7 @@ class R52SweepContractTest {
                     "album slot with no invocation text at the " +
                     "crossing (proven green this round). Every " +
                     "such parameter in the module is one of " +
-                    "these 38 shipped declarations",
+                    "these 39 shipped declarations (38 through 0.8.8; 0.9.0: the playlist picker's create lambda joins in Common, Library's remote-playlist lambda leaves)",
                 expectedNavLambdaType[path] ?: 0,
                 navLambdaType.findAll(text).count(),
             )

@@ -75,13 +75,11 @@ class LikeControllerTest {
             val track = track("v1")
             val before = f.controller.stateFor(track.videoId)
             assertFalse(before.liked)
-            assertFalse(before.accountBacked)
 
             f.controller.toggle(track)
 
             val after = f.controller.stateFor(track.videoId)
             assertTrue(after.liked)
-            assertFalse(after.accountBacked)
             assertTrue(f.prefs.localLikedVideoIds().contains("v1"))
             await("liked row stored") {
                 f.store.tracks.value.map { it.videoId } == listOf("v1")
@@ -121,7 +119,6 @@ class LikeControllerTest {
             f.prefs.setLikedState(setOf("seeded"), setOf("seeded"))
             val state = f.controller.stateFor("seeded")
             assertTrue(state.liked)
-            assertFalse(state.accountBacked)
 
             // Toggling it off retires the provenance entirely.
             f.controller.toggle(track("seeded"))
@@ -160,11 +157,13 @@ class LikeControllerTest {
     }
 
     @Test
-    fun accountBackedIsNeverTrueAndErrorNeverFires() {
+    fun errorNeverFiresForALocalToggle() {
+        // 0.9.0: there is no account dimension to a like at all
+        // (the accountBacked state is deleted, not pinned false),
+        // and a local toggle has no failure channel to report.
         val f = Fixture()
         try {
             f.controller.toggle(track("v1"))
-            assertFalse(f.controller.accountBacked.value)
             assertEquals(null, f.controller.error.value)
         } finally {
             f.close()

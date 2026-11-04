@@ -96,42 +96,28 @@ class R61SweepContractTest {
     @Test
     fun round60SlicesHoldExactlyTheirShippedLines() {
         val app = fileText("dev/cyberdogs/offleash/OffleashApp.kt")
-        assertSliceExactLines(
-            app, "GooglePendingGrantStore(", "val googleSignInSeenMarker",
-            listOf(
-                "GooglePendingGrantStore(",
-                "storage = FileSecretStorage(googlePendingGrantFileIn(app)),",
-                "box = AesGcmSecretBox(",
-                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },",
-                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },",
-                "),",
-                ")",
-                "/**",
-                "* The pending native sign-in attempt store (0.8.8): a started-",
-                "* but-not-yet-answered browser sign-in attempt (state binding +",
-                "* PKCE verifier), sealed with the same box into its own file,",
-                "* so the attempt survives the app being killed while the owner",
-                "* is in the browser approving it.",
-                "*/",
-                "val googlePendingNativeAuthStore: GooglePendingNativeAuthStore =",
-                "GooglePendingNativeAuthStore(",
-                "storage = FileSecretStorage(googlePendingNativeAuthFileIn(app)),",
-                "box = AesGcmSecretBox(",
-                "keyProvider = { KeystoreSecretKey.getOrCreate(SESSION_KEY_ALIAS) },",
-                "keyRegenerator = { KeystoreSecretKey.regenerate(SESSION_KEY_ALIAS) },",
-                "),",
-                ")",
-                "/**",
-                "* The \"a Google sign-in has happened here\" marker (bug sweep",
-                "* round 1): once set, the legacy cookie session never drives",
-                "* the auto-download worker's decisions — see",
-                "* [GoogleSignInSeenMarker]. (Its original resurrection watch —",
-                "* the presented account state — is moot since 0.8.3: the",
-                "* session manager discards any stored legacy session at",
-                "* construction, so there is nothing left to resurrect.)",
-                "*/",
-            ),
-            "F1 pending-grant slice",
+        // Re-based 0.9.0 (owner order, 2026-11-04): the F1
+        // slice's subject — the pending-grant and pending
+        // native-auth sealed stores — is DELETED with the
+        // sign-in product, so the exact-lines pin inverts to
+        // absence: neither construction nor its file helper
+        // may appear in the container at all.
+        assertFalse(
+            "the container must hold no GooglePendingGrantStore " +
+                "construction — the sealed pending-grant store " +
+                "is deleted (0.9.0)",
+            app.contains("GooglePendingGrantStore("),
+        )
+        assertFalse(
+            "the container must hold no GooglePendingNativeAuthStore " +
+                "construction — the sealed pending-attempt store " +
+                "is deleted (0.9.0)",
+            app.contains("GooglePendingNativeAuthStore("),
+        )
+        assertFalse(
+            "the container must hold no FileSecretStorage " +
+                "wiring — no sealed store remains to wire (0.9.0)",
+            app.contains("FileSecretStorage("),
         )
         assertSliceExactLines(
             app, "private fun buildMediaController", "private fun buildPlayer",
@@ -232,76 +218,45 @@ class R61SweepContractTest {
 
     @Test
     fun librarySelectionAndDownloadStatusBranchesAreBoundVerbatim() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the three
+        // selection legs pinned the account browse roads'
+        // token-first selection in Library and Detail — all
+        // DELETED with the sign-in product. There is no bearer,
+        // no cookie session, and no selection left to bind:
+        // Library loads no remote playlists at all and the
+        // playlist page loads anonymously on its one road.
+        // The legs invert to absence; the download-status leg
+        // below is untouched (its subject survives verbatim).
         val library = fileText(
             "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt",
         )
         val detail = fileText(
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt",
         )
+        for ((label, text) in listOf("Library" to library, "Detail" to detail)) {
+            assertFalse(
+                "$label: no OAuth library/playlist road may remain",
+                text.contains("libraryPlaylistsOAuth") ||
+                    text.contains("playlistOAuth(") ||
+                    text.contains("playlistContinuationOAuth"),
+            )
+            assertFalse(
+                "$label: no bearer-gated selection may remain",
+                text.contains("bearer != null"),
+            )
+            assertFalse(
+                "$label: no browse delegation may remain",
+                text.contains("currentBrowseDelegation") ||
+                    text.contains("delegationProvider()"),
+            )
+        }
         assertTrue(
-            "the account library must take the token road " +
-                "whenever a bearer exists, and the cookie " +
-                "road only as its else — gating the bearer " +
-                "leg on the cookie session's absence (round " +
-                "61 F6 doctor, GREEN across the full suite) " +
-                "lets the dormant cookie road win whenever " +
-                "both sessions exist",
-            library.contains(
-                "                when {\n" +
-                    "                    bearer != null -> container.client.libraryPlaylistsOAuth(bearer, delegation = container.currentBrowseDelegation())\n" +
-                    "                    else -> container.sessionManager.currentAuthSession()\n" +
-                    "                        ?.let { container.client.libraryPlaylists(it) }\n" +
-                    "                }\n"
-            ),
-        )
-
-        assertTrue(
-            "the playlist page must take the token road " +
-                "whenever a bearer exists, on the first page " +
-                "and on continuations — gating the bearer " +
-                "leg on the cookie session's absence (round " +
-                "61 F6 doctor at the Detail sibling, GREEN " +
-                "across the full suite) lets the cookie road " +
-                "win whenever both sessions exist",
-            detail.contains(
-                "                val page = if (bearer != null) {\n" +
-                    "                    try {\n" +
-                    "                        client.playlistOAuth(\n" +
-                    "                            bearer, browseId, params, delegationProvider(),\n" +
-                    "                        )\n" +
-                    "                    } catch (e: Exception) {\n" +
-                    "                        if (e is kotlinx.coroutines.CancellationException) throw e\n" +
-                    "                        // Degradation (0.8.2): the token road\n" +
-                    "                        // refused — the cookie/anonymous road still\n" +
-                    "                        // serves PUBLIC playlists, so a refused\n" +
-                    "                        // account must not blank a page the public\n" +
-                    "                        // can open. One dishonest shape is guarded:\n" +
-                    "                        // the anonymous Liked page (VLLM) is an\n" +
-                    "                        // empty shell (200, zero tracks), so an\n" +
-                    "                        // empty VLLM fallback rethrows the token\n" +
-                    "                        // road's refusal instead of presenting a\n" +
-                    "                        // fake-empty Liked list.\n" +
-                    "                        val fallback = client.playlist(\n" +
-                    "                            browseId, params, auth = authProvider(),\n" +
-                    "                        )\n" +
-                    "                        if (browseId == \"VLLM\" && fallback.tracks.isEmpty()) throw e\n" +
-                    "                        fallback\n" +
-                    "                    }\n" +
-                    "                } else {\n" +
-                    "                    client.playlist(browseId, params, auth = authProvider())\n" +
-                    "                }\n"
-            ),
+            "the playlist page must load on its one anonymous road",
+            detail.contains("client.playlist(browseId, params, auth = null)"),
         )
         assertTrue(
-            "the playlist continuation must keep the same " +
-                "token-first selection as the first page",
-            detail.contains(
-                "                val chunk = if (bearer != null) {\n" +
-                    "                    client.playlistContinuationOAuth(bearer, token, delegationProvider())\n" +
-                    "                } else {\n" +
-                    "                    client.playlistContinuation(token, auth = authProvider())\n" +
-                    "                }\n"
-            ),
+            "the playlist continuation must ride the same anonymous road",
+            detail.contains("client.playlistContinuation(token, auth = null)"),
         )
         assertTrue(
             "each download state must render its own status " +
@@ -331,56 +286,42 @@ class R61SweepContractTest {
     }
 
     @Test
-    fun healthLabelBranchesAreBoundPerBranch() {
+    fun healthLabelBranchesAreRemovedWithTheAccountState() {
+        // Retired 0.9.0 (owner order, 2026-11-04): the subject
+        // — the account health line in PlaybackDiagnostics and
+        // the "Session: ..." health branches in About and
+        // Settings — is DELETED with the sign-in product. There
+        // is no session whose health could be labelled. The pin
+        // inverts to absence on all three files.
         val diagnostics = fileText(
             "dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt",
         )
-        assertTrue(
-            "the diagnostics health labels must stay on " +
-                "their own health names — swapping the " +
-                "HEALTHY and NEEDS_SIGN_IN results (round 61 " +
-                "F7 doctor, GREEN across the full suite) " +
-                "reports a healthy session as needing " +
-                "sign-in and a dead one as healthy",
-            diagnostics.contains(
-                "    val accountHealthLine = when (sessionState.health.name) {\n" +
-                    "        \"HEALTHY\" -> \"Healthy\"\n" +
-                    "        \"NEEDS_SIGN_IN\" -> \"Sign in again\"\n" +
-                    "        // UNKNOWN also means \"the last check couldn't reach Google\"\n" +
-                    "        // and persists until the next one — a present-tense checking\n" +
-                    "        // label claimed an activity that had already ended\n" +
-                    "        // (chaos sweep round 2).\n" +
-                    "        else -> \"Not confirmed\"\n" +
-                    "    }\n"
-            ),
+        assertFalse(
+            "the diagnostics screen must hold no account health line",
+            diagnostics.contains("accountHealthLine"),
+        )
+        assertFalse(
+            "the diagnostics screen must hold no session health state",
+            diagnostics.contains("sessionState.health"),
         )
         for ((label, path) in listOf(
             "About" to "dev/cyberdogs/offleash/ui/about/AboutScreen.kt",
             "Settings" to "dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt",
         )) {
             val text = fileText(path)
-            val healthyAt = text.indexOf("\"HEALTHY\" ->")
-            val healthyLabelAt = text.indexOf("\"Session: healthy\"")
-            val needsAt = text.indexOf("\"NEEDS_SIGN_IN\" ->")
-            val needsLabelAt = text.indexOf("\"Session: sign in again\"")
-            val elseLabelAt = text.indexOf("\"Session: not confirmed yet\"")
-            assertTrue("$label: every health branch must exist", healthyAt >= 0 && needsAt > healthyAt && elseLabelAt > needsAt)
-            assertTrue(
-                "$label: the healthy label must sit inside " +
-                    "the HEALTHY branch, before NEEDS_SIGN_IN",
-                healthyLabelAt > healthyAt && healthyLabelAt < needsAt,
-            )
-            assertTrue(
-                "$label: the sign-in-again label must sit " +
-                    "inside the NEEDS_SIGN_IN branch, before " +
-                    "the else label",
-                needsLabelAt > needsAt && needsLabelAt < elseLabelAt,
+            assertFalse(
+                "$label: no HEALTHY branch may remain",
+                text.contains("\"HEALTHY\" ->"),
             )
             assertFalse(
-                "$label: the HEALTHY branch must not carry " +
-                    "the sign-in-again label",
-                text.substring(healthyAt, needsAt)
-                    .contains("\"Session: sign in again\""),
+                "$label: no NEEDS_SIGN_IN branch may remain",
+                text.contains("\"NEEDS_SIGN_IN\" ->"),
+            )
+            assertFalse(
+                "$label: no Session health label may remain",
+                text.contains("\"Session: healthy\"") ||
+                    text.contains("\"Session: sign in again\"") ||
+                    text.contains("\"Session: not confirmed yet\""),
             )
         }
     }
@@ -420,13 +361,14 @@ class R61SweepContractTest {
 
     @Test
     fun behaviorBearingFlowBirthsAreCensusedExactly() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the
+        // account-state births leave with their files/state
+        // (the container's _accountUiState, both session
+        // managers' _uiState/_phase, the like controller's
+        // _accountBacked, SignInDiagnostics' _snapshot); the
+        // LikedTrackStore's _tracks birth joins in Stores.kt.
         val births = listOf(
-                "dev/cyberdogs/offleash/OffleashApp.kt" to "private val _accountUiState = MutableStateFlow(accountUiStateSnapshot())",
                 "dev/cyberdogs/offleash/OffleashApp.kt" to "kotlinx.coroutines.flow.MutableStateFlow(0)",
-                "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to "private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))",
-                "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to "private val _phase = MutableStateFlow<GoogleSignInPhase>(GoogleSignInPhase.Idle)",
-                "dev/cyberdogs/offleash/data/SessionManager.kt" to "private val _uiState = MutableStateFlow(SessionUiState(signedIn = false))",
-                "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _accountBacked = MutableStateFlow(\n        sessionProvider() != null || bearerSessionPresent(),",
                 "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _error = MutableStateFlow<String?>(null)",
                 "dev/cyberdogs/offleash/data/LikeController.kt" to "private val _states = MutableStateFlow<Map<String, LikeUiState>>(",
                 "dev/cyberdogs/offleash/data/DownloadStore.kt" to "private val _records = MutableStateFlow<List<DownloadRecord>>(loadFromDisk())",
@@ -437,9 +379,9 @@ class R61SweepContractTest {
                 "dev/cyberdogs/offleash/data/ParityPreferences.kt" to "MutableStateFlow(readDownloadQuality())",
                 "dev/cyberdogs/offleash/data/ParityPreferences.kt" to "MutableStateFlow(readBoolean(KEY_AUTO_DOWNLOAD_LIKED, DEFAULT_AUTO_DOWNLOAD_LIKED))",
                 "dev/cyberdogs/offleash/data/ParityPreferences.kt" to "MutableStateFlow(readBoolean(KEY_AUDIO_VERSION_IN_RADIO, DEFAULT_AUDIO_VERSION_IN_RADIO))",
-                "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to "private val _snapshot = MutableStateFlow<List<String>>(emptyList())",
                 "dev/cyberdogs/offleash/data/Stores.kt" to "private val _playlists = MutableStateFlow<List<LocalPlaylist>>(emptyList())",
                 "dev/cyberdogs/offleash/data/Stores.kt" to "private val _recents = MutableStateFlow<List<Track>>(emptyList())",
+                "dev/cyberdogs/offleash/data/Stores.kt" to "private val _tracks = MutableStateFlow<List<Track>>(emptyList())",
                 "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to "private val _snapshot = MutableStateFlow<List<String>>(emptyList())",
                 "dev/cyberdogs/offleash/playback/QueueController.kt" to "private val _queueState = MutableStateFlow(QueueUiState())",
                 "dev/cyberdogs/offleash/playback/QueueController.kt" to "private val _playbackState = MutableStateFlow(PlaybackUiState())",

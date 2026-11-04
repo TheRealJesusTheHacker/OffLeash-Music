@@ -57,22 +57,25 @@ class R62SweepContractTest {
 
     @Test
     fun flowBirthsAreCountedByRawClassNamePerFile() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the sign-in
+        // product's flows are deleted with it — GoogleSessionManager
+        // (4), SessionManager (1), SignInDiagnostics (1) and the
+        // own-key wizard's store (1) are gone, the container's
+        // sessionState flow is gone (2 to 1), Home's feedNote flow
+        // is gone (3 to 2), and Stores gains the on-device
+        // LikedTrackStore flow (2 to 3). Total 42 to 35.
         val expected: Map<String, Int> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to 2,
+            "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 4,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 4,
             "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
-            "dev/cyberdogs/offleash/data/OwnKeySetup.kt" to 1,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
-            "dev/cyberdogs/offleash/data/Stores.kt" to 2,
+            "dev/cyberdogs/offleash/data/Stores.kt" to 3,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -101,14 +104,16 @@ class R62SweepContractTest {
             )
         }
         assertEquals(
-            "the module must hold exactly its 42 shipped " +
+            "the module must hold exactly its 35 shipped " +
                 "MutableStateFlow namings (round 61's census, " +
                 "+1 at 0.8.2 for Home's feedNote flow, +1 at 0.8.6 " +
                 "for the own-key wizard's state flow, +1 net at " +
                 "0.8.8: the wizard's flow left with the dead road " +
                 "and the native sign-in added two — the held " +
-                "browser launch and the attempt-durability flag)",
-            42,
+                "browser launch and the attempt-durability flag; " +
+                "-7 net at 0.9.0: the sign-in product's flows " +
+                "deleted with it, the LikedTrackStore flow added)",
+            35,
             total,
         )
     }

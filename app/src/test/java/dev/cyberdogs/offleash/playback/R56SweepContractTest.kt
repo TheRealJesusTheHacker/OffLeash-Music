@@ -147,7 +147,7 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/data/DownloadManager.kt" to 2,
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 6,
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/Stores.kt" to 7,
+            "app:dev/cyberdogs/offleash/data/Stores.kt" to 8,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 0,
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
@@ -180,23 +180,29 @@ class R56SweepContractTest {
         val expectedDrop: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 2,
         )
+        // Re-based 0.9.0 (owner order, 2026-11-04): the one
+        // retry site was the deleted worker's; the family
+        // stands at zero, and Stores' map count gains the
+        // LikedTrackStore's salvage map (7 to 8).
         val expectedRetry: Map<String, Int> = mapOf(
-            "app:dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt" to 1,
         )
+        // Re-based 0.9.0: every accountUiState collect is
+        // deleted (Root 7 to 6, About's entry and the whole
+        // SignInScreen entry gone, Diagnostics 2 to 1, Detail
+        // 8 to 7, Home 4 to 2 with feedNote, Settings 5 to 4,
+        // TrackMenu 3 to 2 with the accountBacked collect).
         val expectedCollect: Map<String, Int> = mapOf(
-            "app:dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 7,
-            "app:dev/cyberdogs/offleash/ui/about/AboutScreen.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/account/SignInScreen.kt" to 4,
-            "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 8,
+            "app:dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 6,
+            "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
+            "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 7,
             "app:dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 4,
+            "app:dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 9,
             "app:dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 5,
+            "app:dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt" to 4,
         )
         val expectedLifecycle: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 2,
@@ -321,19 +327,19 @@ class R56SweepContractTest {
         val dotTakeUnless = Regex("""\.takeUnless\b""")
         val useBlock = Regex("""\.use\s*\{""")
         val bareRunBlock = Regex("""(?<![\w.])run\s*\{""")
+        // Re-based 0.9.0 (owner order, 2026-11-04): the
+        // deleted session files' entries leave; DetailScreens
+        // 4 to 3 (the seeding takeIf), HomeChrome 3 to 0 and
+        // LibraryScreen 1 to 0 (their account-row takeIfs).
         val expectedTakeIf: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/CrashReporter.kt" to 2,
             "app:dev/cyberdogs/offleash/data/DownloadManager.kt" to 2,
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 4,
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 6,
-            "app:dev/cyberdogs/offleash/data/SessionStore.kt" to 1,
             "app:dev/cyberdogs/offleash/data/Stores.kt" to 2,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
-            "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 4,
-            "app:dev/cyberdogs/offleash/ui/home/HomeChrome.kt" to 3,
-            "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 3,
             "core:dev/cyberdogs/offleash/core/api/YoutubeiClient.kt" to 3,
             "core:dev/cyberdogs/offleash/core/auth/AuthSession.kt" to 1,
             "core:dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt" to 3,
@@ -347,7 +353,6 @@ class R56SweepContractTest {
             "app:dev/cyberdogs/offleash/data/CrashReporter.kt" to 2,
             "app:dev/cyberdogs/offleash/data/DownloadManager.kt" to 3,
             "app:dev/cyberdogs/offleash/data/OkHttpTransport.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/SessionStore.kt" to 1,
             "app:dev/cyberdogs/offleash/playback/QueueController.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/about/AboutScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 1,
@@ -455,6 +460,12 @@ class R56SweepContractTest {
 }""".trim(),
             block(appBuild, "plugins {"),
         )
+        // Re-based 0.9.0 (owner order, 2026-11-04): the
+        // androidx.browser (Custom Tabs sign-in leg) and
+        // androidx.work (the account workers) lines are removed
+        // with the sign-in product, and the verification-metadata
+        // hash moved with the two artifacts the smaller graph
+        // re-resolved (see docs/SUPPLYCHAIN.md).
         assertEquals(
             "app/build.gradle.kts's dependencies block is " +
                 "pinned verbatim — the app module's whole " +
@@ -470,10 +481,6 @@ class R56SweepContractTest {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
-    // Chrome Custom Tabs (0.8.8): Google's sign-in page opens in
-    // the browser's own surface, and the return lands back in the
-    // app — the native authorization flow's browser leg.
-    implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
@@ -487,7 +494,6 @@ class R56SweepContractTest {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     testImplementation("junit:junit:4.13.2")
 }""".trim(),
@@ -569,7 +575,7 @@ include(":core", ":app")""".trim(),
                 "lock (the act that would legitimise a new " +
                 "dependency in CI) is itself a test-visible " +
                 "act, never a silent companion change",
-            "394eef0236a94eea5fe4b9193d5e60eb7ed17fa0a97cddea6faf9ee6e022987e",
+            "4ebf16d718f170f590e2e45afe10047e45e1c9009f4bf94b1abf874fd772351a",
             digest,
         )
     }

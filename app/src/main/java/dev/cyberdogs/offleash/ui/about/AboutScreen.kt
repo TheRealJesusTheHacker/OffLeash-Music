@@ -123,8 +123,9 @@ fun AboutScreen(
             text = "OffLeash Music is a Cyberdogs app, built by Sentinel Safeguard. " +
                 "YouTube Music is the music source: it plays music from YouTube " +
                 "Music's own servers through the same unofficial internal API " +
-                "the YouTube Music web app uses. Everything else is OffLeash's " +
-                "own — your playlists, your liked songs, your library and " +
+                "the YouTube Music web app uses. " +
+                "Everything else is OffLeash's own — your playlists, " +
+                "your liked songs, your library and " +
                 "history live only on this device. The app hosts nothing, " +
                 "stores nothing on any server, and sells nothing.",
             style = MaterialTheme.typography.bodyLarge,

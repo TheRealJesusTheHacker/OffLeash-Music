@@ -288,11 +288,9 @@ private fun LikeMenuItem(
     onPicked: () -> Unit,
 ) {
     val likeStates by likeController.states.collectAsState()
-    val accountBacked by likeController.accountBacked.collectAsState()
     val likeState = likeStates[track.videoId]
         ?: dev.cyberdogs.offleash.playback.LikeUiState(
             liked = false,
-            accountBacked = accountBacked,
         )
     DropdownMenuItem(
         text = { Text(likeActionLabel(likeState)) },

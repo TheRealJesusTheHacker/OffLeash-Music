@@ -14,11 +14,11 @@ class LikeStateTest {
 
     @Test
     fun toggleFlipsOptimisticallyAndMarksPending() {
-        val next = optimisticLikeToggle(LikeUiState(liked = false, accountBacked = true))
+        val next = optimisticLikeToggle(LikeUiState(liked = false))
         assertTrue(next.liked)
         assertTrue(next.pending)
 
-        val off = optimisticLikeToggle(LikeUiState(liked = true, accountBacked = true))
+        val off = optimisticLikeToggle(LikeUiState(liked = true))
         assertFalse(off.liked)
         assertTrue(off.pending)
     }
@@ -33,18 +33,18 @@ class LikeStateTest {
 
     @Test
     fun failureRollsBackToThePreToggleValue() {
-        val before = LikeUiState(liked = true, accountBacked = true)
+        val before = LikeUiState(liked = true)
         val rolledBack = likeToggleRolledBack(
             optimisticLikeToggle(before),
-            accountConfirmedLiked = before.liked,
+            confirmedLiked = before.liked,
         )
         assertEquals(before.liked, rolledBack.liked)
         assertFalse(rolledBack.pending)
 
-        val beforeUnlike = LikeUiState(liked = false, accountBacked = true)
+        val beforeUnlike = LikeUiState(liked = false)
         val rolledBackUnlike = likeToggleRolledBack(
             optimisticLikeToggle(beforeUnlike),
-            accountConfirmedLiked = beforeUnlike.liked,
+            confirmedLiked = beforeUnlike.liked,
         )
         assertFalse(rolledBackUnlike.liked)
         assertFalse(rolledBackUnlike.pending)
@@ -52,10 +52,10 @@ class LikeStateTest {
 
     @Test
     fun rollbackWithoutAPendingWriteChangesNothing() {
-        val settled = LikeUiState(liked = true, accountBacked = true, pending = false)
+        val settled = LikeUiState(liked = true, pending = false)
         assertEquals(
             settled,
-            likeToggleRolledBack(settled, accountConfirmedLiked = false),
+            likeToggleRolledBack(settled, confirmedLiked = false),
         )
     }
 
@@ -67,18 +67,18 @@ class LikeStateTest {
         // number lands on its opposite; a naive single flip gets
         // both wrong half the time. Rollback must restore the
         // account-confirmed value the caller passes in.
-        var state = LikeUiState(liked = false, accountBacked = true)
+        var state = LikeUiState(liked = false)
         repeat(2) { state = optimisticLikeToggle(state) } // like → unlike
         assertFalse(state.liked)
         assertTrue(state.pending)
-        val rolledBackEven = likeToggleRolledBack(state, accountConfirmedLiked = false)
+        val rolledBackEven = likeToggleRolledBack(state, confirmedLiked = false)
         assertFalse(rolledBackEven.liked)
         assertFalse(rolledBackEven.pending)
 
-        var state2 = LikeUiState(liked = true, accountBacked = true)
+        var state2 = LikeUiState(liked = true)
         repeat(3) { state2 = optimisticLikeToggle(state2) } // unlike → like → unlike
         assertFalse(state2.liked)
-        val rolledBackOdd = likeToggleRolledBack(state2, accountConfirmedLiked = true)
+        val rolledBackOdd = likeToggleRolledBack(state2, confirmedLiked = true)
         assertTrue(rolledBackOdd.liked)
         assertFalse(rolledBackOdd.pending)
     }
@@ -88,7 +88,7 @@ class LikeStateTest {
         // The drain contract at the pure seam: flips accumulate as
         // intent while pending, and one success settles the state
         // on the LAST intent — like→unlike→like ends liked.
-        var state = LikeUiState(liked = false, accountBacked = true)
+        var state = LikeUiState(liked = false)
         state = optimisticLikeToggle(state)
         state = optimisticLikeToggle(state)
         state = optimisticLikeToggle(state)
@@ -120,11 +120,11 @@ class LikeStateTest {
         // the label never carries a provenance qualifier.
         assertEquals(
             "Like",
-            likeActionLabel(LikeUiState(liked = false, accountBacked = false)),
+            likeActionLabel(LikeUiState(liked = false)),
         )
         assertEquals(
             "Remove like",
-            likeActionLabel(LikeUiState(liked = true, accountBacked = false)),
+            likeActionLabel(LikeUiState(liked = true)),
         )
     }
 }

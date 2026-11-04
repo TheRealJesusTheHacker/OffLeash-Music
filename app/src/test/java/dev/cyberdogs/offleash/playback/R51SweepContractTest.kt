@@ -93,21 +93,24 @@ class R51SweepContractTest {
         // with the alias hole closed: a write behind
         // `val flow = _state` moves the file's total even
         // though it names no property.
+        // Re-based 0.9.0 (owner order, 2026-11-04): deleted
+        // files' totals leave with them; the container drops
+        // to its one showPlayerRequests write; LikeController
+        // drops to its two local writes; Home drops its two
+        // feedNote writes; Stores gains the LikedTrackStore's
+        // three. Module total 109 to 81.
         val expectedTotals: Map<String, Int> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to 3,
+            "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 8,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 33,
-            "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
+            "dev/cyberdogs/offleash/data/LikeController.kt" to 2,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
-            "dev/cyberdogs/offleash/data/Stores.kt" to 6,
+            "dev/cyberdogs/offleash/data/Stores.kt" to 9,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )
@@ -115,8 +118,8 @@ class R51SweepContractTest {
         // (`+=` / `-=`) counts toward the same per-file total —
         // OffleashApp's shipped `_showPlayerRequests.value += 1`
         // is a StateFlow write no plain-assignment census can
-        // see, so the totals now sum to the true 109 (108 plain
-        // + 1 compound), and a compound write through an aliased
+        // see, so the totals sum to the module's true write total
+        // (109 at 0.8.8; 81 at 0.9.0 — see the re-base note above), and a compound write through an aliased
         // receiver moves the total exactly as a plain one does.
         val anyReceiverWrite = Regex("""\.value\s*(?:=(?!=)|\+=|-=)""")
         for ((path, text) in files) {

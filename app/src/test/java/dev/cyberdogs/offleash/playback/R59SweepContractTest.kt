@@ -102,6 +102,13 @@ class R59SweepContractTest {
 
     @Test
     fun feedingValsFileHelpersAndLambdaBodiesAreBoundVerbatim() {
+        // Re-based 0.9.0 (owner order, 2026-11-04): the
+        // sessionScope slice becomes the appScope slice and the
+        // signInDiagnostics slice is deleted with its subject;
+        // the download resolve lambda resolves anonymously;
+        // the queueController lambda slice loses its
+        // revalidate leg; the four sealed-store file helpers
+        // are deleted with their files and invert to absence.
         val app = fileText(
             "dev/cyberdogs/offleash/OffleashApp.kt",
         )
@@ -109,21 +116,24 @@ class R59SweepContractTest {
         // OUTSIDE round 58's construction slices.
         assertSliceLines(
             app,
-            "private val sessionScope: CoroutineScope =",
-            "val client: YoutubeiClient",
+            "private val appScope: CoroutineScope =",
+            "val streamWindows",
             listOf(
                 "CoroutineScope(SupervisorJob() + Dispatchers.IO)",
             ),
-            "sessionScope declaration",
+            "appScope declaration",
         )
-        assertSliceLines(
-            app,
-            "val signInDiagnostics: dev.cyberdogs.offleash.data.SignInDiagnostics =",
-            "private var sessionManagerRef",
-            listOf(
-                "dev.cyberdogs.offleash.data.SignInDiagnostics()",
-            ),
-            "signInDiagnostics declaration",
+        assertTrue(
+            "the container must hold no signInDiagnostics — " +
+                "the sign-in diagnostics recorder is deleted " +
+                "with the sign-in product (0.9.0)",
+            !app.contains("signInDiagnostics"),
+        )
+        assertTrue(
+            "the container must hold no sessionManagerRef — " +
+                "the late-bound session reference is deleted " +
+                "with the session manager (0.9.0)",
+            !app.contains("sessionManagerRef"),
         )
         assertSliceLines(
             app,
@@ -156,14 +166,14 @@ class R59SweepContractTest {
         assertSliceLines(
             app,
             "val downloadManager: DownloadManager = DownloadManager(",
-            "val likeController",
+            "val likedTrackStore",
             listOf(
                 "resolveStream = { track, quality ->",
                 "downloadStreamResolver.resolve(",
                 "track.videoId",
-                "sessionManager.currentAuthSession()",
+                "auth = null",
                 "quality",
-                "googleSessionManager.currentBearer()",
+                "bearerToken = null",
                 ").info",
             ),
             "downloadManager resolveStream lambda body",
@@ -173,8 +183,6 @@ class R59SweepContractTest {
             "val queueController: QueueController = QueueController(",
             "var mediaController: MediaController?",
             listOf(
-                "revalidateSession = {",
-                "sessionManager.currentAuthSession()",
                 "qualityProvider = { appPreferences.streamQuality }",
                 "localFileProvider = { track -> downloadManager.downloadedPlayback(track.videoId) }",
                 "audioVersionInRadioProvider = { appPreferences.audioVersionInRadio }",
@@ -187,75 +195,35 @@ class R59SweepContractTest {
             ),
             "queueController lambda bodies",
         )
-        // The file helpers upstream of round 58's bound
-        // call sites: each helper's body must pair it with
-        // its OWN file-name constant (round-59 helper-swap
-        // doctor exchanged the first two, GREEN 636/636).
-        val sessionStoreKt = dataText("SessionStore.kt")
-        assertSliceLines(
-            sessionStoreKt,
-            "fun sessionFileIn",
-            "class SessionStore(",
-            listOf(
-                "fun sessionFileIn(context: Context): File = File(context.noBackupFilesDir, SESSION_FILE_NAME)",
-            ),
-            "sessionFileIn helper body",
-        )
-        val googleTokenKt = dataText("GoogleTokenStore.kt")
-        assertTrue(
-            "the Google session file name must stay " +
-                "google_session.bin (pinned by no test " +
-                "before round 59)",
-            googleTokenKt.contains(
-                "const val GOOGLE_SESSION_FILE_NAME: String = \"google_session.bin\"",
-            ),
-        )
-        assertSliceLines(
-            googleTokenKt,
-            "fun googleSessionFileIn",
-            "class GoogleTokenStore(",
-            listOf(
-                "fun googleSessionFileIn(context: Context): File =",
-                "File(context.noBackupFilesDir, GOOGLE_SESSION_FILE_NAME)",
-            ),
-            "googleSessionFileIn helper body",
-        )
-        val pendingGrantKt = dataText("GooglePendingGrantStore.kt")
-        assertTrue(
-            "the pending-grant file name must stay " +
-                "google_pending_grant.bin",
-            pendingGrantKt.contains(
-                "const val GOOGLE_PENDING_GRANT_FILE_NAME: String = \"google_pending_grant.bin\"",
-            ),
-        )
-        assertSliceLines(
-            pendingGrantKt,
-            "fun googlePendingGrantFileIn",
-            "class GooglePendingGrantStore(",
-            listOf(
-                "fun googlePendingGrantFileIn(context: Context): File =",
-                "File(context.noBackupFilesDir, GOOGLE_PENDING_GRANT_FILE_NAME)",
-            ),
-            "googlePendingGrantFileIn helper body",
-        )
-        val seenMarkerKt = dataText("GoogleSignInSeenMarker.kt")
-        assertTrue(
-            "the seen-marker file name must stay " +
-                "google_signin_seen.txt",
-            seenMarkerKt.contains(
-                "const val GOOGLE_SIGN_IN_SEEN_FILE_NAME: String = \"google_signin_seen.txt\"",
-            ),
-        )
-        assertSliceLines(
-            seenMarkerKt,
-            "fun googleSignInSeenFileIn",
-            "class GoogleSignInSeenMarker(",
-            listOf(
-                "fun googleSignInSeenFileIn(context: Context): File =",
-                "File(context.noBackupFilesDir, GOOGLE_SIGN_IN_SEEN_FILE_NAME)",
-            ),
-            "googleSignInSeenFileIn helper body",
-        )
+        // The sealed session stores' file helpers are deleted
+        // with their files (0.9.0): none of the four files may
+        // exist, and their file names survive ONLY inside the
+        // container's upgrade-cleanup list that destroys them.
+        val javaRoot = locateAppJavaRoot()
+        for (gone in listOf(
+            "SessionStore.kt", "GoogleTokenStore.kt",
+            "GooglePendingGrantStore.kt", "GoogleSignInSeenMarker.kt",
+        )) {
+            assertTrue(
+                "$gone must NOT exist — it is deleted with " +
+                    "the sign-in product (0.9.0)",
+                !File(
+                    javaRoot,
+                    "dev/cyberdogs/offleash/data/$gone",
+                ).exists(),
+            )
+        }
+        for (legacyName in listOf(
+            "session.bin", "google_session.bin",
+            "google_pending_grant.bin", "google_signin_seen.txt",
+        )) {
+            assertTrue(
+                "the container's upgrade cleanup must name " +
+                    "$legacyName so an upgrading device destroys " +
+                    "the sealed material it could still hold",
+                app.contains("\"$legacyName\""),
+            )
+        }
         val downloadStoreKt = dataText("DownloadStore.kt")
         assertTrue(
             "the download records helper must pair with " +
@@ -338,10 +306,12 @@ class R59SweepContractTest {
                 "activity-alias (round-59 doctor: a second " +
                 "MAIN/LAUNCHER entry point, GREEN) was no " +
                 "component at all to the pin; the shipped " +
-                "census is exactly the three real components",
+                "census is exactly the shipped components",
             sortedMapOf(
+                // 0.9.0: the OAuth redirect activity is deleted
+                // with the sign-in product; the shipped census
+                // is the two real components.
                 "activity:.MainActivity" to "true",
-                "activity:.ui.account.OAuthRedirectActivity" to "true",
                 "service:.playback.PlaybackService" to "true",
             ),
             exportedByComponent,
@@ -527,34 +497,25 @@ class R59SweepContractTest {
         const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
 
         val SHIPPED_FILES: List<String> = listOf(
+                // Regenerated 0.9.0 (owner order, 2026-11-04):
+                // the sign-in product's files leave the tree;
+                // the player soak's three files join it.
                 "app/src/hunt/res/values/strings.xml",
                 "app/src/main/AndroidManifest.xml",
                 "app/src/main/java/dev/cyberdogs/offleash/MainActivity.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/OffleashApp.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/account/AutoDownloadLikedWorker.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/account/GoogleSessionKeepAliveWorker.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/AppPreferences.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/AtomicFileWrite.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/BearerRetryTransport.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/CrashReporter.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/DownloadManager.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/DownloadStore.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/Downloads.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/GooglePendingGrantStore.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/GooglePendingNativeAuthStore.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/GoogleSessionManager.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/GoogleSignInSeenMarker.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/GoogleTokenStore.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/LikeController.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/OkHttpTransport.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/ParityPreferences.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/RangeInterceptor.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/SecretBox.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/SessionManager.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/SessionStore.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/SignInDiagnostics.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/data/Stores.kt",
-                "app/src/main/java/dev/cyberdogs/offleash/data/VisitorDataCache.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/BatteryOptimization.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/HalloweenSplash.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/playback/LikeState.kt",
@@ -575,8 +536,6 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/ui/SplashScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/about/AboutScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt",
-            "app/src/main/java/dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt",
-            "app/src/main/java/dev/cyberdogs/offleash/ui/account/SignInScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/components/BatteryRestrictionCard.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/components/Common.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/components/TrackMenu.kt",
@@ -586,7 +545,10 @@ class R59SweepContractTest {
                 "app/src/main/java/dev/cyberdogs/offleash/ui/home/HomeScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/home/MoodsScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/library/LibraryScreen.kt",
+                "app/src/main/java/dev/cyberdogs/offleash/ui/player/PlayerArtwork.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/player/PlayerScreen.kt",
+                "app/src/main/java/dev/cyberdogs/offleash/ui/player/PlayerScrubber.kt",
+                "app/src/main/java/dev/cyberdogs/offleash/ui/player/ScrollingTitle.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/search/SearchScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/settings/SettingsScreen.kt",
                 "app/src/main/java/dev/cyberdogs/offleash/ui/theme/Theme.kt",
@@ -608,7 +570,7 @@ class R59SweepContractTest {
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/api/YoutubeiContexts.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/AuthSession.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/GoogleAuth.kt",
-            "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt",
+                "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/GoogleNativeAuth.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/auth/SessionCookies.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/error/OffleashException.kt",
                 "core/src/main/kotlin/dev/cyberdogs/offleash/core/model/Lyrics.kt",

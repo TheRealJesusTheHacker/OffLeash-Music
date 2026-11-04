@@ -173,57 +173,52 @@ class R64SweepContractTest {
     @Test
     fun stateWritesAndFlowBirthsAreCensusedOnATemplateAwareNormalizedView() {
         val files = moduleSources()
+        // Re-based 0.9.0 (owner order, 2026-11-04): round 63's
+        // re-based tables, restated on the template-aware view
+        // (identical numbers on this tree). Grand totals:
+        // writes 121 to 81, namings 42 to 34.
         val expectedWrites: Map<String, Map<String, Int>> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_accountUiState" to 2, "_showPlayerRequests" to 1),
+            "dev/cyberdogs/offleash/OffleashApp.kt" to mapOf("_showPlayerRequests" to 1),
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2, "_streamQualityFlow" to 2),
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to mapOf("_records" to 1),
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to mapOf("_authorizationLaunch" to 7, "_phase" to 12, "_pendingAttemptDurability" to 4, "_uiState" to 10),
-            "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_accountBacked" to 1, "_error" to 2, "_states" to 3),
+            "dev/cyberdogs/offleash/data/LikeController.kt" to mapOf("_error" to 1, "_states" to 1),
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to mapOf("_audioVersionInRadioFlow" to 2, "_autoDownloadLikedFlow" to 2, "_downloadQualityFlow" to 2),
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to mapOf("_uiState" to 1),
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to mapOf("_snapshot" to 1),
-            "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3),
+            "dev/cyberdogs/offleash/data/Stores.kt" to mapOf("_playlists" to 3, "_recents" to 3, "_tracks" to 3),
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to mapOf("_snapshot" to 1),
             "dev/cyberdogs/offleash/playback/QueueController.kt" to mapOf("_namedError" to 9, "_playbackState" to 2, "_queueState" to 1, "_sleepTimerRemainingMs" to 4, "_sleepTimerState" to 3, "_speedState" to 2),
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 7),
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to mapOf("_state" to 2),
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_feedNote" to 2, "_selectedChip" to 1, "_state" to 2),
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to mapOf("_selectedChip" to 1, "_state" to 2),
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to mapOf("_state" to 4),
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to mapOf("_hasMore" to 3, "_loadMoreError" to 3, "_state" to 4),
         )
         val expectedTotals: Map<String, Int> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to 3,
+            "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 8,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 33,
-            "dev/cyberdogs/offleash/data/LikeController.kt" to 6,
+            "dev/cyberdogs/offleash/data/LikeController.kt" to 2,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 6,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
-            "dev/cyberdogs/offleash/data/Stores.kt" to 6,
+            "dev/cyberdogs/offleash/data/Stores.kt" to 9,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 21,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 13,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 2,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 5,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 10,
         )
         val expectedDeclarations: Map<String, Int> = mapOf(
-            "dev/cyberdogs/offleash/OffleashApp.kt" to 2,
+            "dev/cyberdogs/offleash/OffleashApp.kt" to 1,
             "dev/cyberdogs/offleash/data/AppPreferences.kt" to 4,
             "dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "dev/cyberdogs/offleash/data/GoogleSessionManager.kt" to 4,
-            "dev/cyberdogs/offleash/data/LikeController.kt" to 3,
+            "dev/cyberdogs/offleash/data/LikeController.kt" to 2,
             "dev/cyberdogs/offleash/data/ParityPreferences.kt" to 3,
-            "dev/cyberdogs/offleash/data/SessionManager.kt" to 1,
-            "dev/cyberdogs/offleash/data/SignInDiagnostics.kt" to 1,
-            "dev/cyberdogs/offleash/data/Stores.kt" to 2,
+            "dev/cyberdogs/offleash/data/Stores.kt" to 3,
             "dev/cyberdogs/offleash/playback/PlaybackDiagnostics.kt" to 1,
             "dev/cyberdogs/offleash/playback/QueueController.kt" to 6,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 5,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
+            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 2,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
@@ -276,8 +271,8 @@ class R64SweepContractTest {
                 rawNames,
             )
         }
-        assertEquals(121, grandTotal)
-        assertEquals(42, grandBirths)
+        assertEquals(81, grandTotal)
+        assertEquals(34, grandBirths)
     }
 
     // -- F3–F8: the remainder families on the normalized view ------------
@@ -317,14 +312,14 @@ class R64SweepContractTest {
         val dotWithIndex = Regex("""\.withIndex\s*\(""")
         val expectedMapNotNull: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 2,
-            "app:dev/cyberdogs/offleash/data/Stores.kt" to 3,
+            "app:dev/cyberdogs/offleash/data/Stores.kt" to 4,
             "core:dev/cyberdogs/offleash/core/auth/AuthSession.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/JsonNav.kt" to 1,
             "core:dev/cyberdogs/offleash/core/parse/Parsers.kt" to 3,
         )
         val expectedFilterNot: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/DownloadStore.kt" to 1,
-            "app:dev/cyberdogs/offleash/data/Stores.kt" to 3,
+            "app:dev/cyberdogs/offleash/data/Stores.kt" to 5,
             "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
         )
         val expectedDropWhile: Map<String, Int> = mapOf(
@@ -356,8 +351,13 @@ class R64SweepContractTest {
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
         )
         val bareValueAssign = Regex("""(?<![\w.])value\s*=(?!=)""")
+        // Re-based 0.9.0: the picker's text field (Common)
+        // and the scrubber's slider (PlayerScrubber) join the
+        // bare-value family as named arguments, as in round 54.
         val expectedBareValue: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/Downloads.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
+            "app:dev/cyberdogs/offleash/ui/player/PlayerScrubber.kt" to 1,
             "app:dev/cyberdogs/offleash/data/OkHttpTransport.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 1,
@@ -378,20 +378,21 @@ class R64SweepContractTest {
         val navLambdaType = Regex("""\((?:String|String, String\?)\)\s*->\s*Unit""")
         val expectedNavLambda: Map<String, Int> = mapOf(
             "dev/cyberdogs/offleash/ui/OffleashRoot.kt" to 3,
-            "dev/cyberdogs/offleash/ui/components/Common.kt" to 3,
+            "dev/cyberdogs/offleash/ui/components/Common.kt" to 4,
             "dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,
             "dev/cyberdogs/offleash/ui/detail/DetailScreens.kt" to 7,
             "dev/cyberdogs/offleash/ui/home/ChartsScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 3,
             "dev/cyberdogs/offleash/ui/home/MoodsScreen.kt" to 3,
-            "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 7,
+            "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 6,
             "dev/cyberdogs/offleash/ui/player/PlayerScreen.kt" to 4,
             "dev/cyberdogs/offleash/ui/search/SearchScreen.kt" to 3,
         )
         val playlistCall = Regex("""onPlaylistClick\s*\(""")
+        // Re-based 0.9.0: Home's invocation was the deleted
+        // liked-music card's; Common's and Library's stand.
         val expectedPlaylist: Map<String, Int> = mapOf(
             "dev/cyberdogs/offleash/ui/components/Common.kt" to 1,
-            "dev/cyberdogs/offleash/ui/home/HomeScreen.kt" to 1,
             "dev/cyberdogs/offleash/ui/library/LibraryScreen.kt" to 1,
         )
         val playlistCrossed = listOf(

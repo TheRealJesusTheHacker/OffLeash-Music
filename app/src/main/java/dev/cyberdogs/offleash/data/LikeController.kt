@@ -36,18 +36,10 @@ class LikeController(
 
     private val _states = MutableStateFlow<Map<String, LikeUiState>>(
         preferences.localLikedVideoIds().associateWith { videoId ->
-            LikeUiState(liked = true, accountBacked = false)
+            LikeUiState(liked = true)
         },
     )
     val states: StateFlow<Map<String, LikeUiState>> = _states.asStateFlow()
-
-    /**
-     * Likes are never account-backed in the account-free product.
-     * The flow stays so existing collectors keep compiling; it is
-     * permanently false.
-     */
-    private val _accountBacked = MutableStateFlow(false)
-    val accountBacked: StateFlow<Boolean> = _accountBacked.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     /** Plain-language copy for the last failed like write, or null. */
@@ -60,9 +52,9 @@ class LikeController(
             // the persisted record is the fallback for any id the
             // toggle map has not seen yet.
             ?: if (videoId in preferences.localLikedVideoIds()) {
-                LikeUiState(liked = true, accountBacked = false)
+                LikeUiState(liked = true)
             } else {
-                LikeUiState(liked = false, accountBacked = false)
+                LikeUiState(liked = false)
             }
 
     fun isLiked(videoId: String): Boolean = stateFor(videoId).liked
@@ -109,7 +101,11 @@ class LikeController(
      * show it; when it is not liked, nothing is recorded.
      */
     fun rememberLikedTrack(track: Track) {
-        if (!isLiked(track.videoId)) return
+        // The persisted id record is the authority here, not the
+        // toggle map: this function's job is reconciling the
+        // row store with ids an older build persisted without
+        // rows, and the map may hold a settled entry either way.
+        if (track.videoId !in preferences.localLikedVideoIds()) return
         val store = likedTrackStore ?: return
         val storeScope = scope ?: return
         storeScope.launch { store.recordLiked(track) }

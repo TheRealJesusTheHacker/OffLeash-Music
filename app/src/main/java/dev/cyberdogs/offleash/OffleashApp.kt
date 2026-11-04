@@ -81,8 +81,8 @@ class OffleashApp : Application(), coil.ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         // First, before anything can fail: the last-crash recorder,
-        // so a dying process leaves its trace where the next launch's
-        // a later launch can read it (2026-10-27 crash hunt).
+        // so a dying process leaves its trace where a later launch
+        // can read it (2026-10-27 crash hunt).
         dev.cyberdogs.offleash.data.CrashReporter.install(this)
         container = AppContainer(this)
     }
@@ -172,8 +172,8 @@ class AppContainer(app: OffleashApp) {
      * directory (downloads are re-fetchable content, not credentials).
      *
      * Resolution is wired to the EXISTING road-switching resolver —
-     * the same [PlaybackResolver] playback uses, with the current
-     * session read at download time — at the effective download
+     * the same [PlaybackResolver] playback uses, resolving
+     * anonymously (no session, no bearer) — at the effective download
      * quality (the download-quality preference, which defaults to
      * following the stream quality). Chunk fetches ride the shared
      * OkHttp client, so a download's network identity matches the
