@@ -114,21 +114,16 @@ class LikeStateTest {
     }
 
     @Test
-    fun labelsNameAccountAndDeviceOnlyStatesHonestly() {
+    fun labelsNameLikeStatesPlainly() {
+        // 0.9.0 (owner order, 2026-11-04): likes are on-device
+        // state only — there is no account-backed like to name, so
+        // the label never carries a provenance qualifier.
         assertEquals(
             "Like",
-            likeActionLabel(LikeUiState(liked = false, accountBacked = true)),
-        )
-        assertEquals(
-            "Remove like",
-            likeActionLabel(LikeUiState(liked = true, accountBacked = true)),
-        )
-        assertEquals(
-            "Like (on this device only)",
             likeActionLabel(LikeUiState(liked = false, accountBacked = false)),
         )
         assertEquals(
-            "Remove like (on this device only)",
+            "Remove like",
             likeActionLabel(LikeUiState(liked = true, accountBacked = false)),
         )
     }
