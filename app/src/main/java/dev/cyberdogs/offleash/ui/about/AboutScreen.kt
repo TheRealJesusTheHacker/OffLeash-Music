@@ -2,45 +2,32 @@ package dev.cyberdogs.offleash.ui.about
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import dev.cyberdogs.offleash.AppContainer
 import dev.cyberdogs.offleash.R
 import dev.cyberdogs.offleash.ui.components.BatteryRestrictionCard
-import kotlinx.coroutines.launch
 
 private fun rememberVersionName(context: android.content.Context): String {
     return try {
@@ -54,7 +41,6 @@ private fun rememberVersionName(context: android.content.Context): String {
 private val THIRD_PARTY_CREDITS: List<Pair<String, String>> = listOf(
     "Kotlin standard library" to "Apache License 2.0",
     "Jetpack Compose (UI, Material 3, Navigation, Lifecycle)" to "Apache License 2.0",
-    "AndroidX WorkManager" to "Apache License 2.0",
     "AndroidX Media3 (ExoPlayer, session, datasource, datasource-okhttp)" to "Apache License 2.0",
     "OkHttp" to "Apache License 2.0",
     "kotlinx-serialization" to "Apache License 2.0",
@@ -66,14 +52,10 @@ private val THIRD_PARTY_CREDITS: List<Pair<String, String>> = listOf(
 fun AboutScreen(
     container: AppContainer,
     onOpenDiagnostics: () -> Unit = {},
-    onSignInClick: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val versionName = rememberVersionName(context)
-    val sessionState by container.accountUiState.collectAsState()
-    val scope = rememberCoroutineScope()
-    var showSignOutConfirm by remember { mutableStateOf(false) }
     var showLicense by remember { mutableStateOf(false) }
     val licenseText = remember(showLicense) {
         if (!showLicense) {
@@ -128,97 +110,6 @@ fun AboutScreen(
         TextButton(onClick = onOpenDiagnostics) {
             Text("Playback diagnostics")
         }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = "Account",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(8.dp))
-        if (!sessionState.signedIn) {
-            Text(
-                text = "You're signed out. Browsing and playback stay fully anonymous.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(onClick = onSignInClick) {
-                Text("Sign in for your library")
-            }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (sessionState.avatarUrl != null) {
-                    AsyncImage(
-                        model = sessionState.avatarUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = sessionState.identityName
-                            ?: sessionState.identityEmail
-                            ?: "Signed in",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center,
-                    )
-                    if (sessionState.identityName != null &&
-                        sessionState.identityEmail != null
-                    ) {
-                        Text(
-                            text = sessionState.identityEmail ?: "",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            when (sessionState.health.name) {
-                "HEALTHY" -> Text(
-                    text = "Session: healthy",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-                "NEEDS_SIGN_IN" -> {
-                    Text(
-                        text = "Session: sign in again",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = onSignInClick) {
-                        Text("Sign in again")
-                    }
-                }
-                else -> Text(
-                    // UNKNOWN is where health lands when a check
-                    // FAILED to reach Google, and it stays there until
-                    // the next launch's check — a present-tense
-                    // checking label claimed an activity that was no
-                    // longer running for most of that state's life
-                    // (chaos sweep round 2).
-                    text = "Session: not confirmed yet",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { showSignOutConfirm = true }) {
-                Text("Sign out")
-            }
-        }
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Breed don't fall.",
@@ -229,27 +120,16 @@ fun AboutScreen(
         Spacer(Modifier.height(24.dp))
         Text(
             text = "OffLeash Music is a Cyberdogs app, built by Sentinel Safeguard. " +
-                "It plays music from YouTube Music's own servers through the same " +
-                "unofficial internal API the YouTube Music web app uses. The app " +
-                "hosts nothing, stores nothing on any server, and sells nothing. " +
-                "Your local playlists and history live only on this device.",
+                "YouTube Music is the music source: it plays music from YouTube " +
+                "Music's own servers through the same unofficial internal API " +
+                "the YouTube Music web app uses. Everything else is OffLeash's " +
+                "own — your playlists, your liked songs, your library and " +
+                "history live only on this device. The app hosts nothing, " +
+                "stores nothing on any server, and sells nothing.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(16.dp))
-        Text(
-            text = "When you sign in, your password is typed only " +
-                "on Google's own page — this app never sees it and " +
-                "never stores it. What the app keeps is the sign-in " +
-                "token Google hands it, stored encrypted on this " +
-                "device, never logged and never shown; signing out " +
-                "tells Google to revoke it and wipes the copy here. " +
-                "Signed in, you get your liked " +
-                "songs and your YouTube playlists. Signed out, everything " +
-                "stays fully anonymous, exactly as before.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
         Spacer(Modifier.height(16.dp))
         Text(
             text = "If you have YouTube Premium, keep it — Premium pays the artists " +
@@ -311,41 +191,4 @@ fun AboutScreen(
         )
     }
 
-    if (showSignOutConfirm) {
-        AlertDialog(
-            onDismissRequest = { showSignOutConfirm = false },
-            title = { Text("Sign out?") },
-            text = {
-                // Height-bounded and scrolling, like the playlist
-                // picker: a dialog's text area does not scroll on its
-                // own, so at a 2.0x font scale on a short screen this
-                // paragraph pushed the Sign out / Cancel buttons past
-                // the dialog's edge (chaos sweep round 2).
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 320.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    Text(
-                        "Your sign-in will be removed from this device: " +
-                            "Google is told to revoke it, and the saved " +
-                            "sign-in is wiped. Your local playlists, " +
-                            "downloads and history stay — they were never " +
-                            "tied to your account.",
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showSignOutConfirm = false
-                        scope.launch { container.signOutOfAccount() }
-                    },
-                ) { Text("Sign out") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSignOutConfirm = false }) { Text("Cancel") }
-            },
-        )
-    }
 }

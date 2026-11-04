@@ -27,19 +27,27 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.request.ImageRequest
 import dev.cyberdogs.offleash.core.model.FeedItem
 import dev.cyberdogs.offleash.core.model.stableKey
 import dev.cyberdogs.offleash.core.model.LocalPlaylist
@@ -64,6 +72,8 @@ class FeedActions(
     val onAddToQueue: (Track) -> Unit,
     val playlists: List<LocalPlaylist>,
     val onAddToPlaylist: (playlist: LocalPlaylist, track: Track) -> Unit,
+    /** Inline create-from-the-add-flow (0.9.0): name a new playlist and add the track to it. */
+    val onCreatePlaylist: ((name: String, track: Track) -> Unit)? = null,
     /** Lane G: the full track-menu vocabulary (like / radio / share / …). */
     val trackActions: TrackActions,
 )
@@ -75,25 +85,66 @@ fun formatDuration(totalSeconds: Int?): String {
     return "%d:%02d".format(minutes, seconds)
 }
 
-/** Coil artwork with a surface-colored placeholder while loading / on miss. */
+/**
+ * Coil artwork for one surface (0.9.0 artwork discipline): the
+ * song's actual thumbnail, requested at THIS surface's laid-out
+ * pixel size — a 56dp row never decodes a hero-sized image, and
+ * the hero never upscales a row decode (the hero binds the
+ * track's high-resolution reference; see Track.heroThumbnailUrl).
+ * While the art loads, the tile is the plain surface colour. An
+ * initial-letter tile appears ONLY when there is no thumbnail or
+ * the load genuinely failed — never as the normal presentation.
+ */
 @Composable
 fun ArtworkImage(
     url: String?,
     contentDescription: String?,
     modifier: Modifier = Modifier,
+    fallbackLabel: String? = null,
 ) {
+    var failed by remember(url) { mutableStateOf(false) }
+    var sizePx by remember { mutableStateOf(IntSize.Zero) }
+    val context = LocalContext.current
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .onSizeChanged { sizePx = it },
+        contentAlignment = Alignment.Center,
     ) {
-        if (url != null) {
+        if (url != null && !failed) {
+            val model = remember(url, sizePx, context) {
+                if (sizePx.width > 0 && sizePx.height > 0) {
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(sizePx.width, sizePx.height)
+                        .build()
+                } else {
+                    url
+                }
+            }
             AsyncImage(
-                model = url,
+                model = model,
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Error) failed = true
+                },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+        if (url == null || failed) {
+            val label = (fallbackLabel ?: contentDescription)
+                ?.trim()
+                ?.firstOrNull()
+                ?.uppercaseChar()
+            if (label != null) {
+                Text(
+                    text = label.toString(),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -108,6 +159,7 @@ fun TrackRow(
     onAddToPlaylist: (playlist: LocalPlaylist, track: Track) -> Unit,
     trackActions: TrackActions,
     modifier: Modifier = Modifier,
+    onCreatePlaylist: ((name: String, track: Track) -> Unit)? = null,
     isCurrent: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
 ) {
@@ -122,6 +174,7 @@ fun TrackRow(
             url = track.thumbnailUrl,
             contentDescription = null,
             modifier = Modifier.size(56.dp),
+            fallbackLabel = track.title,
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -163,6 +216,7 @@ fun TrackRow(
             onAddToQueue = onAddToQueue,
             playlists = playlists,
             onAddToPlaylist = onAddToPlaylist,
+            onCreatePlaylist = onCreatePlaylist,
         )
     }
 }
@@ -172,7 +226,9 @@ fun PlaylistPickerDialog(
     playlists: List<LocalPlaylist>,
     onPick: (LocalPlaylist) -> Unit,
     onDismiss: () -> Unit,
+    onCreate: ((String) -> Unit)? = null,
 ) {
+    var newName by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add to playlist") },
@@ -187,8 +243,10 @@ fun PlaylistPickerDialog(
                     .heightIn(max = 320.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
-                if (playlists.isEmpty()) {
+                if (playlists.isEmpty() && onCreate == null) {
                     Text("No playlists yet. Create one from the Library tab.")
+                } else if (playlists.isEmpty()) {
+                    Text("No playlists yet — make the first one below.")
                 } else {
                     playlists.forEach { playlist ->
                         Text(
@@ -201,9 +259,26 @@ fun PlaylistPickerDialog(
                         )
                     }
                 }
+                if (onCreate != null) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("New playlist name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            if (onCreate != null) {
+                TextButton(
+                    onClick = { onCreate(newName.trim()) },
+                    enabled = newName.isNotBlank(),
+                ) { Text("Create and add") }
+            }
+        },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
@@ -233,6 +308,7 @@ private fun FeedCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(132.dp),
+                fallbackLabel = title,
             )
             Spacer(Modifier.height(8.dp))
             Text(
@@ -322,6 +398,7 @@ fun SectionRow(
                 playlists = actions.playlists,
                 onAddToPlaylist = actions.onAddToPlaylist,
                 trackActions = actions.trackActions,
+                onCreatePlaylist = actions.onCreatePlaylist,
             )
         }
     }
@@ -379,6 +456,12 @@ fun rememberFeedActions(
             playlists = playlists,
             onAddToPlaylist = { playlist, track ->
                 scope.launch { playlistStore.addTrack(playlist.id, track) }
+            },
+            onCreatePlaylist = { name, track ->
+                scope.launch {
+                    val created = playlistStore.createPlaylist(name)
+                    playlistStore.addTrack(created.id, track)
+                }
             },
             trackActions = trackActions,
         )

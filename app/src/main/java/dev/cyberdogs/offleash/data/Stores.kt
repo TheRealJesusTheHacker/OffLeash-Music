@@ -36,6 +36,14 @@ data class TrackDto(
     val albumBrowseId: String? = null,
     val durationSeconds: Int? = null,
     val thumbnailUrl: String? = null,
+    /**
+     * The high-resolution artwork reference, persisted beside the
+     * row-sized one (0.9.0): a playlist entry must show the same
+     * art everywhere else does, and the player hero must not
+     * upscale the row image. Defaulted so files written by older
+     * builds (which stored only [thumbnailUrl]) still decode.
+     */
+    val heroThumbnailUrl: String? = null,
 ) {
     fun toTrack(): Track = Track(
         videoId = videoId,
@@ -46,6 +54,7 @@ data class TrackDto(
         albumBrowseId = albumBrowseId,
         durationSeconds = durationSeconds,
         thumbnailUrl = thumbnailUrl,
+        heroThumbnailUrl = heroThumbnailUrl,
     )
 
     companion object {
@@ -58,6 +67,7 @@ data class TrackDto(
             albumBrowseId = track.albumBrowseId,
             durationSeconds = track.durationSeconds,
             thumbnailUrl = track.thumbnailUrl,
+            heroThumbnailUrl = track.heroThumbnailUrl,
         )
     }
 }
@@ -91,6 +101,9 @@ private data class PlaylistsFile(val playlists: List<LocalPlaylistDto> = emptyLi
 
 @Serializable
 private data class RecentsFile(val tracks: List<TrackDto> = emptyList())
+
+@Serializable
+private data class LikedTracksFile(val tracks: List<TrackDto> = emptyList())
 
 private val storeJson = Json {
     ignoreUnknownKeys = true
@@ -504,5 +517,86 @@ class RecentsStore(private val file: File) {
 
     companion object {
         const val MAX_RECENTS = 50
+    }
+}
+
+/**
+ * The tracks behind the Library's on-device Liked songs list
+ * (0.9.0). The like record in [AppPreferences] stores video ids —
+ * enough for hearts — but a liked ROW needs the track itself
+ * (title, artists, and both artwork references), so the tracks are
+ * kept here under the same discipline as [RecentsStore]: one JSON
+ * document in the app files dir, per-entry salvage on read, atomic
+ * writes, mutex-serialised mutations, most-recently-liked first,
+ * deduped by videoId. Likes are OffLeash's own on-device state in
+ * the account-free product; nothing here talks to an account.
+ */
+class LikedTrackStore(private val file: File) {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mutex = Mutex()
+
+    private val _tracks = MutableStateFlow<List<Track>>(emptyList())
+    val tracks: StateFlow<List<Track>> = _tracks.asStateFlow()
+
+    /** Set by every mutation; the init load must not overwrite one it raced. */
+    @Volatile
+    private var mutated: Boolean = false
+
+    init {
+        scope.launch {
+            mutex.withLock {
+                if (!mutated) _tracks.value = readFromDisk()
+            }
+        }
+    }
+
+    private fun readFromDisk(): List<Track> {
+        if (!file.exists()) return emptyList()
+        val text = try {
+            file.readText()
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        val array = storeFileArray(text, "tracks") ?: return emptyList()
+        return array.mapNotNull { decodeTrackLenient(it)?.toTrack() }
+            .distinctBy { it.videoId }
+    }
+
+    private suspend fun persistLocked(tracks: List<Track>) {
+        mutated = true
+        _tracks.value = tracks
+        withContext(Dispatchers.IO) {
+            try {
+                file.parentFile?.mkdirs()
+                val payload = LikedTracksFile(tracks.map { TrackDto.from(it) })
+                writeTextAtomically(file, storeJson.encodeToString(payload))
+            } catch (e: Exception) {
+                // Best-effort persistence; in-memory state stays
+                // authoritative for this session, as in the
+                // sibling stores.
+            }
+        }
+    }
+
+    private suspend fun update(transform: (List<Track>) -> List<Track>) {
+        mutex.withLock {
+            if (_tracks.value.isEmpty() && file.exists()) {
+                _tracks.value = readFromDisk()
+            }
+            persistLocked(transform(_tracks.value))
+        }
+    }
+
+    /** Records (or refreshes) a liked track, most-recent first. */
+    suspend fun recordLiked(track: Track) {
+        update { current ->
+            listOf(track) + current.filterNot { it.videoId == track.videoId }
+        }
+    }
+
+    /** Drops a track whose like was removed. */
+    suspend fun removeLiked(videoId: String) {
+        update { current -> current.filterNot { it.videoId == videoId } }
     }
 }

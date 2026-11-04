@@ -43,7 +43,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,31 +51,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import dev.cyberdogs.offleash.AppContainer
-import dev.cyberdogs.offleash.account.AutoDownloadLiked
 import dev.cyberdogs.offleash.core.model.LocalPlaylist
-import dev.cyberdogs.offleash.core.model.PlaylistSummary
 import dev.cyberdogs.offleash.data.DownloadRecord
 import dev.cyberdogs.offleash.data.DownloadState
 import dev.cyberdogs.offleash.data.downloadProgressPercent
 import dev.cyberdogs.offleash.data.formatDownloadBytes
 import dev.cyberdogs.offleash.data.summariseDownloads
-import dev.cyberdogs.offleash.ui.ErrorMessages
 import dev.cyberdogs.offleash.ui.components.ArtworkImage
 import dev.cyberdogs.offleash.ui.components.TrackRow
-import dev.cyberdogs.offleash.ui.components.UiState
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 fun LibraryScreen(
     container: AppContainer,
     onPlaylistClick: (String) -> Unit,
-    onSignInClick: () -> Unit = {},
-    onRemotePlaylistClick: (String, String?) -> Unit = { _, _ -> },
     onAlbumClick: (String) -> Unit = {},
     onArtistClick: (String) -> Unit = {},
 ) {
@@ -87,16 +77,17 @@ fun LibraryScreen(
     val recents by container.recentsStore.recents().collectAsState()
     val downloadRecords by container.downloadManager.records.collectAsState()
     val autoDownloadLiked by container.appPreferences.autoDownloadLikedFlow.collectAsState()
+    val likedTracks by container.likedTrackStore.tracks.collectAsState()
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val sessionState by container.accountUiState.collectAsState()
 
-    // Auto-download of Liked (preference-gated, default off): when the
-    // Library is opened signed-in with the preference on, ask the
-    // WorkManager job to load the liked list and enqueue what's missing.
-    LaunchedEffect(sessionState.signedIn, autoDownloadLiked) {
-        if (sessionState.signedIn && autoDownloadLiked) {
-            AutoDownloadLiked.enqueue(context)
+    // Auto-download of Liked (preference-gated, default off): the
+    // liked list is OffLeash's own on-device list (0.9.0), and
+    // opening the Library with the preference on enqueues whatever
+    // it is missing — the DownloadManager's own bounds (per-run
+    // cap, failed-retry cooldown) keep the automatic caller honest.
+    LaunchedEffect(likedTracks, autoDownloadLiked) {
+        if (autoDownloadLiked && likedTracks.isNotEmpty()) {
+            container.downloadManager.enqueueMissing(likedTracks)
         }
     }
 
@@ -105,221 +96,7 @@ fun LibraryScreen(
     var deleteTarget by remember { mutableStateOf<LocalPlaylist?>(null) }
     var showClearDownloads by remember { mutableStateOf(false) }
 
-    // "Your YouTube library" (Phase 2): the account's playlists, loaded
-    // with the current session whenever signed in. Reloads on sign-in/out
-    // transitions and on an explicit retry.
-    var ytPlaylists by remember {
-        mutableStateOf<UiState<List<PlaylistSummary>>>(UiState.Loading)
-    }
-    var ytReloadTick by remember { mutableIntStateOf(0) }
-    // The identity is part of the key (bug sweep round 1): an
-    // account switch that never passes through signed-out changes
-    // the email but not `signedIn`, and the previous account's
-    // playlists must not survive it. On sign-out the section below
-    // stops rendering entirely, so no authed data stays on screen.
-    LaunchedEffect(sessionState.signedIn, sessionState.identityEmail, ytReloadTick) {
-        if (!sessionState.signedIn) return@LaunchedEffect
-        ytPlaylists = UiState.Loading
-        ytPlaylists = try {
-            val loaded = withContext(Dispatchers.IO) {
-                // The token road first (0.7.0): a Google session's
-                // library comes from its Bearer token; the cookie
-                // session is the fallback for a pre-0.7.0 sign-in.
-                val bearer = container.currentBearerToken()
-                when {
-                    bearer != null -> container.client.libraryPlaylistsOAuth(bearer, delegation = container.currentBrowseDelegation())
-                    else -> container.sessionManager.currentAuthSession()
-                        ?.let { container.client.libraryPlaylists(it) }
-                }
-            }
-            if (loaded == null) {
-                UiState.Error("Sign in again to load your YouTube library.")
-            } else {
-                UiState.Content(loaded)
-            }
-        } catch (e: Exception) {
-            // A superseded load (identity flipped again mid-flight)
-            // is cancelled by the effect relaunch; its cancellation
-            // must not be recorded as an error state over the new
-            // load's result.
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            UiState.Error(ErrorMessages.userMessage(e))
-        }
-    }
-
     LazyColumn(Modifier.fillMaxSize()) {
-        // -- Your YouTube library (signed in) / sign-in card (signed out) --
-        if (sessionState.signedIn) {
-            item {
-                Text(
-                    text = "Your YouTube library",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.secondaryContainer)
-                        .clickable { onRemotePlaylistClick("VLLM", null) }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ArtworkImage(
-                        url = null,
-                        contentDescription = null,
-                        modifier = Modifier.size(52.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "Liked songs",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = "From your YouTube account",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
-                    }
-                }
-            }
-            item {
-                Text(
-                    text = "Playlists from your account",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
-            when (val yt = ytPlaylists) {
-                is UiState.Loading -> item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = "Loading your playlists…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                is UiState.Error -> item {
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Text(
-                            text = yt.message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = { ytReloadTick++ }) {
-                            Text("Try again")
-                        }
-                    }
-                }
-                is UiState.Content -> {
-                    if (yt.data.isEmpty()) {
-                        item {
-                            Text(
-                                text = "No playlists on your account yet.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp),
-                            )
-                        }
-                    }
-                    items(yt.data, key = { it.browseId }) { playlist ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onRemotePlaylistClick(playlist.browseId, null)
-                                }
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            ArtworkImage(
-                                url = playlist.thumbnailUrl,
-                                contentDescription = null,
-                                modifier = Modifier.size(52.dp),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = playlist.title,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                val subtitle = listOfNotNull(
-                                    playlist.author?.takeIf { it.isNotBlank() },
-                                    playlist.trackCount?.let { "$it tracks" },
-                                ).joinToString(" • ")
-                                if (subtitle.isNotEmpty()) {
-                                    Text(
-                                        text = subtitle,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(24.dp)) }
-        } else {
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Sign in to see your liked songs and playlists",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Your YouTube library lives on your account. " +
-                                "Signed-out use stays fully anonymous.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        val endReason = sessionState.lastEndReason
-                        if (endReason != null) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = endReason,
-                                style =
-                                    MaterialTheme.typography.bodyMedium,
-                                color =
-                                    MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = onSignInClick) { Text("Sign in") }
-                    }
-                }
-            }
-        }
         item {
             Row(
                 modifier = Modifier
@@ -338,6 +115,14 @@ fun LibraryScreen(
                     Text("New")
                 }
             }
+        }
+        item {
+            Text(
+                text = "Playlists you make in OffLeash, stored on this device.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
         }
         if (playlists.isEmpty()) {
             item {
@@ -390,6 +175,52 @@ fun LibraryScreen(
                     )
                 }
             }
+        }
+
+        // -- Liked songs (0.9.0): OffLeash's own on-device list --
+        item {
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = "Liked songs",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            Text(
+                text = "Songs you like, kept on this device.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
+        if (likedTracks.isEmpty()) {
+            item {
+                Text(
+                    text = "Nothing liked yet. Tap the heart on any song and it will live here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+        itemsIndexed(likedTracks) { index, track ->
+            TrackRow(
+                track = track,
+                onClick = { container.queueController.playTracks(likedTracks, index) },
+                onPlayNext = { container.queueController.playNext(it) },
+                onAddToQueue = { container.queueController.addToQueue(it) },
+                playlists = playlists,
+                onAddToPlaylist = { playlist, picked ->
+                    scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
+                },
+                trackActions = trackActions,
+                onCreatePlaylist = { name, picked ->
+                    scope.launch {
+                        val created = container.localPlaylistStore.createPlaylist(name)
+                        container.localPlaylistStore.addTrack(created.id, picked)
+                    }
+                },
+            )
         }
 
         // -- Downloads (parity step 2): downloaded + queued tracks, with
@@ -565,6 +396,12 @@ fun LibraryScreen(
                     scope.launch { container.localPlaylistStore.addTrack(playlist.id, picked) }
                 },
                 trackActions = trackActions,
+                onCreatePlaylist = { name, picked ->
+                    scope.launch {
+                        val created = container.localPlaylistStore.createPlaylist(name)
+                        container.localPlaylistStore.addTrack(created.id, picked)
+                    }
+                },
             )
         }
         item { Spacer(Modifier.height(16.dp)) }
@@ -810,6 +647,12 @@ fun LocalPlaylistScreen(
                 playlists = playlists,
                 onAddToPlaylist = { target, picked ->
                     scope.launch { container.localPlaylistStore.addTrack(target.id, picked) }
+                },
+                onCreatePlaylist = { name, picked ->
+                    scope.launch {
+                        val created = container.localPlaylistStore.createPlaylist(name)
+                        container.localPlaylistStore.addTrack(created.id, picked)
+                    }
                 },
                 trackActions = trackActions,
                 trailing = {

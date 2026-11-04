@@ -30,27 +30,6 @@
             </intent-filter>
         </activity>
 
-        <!-- The Google sign-in return (0.8.8): the browser lands
-             here after approval, at <package>://oauth2redirect.
-             No display, no history — it hands the return to the
-             session manager and brings MainActivity forward. -->
-        <activity
-            android:name=".ui.account.OAuthRedirectActivity"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:launchMode="singleTop"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.NoDisplay">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="${applicationId}"
-                    android:host="oauth2redirect" />
-            </intent-filter>
-        </activity>
-
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"

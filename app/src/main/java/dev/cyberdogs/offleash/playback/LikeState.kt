@@ -55,13 +55,10 @@ fun likeToggleRolledBack(state: LikeUiState, accountConfirmedLiked: Boolean): Li
     }
 
 /**
- * The menu/button label for the like action. Signed out, the like is
- * local-only and the label says so plainly — a device-local like must
- * never dress itself up as an account like.
+ * The menu/button label for the like action. In the account-free
+ * product (0.9.0) a like is OffLeash's own on-device state — the
+ * Library's Liked songs section says where likes live — so the
+ * action itself is named plainly, with no account vocabulary.
  */
-fun likeActionLabel(state: LikeUiState): String = when {
-    state.liked && state.accountBacked -> "Remove like"
-    state.liked -> "Remove like (on this device only)"
-    state.accountBacked -> "Like"
-    else -> "Like (on this device only)"
-}
+fun likeActionLabel(state: LikeUiState): String =
+    if (state.liked) "Remove like" else "Like"
