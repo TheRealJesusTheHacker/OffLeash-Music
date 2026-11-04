@@ -112,7 +112,13 @@ class R53SweepContractTest {
         val expectedApply: Map<String, Int> = mapOf(
             "app:dev/cyberdogs/offleash/data/RangeInterceptor.kt" to 1,
             "app:dev/cyberdogs/offleash/data/SecretBox.kt" to 1,
-            "app:dev/cyberdogs/offleash/ui/SplashScreen.kt" to 1,
+            // 2026-11-04 bolt-removal re-base: ui/SplashScreen.kt
+            // held exactly one `.apply {` — the splash lightning
+            // bolt's `Path().apply` construction. The owner ordered
+            // the bolt off the Cyberdogs logo (2026-11-04,
+            // superseding his 2026-10-27 splash spec), the bolt is
+            // removed, and the file's shipped count is now zero —
+            // so its entry leaves this map (an absent key pins 0).
             "app:dev/cyberdogs/offleash/ui/about/PlaybackDiagnosticsScreen.kt" to 2,
             "app:dev/cyberdogs/offleash/ui/account/OAuthRedirectActivity.kt" to 1,
             "app:dev/cyberdogs/offleash/ui/components/TrackMenu.kt" to 2,

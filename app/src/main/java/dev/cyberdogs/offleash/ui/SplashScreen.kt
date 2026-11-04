@@ -2,7 +2,6 @@ package dev.cyberdogs.offleash.ui
 
 import androidx.compose.ui.graphics.Brush
 import android.provider.Settings
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,7 +18,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -29,7 +27,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -43,13 +40,16 @@ import kotlinx.coroutines.delay
 /**
  * The cold-launch splash (2026-10-27, owner's spec — see
  * [dev.cyberdogs.offleash.playback.SplashGate] for WHEN it shows):
- * the Cyberdogs Doberman spitting lightning, with a glitch
- * treatment, for 3.8 seconds; a tap anywhere skips it at once.
+ * the Cyberdogs Doberman, with a glitch treatment, for 3.8
+ * seconds; a tap anywhere skips it at once. The lightning bolt
+ * the mark originally spat was removed by the owner's order of
+ * 2026-11-04, which supersedes that part of the 2026-10-27
+ * spec: the logo now presents bare, everywhere in the app.
  *
- * Palette discipline: Cyberdogs black + tan + one lightning accent.
- * The glitch ghosts are the logo's own silhouette tinted tan and
- * lightning — never a rainbow channel split. When the system
- * animator scale is 0 (reduced motion), the logo and bolt render
+ * Palette discipline: Cyberdogs black + tan + one lightning
+ * accent. The glitch ghosts are the logo's own silhouette tinted
+ * tan and lightning — never a rainbow channel split. When the
+ * system animator scale is 0 (reduced motion), the logo renders
  * still; the duration and the tap-to-skip are unchanged.
  *
  * The artwork is the on-file brand logo with its cream backdrop
@@ -67,15 +67,13 @@ fun SplashScreen(onSkip: () -> Unit) {
         ) == 0f
     }
     var jitter by remember { mutableStateOf(Offset.Zero) }
-    var boltAlpha by remember { mutableFloatStateOf(1f) }
     if (!reducedMotion) {
         LaunchedEffect(Unit) {
             val random = Random(27)
             while (true) {
                 delay(GLITCH_TICK_MS)
                 // Mostly still; a jitter burst roughly one tick in
-                // five, one flicker roughly one in seven — a glitch,
-                // not a vibration.
+                // five — a glitch, not a vibration.
                 jitter = if (random.nextFloat() < 0.2f) {
                     Offset(
                         random.nextInt(-6, 7).toFloat(),
@@ -84,7 +82,6 @@ fun SplashScreen(onSkip: () -> Unit) {
                 } else {
                     Offset.Zero
                 }
-                boltAlpha = if (random.nextFloat() < 0.14f) 0.2f else 1f
             }
         }
     }
@@ -107,8 +104,8 @@ fun SplashScreen(onSkip: () -> Unit) {
     ) {
         // Stage glow (GUI elevation pass): the theme's own tan as a
         // soft radial wash behind the mark. Pure surface — the
-        // glitch loop, the bolt, the timing and the gate are the
-        // shipped treatment, unchanged.
+        // glitch loop, the timing and the gate are the shipped
+        // treatment, unchanged.
         Box(
             modifier = Modifier
                 .size(380.dp)
@@ -155,26 +152,10 @@ fun SplashScreen(onSkip: () -> Unit) {
                         .offset(x = jitter.x.dp, y = jitter.y.dp),
                 )
             }
-            // The bolt drops from the dog's mouth: overlapped up into
-            // the logo's lower edge, flickering with the glitch loop.
-            Canvas(
-                modifier = Modifier
-                    .size(width = 46.dp, height = 84.dp)
-                    .offset(y = (-26).dp),
-            ) {
-                val bolt = Path().apply {
-                    moveTo(size.width * 0.58f, 0f)
-                    lineTo(size.width * 0.14f, size.height * 0.56f)
-                    lineTo(size.width * 0.40f, size.height * 0.56f)
-                    lineTo(size.width * 0.24f, size.height)
-                    lineTo(size.width * 0.88f, size.height * 0.40f)
-                    lineTo(size.width * 0.60f, size.height * 0.40f)
-                    lineTo(size.width * 0.98f, 0f)
-                    close()
-                }
-                drawPath(bolt, color = LIGHTNING, alpha = boltAlpha)
-            }
-            Spacer(Modifier.height(2.dp))
+            // The bolt that dropped from the dog's mouth here was
+            // removed by the owner's order of 2026-11-04; the mark
+            // stands over the wordmark bare.
+            Spacer(Modifier.height(24.dp))
             Text(
                 text = "OFFLEASH",
                 style = MaterialTheme.typography.headlineLarge,
@@ -194,7 +175,12 @@ fun SplashScreen(onSkip: () -> Unit) {
     }
 }
 
-/** The one accent beyond black + tan: the lightning. */
+/**
+ * The one accent beyond black + tan: the lightning yellow, kept
+ * as the second glitch-ghost tint. (Its other job — the bolt
+ * under the mark — was removed by the owner's order of
+ * 2026-11-04.)
+ */
 private val LIGHTNING = Color(0xFFF2C230)
 
 private val LOGO_SIZE = 196.dp
